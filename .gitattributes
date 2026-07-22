@@ -1,0 +1,3 @@
+# Edited on Windows but deployed to a Linux box (systemd timers, cron) — pin LF
+# so nothing breaks on config/script parsing there.
+* text=auto eol=lf

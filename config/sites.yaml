@@ -1,0 +1,61 @@
+# config/sites.yaml — candidate viewing sites along the 2026-08-12 totality path.
+# Placeholder shortlist along the rough centerline. Refine against the actual
+# totality polygon (Besselian elements / Xavier Jubier KMZ - see TASKS.md T33)
+# before finalizing; treat lat/lon here as approximate.
+#
+# wnw_strip: at T the sun is ~11 deg elevation, ~285 deg azimuth (WNW).
+# Cloud along this sightline matters as much as overhead cloud, so every site
+# also samples a short strip toward the sun rather than just its own pixel.
+
+wnw_strip:
+  bearing_deg: 285
+  length_km: 100
+  sample_every_km: 25
+
+sites:
+  - name: Luarca
+    region: Asturias
+    lat: 43.543
+    lon: -6.539
+    notes: >
+      Western Cantabrian-coast leg. AROME France's domain almost certainly
+      doesn't reach this far west (verify T05) - rely on ICON-EU, ARPEGE
+      Europe, and AEMET HARMONIE here.
+
+  - name: Leon
+    region: Castilla y Leon
+    lat: 42.599
+    lon: -5.567
+    notes: "Meseta leg, inland - less coastal-cloud influence than the coastal sites."
+
+  - name: Burgos
+    region: Castilla y Leon
+    lat: 42.343
+    lon: -3.696
+    notes: ""
+
+  - name: Logrono
+    region: La Rioja
+    lat: 42.465
+    lon: -2.445
+    notes: "Ebro valley - watch for valley fog/stratus signal specifically in AEMET HARMONIE."
+
+  - name: Zaragoza
+    region: Aragon
+    lat: 41.649
+    lon: -0.889
+    notes: "Eastern leg - plausibly within AROME France's domain edge (verify T05)."
+
+  - name: Castellon
+    region: Comunidad Valenciana
+    lat: 39.986
+    lon: -0.037
+    notes: "Mediterranean coast - sea-breeze cloud timing is the dominant local signal here."
+
+  - name: Palma
+    region: Balearic Islands
+    lat: 39.570
+    lon: 2.650
+    notes: >
+      Covered by AEMET's "Peninsula y Baleares" HARMONIE-AROME domain, not
+      the separate Canarias domain - confirm during T07.
