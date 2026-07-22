@@ -9,6 +9,17 @@ eclipse:
   archive_valid_hours_utc: [15, 18, 21] # on eclipse day, per run
   bbox: {lat_min: 36.0, lat_max: 44.0, lon_min: -10.0, lon_max: 5.0}
   sun_at_t: {elevation_deg: ~11, azimuth_deg: ~285}   # informational
+  eclipse_aware_radiation_survey: >
+    T09 (2026-07-22): only ecmwf_hres/ecmwf_ens are confirmed to simulate
+    eclipse-driven solar-radiation obscuration in their operational physics
+    (IFS Cycle 50r1, live since 2026-05-12). aifs_single/aifs_ens, icon_global,
+    icon_eu, ukmo_global, gfs, and gefs_extended are all expected to be
+    eclipse-blind in their 17-19Z forecasts (see each model's notes for detail
+    and confidence). Flag this in the viz — a stronger 18:30Z cooling/clearing
+    signal from IFS vs everyone else is a known physics-inclusion difference,
+    not a skill disagreement. DWD has twice shipped one-off, non-operational
+    eclipse test products in the past (2015, Oct 2022) — worth re-checking
+    opendata.dwd.de's news page in early Aug 2026 in case they repeat this.
 
 models:
 
@@ -21,17 +32,28 @@ models:
     steps: [{to_h: 240, every_h: 3}, {to_h: 840, every_h: 6}]
     publication_lag_h: [4, 6]
     first_covering: "2026-07-09T00Z"   # ALREADY LIVE (extended run)
+    status: confirmed   # T03
     cloud:
-      total: {param: TCDC, status: confirmed}
-      levels: {params: [LCDC, MCDC, HCDC], location: "pgrb2b 0.5deg suspected",
-               status: verify, task: T03}
+      total: {param: TCDC, level: "entire atmosphere", status: confirmed}
+      levels: {source: pgrb2b, status: confirmed, task: T03,
+               low:  {param: TCDC, level: "low cloud layer"},
+               mid:  {param: TCDC, level: "middle cloud layer"},
+               high: {param: TCDC, level: "high cloud layer"},
+               provenance: native, lead_time_limit_hours: null}
     source:
       aws_bucket: "noaa-gefs-pds"
       path_hint: "gefs.{YYYYMMDD}/{HH}/atmos/pgrb2ap5/ge{c00|pNN}.t{HH}z.pgrb2a.0p50.f{FFF}"
-      retention: "AWS: long-term"
-      status: verify   # confirm b-family path for cloud levels (T03)
+      retention: "AWS: permanent — confirmed T10, continuous date folders from gefs.20170101/ to present"
+      status: confirmed   # T03
     fetch: herbie
-    notes: "Only model already covering T today. Day-20+ skill ~ climatology; use as pattern-vs-climatology signal only."
+    notes: "Only model already covering T today. Day-20+ skill ~ climatology; use as pattern-vs-climatology signal only.
+      T03: NCEP idx files do NOT use literal LCDC/MCDC/HCDC abbreviations — all three levels are parameter TCDC,
+      distinguished only by the `level` field (low/middle/high cloud layer). pgrb2a carries ONLY TCDC:entire atmosphere
+      (total) at any lead time — L/M/H fetches must target pgrb2b, which carries low/mid/high unchanged from f024
+      through f840 (35-day extended range), for both control and perturbed members. Fetcher/extractor param matching
+      must key on (param=TCDC, level=<layer name>), not a literal 'LCDC' string, or it will silently miss these fields.
+      T09: same FV3GFS physics suite as gfs, no eclipse-aware radiation found/expected — treat as eclipse-blind
+      (confidence: confirmed absent, moderate-high, absence-of-evidence)."
 
   gfs:
     provider: NOAA
@@ -50,10 +72,16 @@ models:
       aws_bucket: "noaa-gfs-bdp-pds"
       url_template: "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{YYYYMMDD}/{HH}/atmos/gfs.t{HH}z.pgrb2.0p25.f{FFF}"
       idx: "{url}.idx"
-      retention: "AWS: permanent - only source that allows backfill of missed runs"
+      retention: "AWS: permanent — confirmed T10, continuous date folders from gfs.20210101/ to present. Do not
+                  confuse this bucket (noaa-gfs-bdp-pds, current) with the deprecated noaa-gfs-pds bucket
+                  (same-era name, ~4-week rolling retention only, redirects to this one)."
       status: confirmed
     fetch: herbie
-    notes: "Long-range workhorse. Summer Iberia bias: tends to over-produce convective cloud."
+    notes: "Long-range workhorse. Summer Iberia bias: tends to over-produce convective cloud.
+      T09: NOAA's eclipse-aware radiation work (2017, 2024) is specific to the regional WRF-based HRRR/RAP
+      (NOAA GSL, CONUS-only) — a different model family from the global FV3-based GFS. No documentation found of
+      eclipse handling in GFS's operational RRTMG_LW/SW radiation scheme. Treat gfs as eclipse-blind
+      (confidence: confirmed absent, moderate-high, absence-of-evidence)."
 
   ecmwf_ens:
     provider: ECMWF
@@ -65,44 +93,79 @@ models:
     publication_lag_h: [7, 9]
     first_covering: "2026-07-29T00Z"
     cloud:
-      total: {param: tcc, cycles: ["12"],   # per Nov-2025 open-data announcement
-              status: verify, task: T01}
-      levels: {status: absent_in_open_data, fallback: "none for ENS (no per-member q practical)"}
+      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01,
+              note: "T01 REFUTES the prior '12Z-only' assumption — tcc confirmed present at all 4 daily cycles,
+                     both directly (index-file evidence, 2 dates) and via ECMWF's own docs. Member-level: 1 cf +
+                     50 pf messages per step, stream=enfo, class=od (classic IFS ENS)."}
+      levels: {status: absent_in_open_data, fallback: "none for ENS (no per-member q practical)",
+               note: "T01: confirmed absent in the classic IFS ENS (class=od) enfo stream at any cycle/step checked.
+                      lcc/mcc/hcc DO exist in the separate AIFS-ENS product (class=ai, model=aifs-ens, same 'enfo'
+                      stream name) — that is models.aifs_ens's data, not this entry's."}
     source:
       client: ecmwf-opendata
       request: {stream: enfo, type: [cf, pf]}
       root: "https://data.ecmwf.int/forecasts"
-      retention: "~4 days rolling"
+      retention: "~2-3 days (12 most recent forecast runs, ~72h) — CORRECTED T10, was '~4 days rolling'.
+                  ECMWF's own docs state 12-run rolling retention; empirically confirmed a 3-day-old date folder
+                  still present, a 4-day-old one 404s. Tighten any backfill-margin logic accordingly."
       status: confirmed
     fetch: ecmwf-opendata
-    notes: "Best medium-range skill here. Use member tcc distribution as probability anchor: P(tcc<30%) per site."
+    notes: "Best medium-range skill here. Use member tcc distribution as probability anchor: P(tcc<30%) per site.
+      T09: same eclipse-aware radiation physics as ecmwf_hres — HRES and ENS share the IFS Cycle 50r1 physics
+      package (live since 2026-05-12, confirmed the running cycle through 2026-08-12). Expect a genuine, physically
+      -driven low-cloud/cooling response in ensemble members around 18:30Z that other models below will likely NOT
+      show (confidence: confirmed, high)."
 
   aifs_single:
     provider: ECMWF
     kind: deterministic_ai
     grid: {deg: 0.25}
-    cycles: {"00": 360, "06": 360, "12": 360, "18": 360}   # lengths: verify T02
+    cycles: {"00": 360, "06": 360, "12": 360, "18": 360}   # T02: confirmed equal across all 4 cycles, 2 dates checked
     steps: [{to_h: 360, every_h: 6}]
-    publication_lag_h: [7, 9]
-    first_covering: "2026-07-29T00Z"   # 2026-07-28T18Z if 18Z runs full 360 h (T02)
+    publication_lag_h: [7, 9]   # T02 side-observation: directory mtimes suggest ~5.75-6.7h for 00Z — worth a
+                                # dedicated re-check before hardening scheduler margins, not done this pass
+    first_covering: "2026-07-28T18Z"   # T02: confirmed unconditional — 18Z run does reach full 360h
     cloud:
-      levels: {params: [lcc, mcc, hcc], status: verify, task: T02,
-               note: "expected in open feed - would make AIFS best long-range L/M/H source"}
+      levels: {params: [lcc, mcc, hcc], location: "sfc (flat surface params, no typeOfLevel split like GFS)",
+               status: confirmed, task: T02,
+               note: "Confirmed via data.ecmwf.int index files, 2026-07-20/21, all 4 cycles, both control and
+                      perturbed-equivalent structure, at step 0h and 360h (not a first/last-step artifact)."}
     source:
       client: ecmwf-opendata
       request: {model: aifs-single}
-      retention: "~4 days rolling"
-      status: verify
+      retention: "~2-3 days (12 most recent forecast runs, ~72h) — same correction as ecmwf_ens/hres, T10"
+      status: confirmed
     fetch: ecmwf-opendata
-    notes: "AI model: fields smoothed toward mean; compare, don't trust alone. Eclipse-in-radiation unknown (T09)."
+    notes: "AI model: fields smoothed toward mean; compare, don't trust alone.
+      T02: does NOT surpass GFS's 384h deterministic range (AIFS reaches 360h/15d) — the 'best long-range native
+      L/M/H' claim belongs to aifs_ens at ensemble scale, not aifs_single vs GFS deterministic.
+      T09: AIFS has no explicit radiation scheme (pure data-driven GNN+transformer); uses a precomputed 'insolation'
+      forcing input with standard non-eclipse solar geometry, and its ERA5/operational-analysis training data
+      predates eclipse-aware physics. Almost certainly will NOT reproduce eclipse-driven cooling/cloud response —
+      treat any apparent 18:30Z signal from AIFS with strong skepticism (confidence: reasoned inference, not
+      literature-confirmed)."
 
   aifs_ens:
     provider: ECMWF
     kind: ensemble_ai
-    status_overall: optional
-    source: {client: ecmwf-opendata, request: {model: aifs-ens}, status: verify}
-    cloud: {levels: {status: verify, task: T02}}
-    notes: "Onboard only if T02 shows cloud params + cheap to add alongside aifs_single."
+    status_overall: recommended   # was 'optional' — T02's stated onboarding condition (cloud params + cheap to add
+                                   # alongside aifs_single) is now satisfied
+    members: 50   # T02: cf+pf structure observed; assumed by analogy with ecmwf_ens convention, not exhaustively
+                  # enumerated — confirm exact perturbed-member count before finalizing
+    cycles: {"00": 360, "06": 360, "12": 360, "18": 360}   # T02: confirmed all 4 cycles, 2 dates checked
+    steps: [{to_h: 360, every_h: 6}]
+    source: {client: ecmwf-opendata, request: {model: aifs-ens}, status: confirmed,
+             retention: "~2-3 days (12 most recent forecast runs, ~72h) — T10"}
+    cloud:
+      levels: {params: [lcc, mcc, hcc], location: sfc, status: confirmed, task: T02,
+               note: "Confirmed present in both cf (control) and pf (perturbed) members, at step 0h and 360h,
+                      2 dates checked."}
+    notes: "T02: may be the first entry in this registry with CONFIRMED native L/M/H at ensemble scale out to 15
+      days — re-ranking nuance is 'best confirmed native-L/M/H long-range ENSEMBLE', pending gefs_extended's own
+      now-confirmed pgrb2b levels (T03) for comparison; both are now confirmed, so this is a genuine two-way
+      candidate for the ensemble P(cloud<X%) views, not a clear winner either way.
+      T09: same as aifs_single — no explicit radiation physics, standard non-eclipse insolation forcing, training
+      data lacks eclipse examples. Expect no eclipse signal (confidence: reasoned inference)."
 
   ecmwf_hres:
     provider: ECMWF
@@ -111,9 +174,10 @@ models:
     cycles: {"00": 240, "06": 90, "12": 240, "18": 90}
     steps: [{to_h: 144, every_h: 3}, {to_h: 240, every_h: 6}]
     publication_lag_h: [7, 9]
-    first_covering: "2026-08-03T00Z"   # tcc (12Z-only if unchanged): 2026-08-03T12Z
+    first_covering: "2026-08-03T00Z"   # tcc confirmed at 00Z too (T01) — no longer conditional on a 12Z-only caveat
     cloud:
-      total: {param: tcc, cycles: ["12"], status: verify, task: T01}
+      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01,
+              note: "T01 REFUTES the prior '12Z-only' assumption — tcc present every cycle, oper stream, class=od."}
       levels:
         status: derived
         method: "q on pressure levels [1000,925,850,700,500,300] -> RH (Murphy&Koop) -> layer max/overlap"
@@ -121,15 +185,23 @@ models:
     source:
       client: ecmwf-opendata
       request: {stream: oper, type: fc}
-      retention: "~4 days rolling"
+      retention: "~2-3 days (12 most recent forecast runs, ~72h) — CORRECTED T10, was '~4 days rolling'."
       status: confirmed
     fetch: ecmwf-opendata
-    notes: "Deterministic reference from T-10d. Derived-L/M/H module doubles as calibration tool: run on GFS, compare vs GFS native (T22 acceptance)."
+    notes: "Deterministic reference from T-10d. Derived-L/M/H module doubles as calibration tool: run on GFS,
+      compare vs GFS native (T22 acceptance).
+      T09 — the single most important finding of the radiation-scheme survey: ECMWF's IFS explicitly simulates
+      solar eclipse obscuration (astronomical sun/moon geometry reduces TOA solar radiation per timestep, wired
+      into both the forecast integration AND 4D-Var), operational since IFS Cycle 50r1 (live 2026-05-12, confirmed
+      still the running cycle through 2026-08-12). Documented impact: local 2m cooling up to 7°C, reduced
+      boundary-layer wind, strongest in fair-weather/high-sun conditions. Expect a genuine, physically-driven
+      low-cloud/cooling signal in the 17-19Z window that no other model in this registry is expected to show
+      (confidence: confirmed, high). Source: ECMWF Newsletter #181 / elibrary 81633 'Solar Eclipses in the IFS'."
 
   icon_global:
     provider: DWD
     kind: deterministic
-    grid: {km: 13, layout: icosahedral, regular_latlon_available: verify, task: T04}
+    grid: {km: 13, layout: icosahedral, native: icosahedral_R03B07, regular_latlon_available: false, status: confirmed}
     cycles: {"00": 180, "06": 120, "12": 180, "18": 120}
     steps: [{to_h: 78, every_h: 1}, {to_h: 180, every_h: 3}]
     publication_lag_h: [2.5, 4]
@@ -139,10 +211,29 @@ models:
       total: {param: CLCT, status: confirmed}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon/grib/{HH}/{param_lower}/icon_global_icosahedral_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
-      retention: "~24 h (!) - archiver critical"
-      status: confirmed_shape   # exact regular-grid variant: T04
+      retention: "~24 h (!) — archiver critical. T10: confirmed via 404 test (yesterday's same-cycle run already
+                  gone), but this is empirically-derived/community-sourced — no DWD-published numeric SLA was
+                  found in writing. Re-check occasionally since DWD could change this without notice."
+      status: confirmed   # T04: flipped from confirmed_shape — icosahedral-only confirmed across clct/clcl/clcm/clch/clc
+    remap:
+      required: true   # T04: confirmed no regular-lat-lon variant exists anywhere on opendata.dwd.de for this model
+      method: cdo
+      grid_description_url: "https://opendata.dwd.de/weather/lib/cdo/icon_grid_0026_R03B07_G.nc.bz2"
+      prebuilt_weight_candidates:   # T04: new find, not previously captured — evaluate before hand-rolling weights
+        - "https://opendata.dwd.de/weather/lib/cdo/ICON_GLOBAL2WORLD_0125_EASY.tar.bz2"
+        - "https://opendata.dwd.de/weather/lib/cdo/ICON_GLOBAL2WORLD_025_EASY.tar.bz2"
     fetch: http_bz2
-    notes: "If T04 finds no regular-lat-lon files: cdo remap with DWD grid-description files, cache weights."
+    notes: "T04: ICON Global ships icosahedral-ONLY on opendata.dwd.de for every cloud field checked
+      (clct/clcl/clcm/clch/clc, all 5 checked 2026-07-22). A cdo remap (icosahedral -> regular lat-lon, Iberia
+      bbox only) is a MANDATORY, nontrivial pipeline step before this model's data can join the extract/ pipeline
+      alongside the other already-regular-grid models. DWD's prebuilt ICON_GLOBAL2WORLD_*_EASY bundles may
+      shortcut weight generation but are unverified — check whether they include Iberia-relevant weights or only
+      global-grid weights still needing bbox-cropping.
+      T09: DWD has only ever shipped ad-hoc, outside-operational-pipeline eclipse test products (2015 special
+      runs; Oct-2022: post-processed ASWDIR_S/ASWDIFD_S only, explicitly not feeding back into prognostic
+      cloud/convection, no availability guarantee). No evidence eclipse-aware radiation is a default operational
+      feature. Action: re-check opendata.dwd.de's news page in early Aug 2026 for a possible one-off eclipse test
+      product, same precedent as 2015/2022 (confidence: unclear/likely absent by default)."
 
   icon_eu:
     provider: DWD
@@ -158,81 +249,186 @@ models:
       total: {param: CLCT, status: confirmed}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{HH}/{param_lower}/icon-eu_europe_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
-      retention: "~24 h (!)"
+      retention: "~24 h (!) — T10: confirmed via 404 test, same empirical/community-sourced caveat as icon_global."
       status: confirmed
     fetch: http_bz2
-    notes: "Primary regional source from Aug 7. Many small per-param/per-step files - batch politely."
+    notes: "Primary regional source from Aug 7. Many small per-param/per-step files - batch politely.
+      T11 (optional item, checked): DWD does publish a distinct ICON-EU-EPS ensemble (40 members, 4 cycles/day,
+      120h range, opendata.dwd.de/weather/nwp/icon-eu-eps/) — but it carries ONLY total cloud cover (clct), no
+      clcl/clcm/clch, confirmed by directory listing against the deterministic icon-eu control (which does have
+      all four). Per T11's own 'skip if it doesn't pan out' framing: not added as a models.yaml entry — it doesn't
+      deliver the probabilistic L/M/H layer it was checked for. qv/t per-member fields are present if a humidity
+      -derive path is ever wanted later, but that's an unverified stretch, not a current plan.
+      T09: same DWD precedent as icon_global — no confirmed default eclipse-aware radiation; same recommended
+      pre-eclipse check of DWD Open Data news (confidence: unclear/likely absent by default)."
 
   ukmo_global:
     provider: Met Office
     kind: deterministic
     grid: {km: 10}
-    cycles: {"00": 168, "06": 168, "12": 168, "18": 168}   # lengths by cycle: verify T06
+    cycles: {"00": 168, "06": 67, "12": 168, "18": 67}   # CORRECTED T06 — was uniform 168h for all 4; 06Z/18Z
+                                                          # actually cap at 67h. Source: AWS Open Data Registry
+                                                          # (met-office-global-deterministic) + Met Office DataHub
+                                                          # run-info docs, both stating this verbatim.
     steps: [{to_h: 54, every_h: 1}, {to_h: 144, every_h: 3}, {to_h: 168, every_h: 6}]
-    publication_lag_h: [6, 10]   # includes ~4 h extra open-data delay via Open-Meteo
-    first_covering: "2026-08-06T00Z"
+      # T06: confirmed correct for 00Z/12Z; for 06Z/18Z this truncates at 67h (hourly 0-54h + a few 3-hourly steps)
+    publication_lag_h: [7, 10]   # T06: tightened lower bound 6->7 — Met Office direct 3-6h + Open-Meteo's own
+                                 # stated 'additional delay of 4 hours', stacked
+    first_covering: "2026-08-06T00Z"   # unchanged — correctly anchored to a 00Z (full 168h) run; any future logic
+                                       # assuming 06Z/18Z also reach 168h would be wrong (see cycles correction)
     cloud:
-      levels: {params: [lcc, mcc, hcc], status: confirmed}
+      levels: {params: [lcc, mcc, hcc], status: confirmed,
+               provenance_via_open_meteo: verify,
+               provenance_note: "T06/T08: live API test returned non-null, varying low/mid/high values (consistent
+                 with native model output), but Open-Meteo's own docs give NO explicit native-vs-derived statement
+                 for this model (unlike gfs/ecmwf/icon/arpege, which all have explicit doc language either way).
+                 Since ukmo_global's PRIMARY path (not just backfill) is Open-Meteo, this provenance flag is a
+                 live-data-quality question, not just a sim-mode nicety — Hard Constraint #3 requires it be
+                 resolved (e.g. diff Open-Meteo UKMO cloud values against a raw Met Office DataHub GRIB sample)
+                 before flipping this to confirmed."}
     source:
-      primary: {via: open_meteo, model_id: "ukmo_global_deterministic_10km", id_status: verify, task: T06}
+      primary: {via: open_meteo, model_id: "ukmo_global_deterministic_10km", id_status: confirmed, task: T06,
+                note: "Confirmed three ways: Open-Meteo docs page, open-meteo/open-data GitHub README S3 path
+                       pattern, and a live test call returning real non-null forecast values."}
       fallback: {via: datahub, auth: api_key, quota: "1 GB/month free", human_action: true,
-                 area_subset_possible: verify, task: T06}
+                 area_subset_possible: confirmed, task: T06,
+                 note: "DataHub docs confirm atmospheric orders (incl. Global deterministic 10km) are sub-settable
+                       by region/parameter/level/timestep/run. Exact bbox-vs-named-region schema unconfirmed from
+                       public (non-authenticated) docs — needs an authenticated-account follow-up only if this
+                       fallback is ever actually needed."}
     fetch: open_meteo_json
-    notes: "Independent model family (UM). Open-Meteo path avoids DataHub quota if id + delay acceptable."
+    notes: "Independent model family (UM). Open-Meteo path avoids DataHub quota if id + delay acceptable.
+      T06: only 00Z/12Z UKMO runs reach the full 168h horizon; 06Z/18Z cap at 67h and cannot be used for
+      eclipse-day (T+7d+) coverage.
+      T09: Met Office's own 2015 eclipse research explicitly describes the OPERATIONAL Unified Model as 'ignorant
+      of the eclipse', with eclipse-aware runs done only as a separate offline research modification for that one
+      study. No evidence found this became standard for later eclipses. Treat ukmo_global as eclipse-blind
+      (confidence: confirmed absent, moderate-high — evidence is from 2015, not reconfirmed since)."
 
   arpege_europe:
     provider: Meteo-France
     kind: deterministic
-    grid: {deg: 0.1}
-    cycles: {"00": 102, "06": 72, "12": 114, "18": 60}   # verify T05
-    steps: [{to_h: 60, every_h: 1}, {to_h: 114, every_h: 3}]   # package layout: verify T05
-    publication_lag_h: [3, 5]
-    first_covering: "2026-08-08T00Z"   # or 12Z depending on verified cycle lengths
+    grid: {deg: 0.1}   # EURAT01
+    cycles: {"00": 102, "06": 102, "12": 102, "18": 102}   # CORRECTED T05 — was {"00":102,"06":72,"12":114,"18":60};
+                                                            # the 114h figure didn't exist in the official spec at
+                                                            # all. Real value: uniform 102h on all 4 cycles.
+    steps: [{to_h: 48, every_h: 1}, {to_h: 102, every_h: 3}]   # T05: confirmed, identical for all 4 cycles
+    publication_lag_h: [3, 5]   # unchanged, not re-verified this pass
+    first_covering: "2026-08-08T18Z"   # T05: recomputed for the corrected uniform-102h cycle table — earliest
+                                       # cycle whose init+102h >= 2026-08-12T18:30Z (Aug 8 12Z's window ends
+                                       # 30min short, at Aug 12 18:00Z)
     cloud:
-      levels: {params: [lcc, mcc, hcc], package: "SP2/HP1 suspected", status: verify, task: T05}
+      levels: {params: [lcc, mcc, hcc], package: "SP2", status: confirmed, task: T05,
+               note: "Package SP2 ('Paramètres additionnels à la surface') confirmed via official Meteo-France
+                 PDFs to carry NEBBAS(low)/NEBMOY(mid)/NEBHAU(high), native model output (not humidity-derived).
+                 SP1 only carries NEBUL (total, no L/M/H split); HP1 has no cloud fields at all — the prior
+                 'SP2/HP1 suspected' guess narrows to just SP2."}
     source:
-      aws_registry: "Atmospheric models from Meteo-France (anonymous)"
-      bucket_candidate: "mf-nwp-models"
-      retention: "~14 days"
-      status: verify
-      fallback: {via: mf_api, url: "portail-api.meteofrance.fr", auth: token, human_action: true}
-    fetch: http_grib
-    notes: "Good mid-tier: 11 km + native L/M/H. AWS anonymous path preferred over token API."
+      primary: {via: mf_api, url: "https://public-api.meteofrance.fr/previnum/DPPaquetARPEGE",
+                auth: api_key, human_action: true,
+                note: "3-day rolling retention only, no archive on this API ('Temps réel = oui, Archive = non') —
+                       reinforces archiver-first design; needs a NEW free API-key/OAuth registration, same
+                       human-in-the-loop category as AEMET (T07) and Met Office DataHub (T06) — see CLAUDE.md."}
+      alt_no_auth: {via: data_gouv_fr, url: "https://www.data.gouv.fr/datasets/paquets-arpege-resolution-0-1deg",
+                    retention: "~14 days, per data.gouv.fr's own docs ('archivés 14 jours')",
+                    status: verify,
+                    note: "No-auth bulk GRIB2 mirror, structurally similar to the old dead AWS bucket. Whether
+                           sustained/automated (systemd-timer) polling is permitted on the free tier, or requires
+                           a paid 'Premium' data.gouv.fr tier, is UNCONFIRMED — check before building a fetcher
+                           against this (T10 open question)."}
+      aws_bucket: {name: "mf-nwp-models", status: dead,
+                   note: "T05/T10: bucket name was correctly guessed, but it was PERMANENTLY SHUT DOWN
+                     2024-12-09 (official Meteo-France/OpenMeteoData notice). Confirmed dead today via anonymous
+                     listing: only a static/ subfolder of 2019-04 terrain/landmask reference files remains, zero
+                     dynamic forecast-run data. Do NOT use as a fetch source — it will silently return nothing,
+                     forever."}
+      status: confirmed   # confirmed as in 'we now know the real access path' — requires a fetcher-design change
+                           # from the original AWS-bucket assumption, not just a status flip
+    fetch: http_grib   # target endpoint changes from AWS S3 to mf_api / data_gouv_fr
+    notes: "Good mid-tier: 11 km + native L/M/H (package SP2). T05/T10: the AWS bucket this entry originally
+      pointed at is dead (shut down 2024-12-09) — real access is via portail-api.meteofrance.fr (needs a new,
+      free API-key registration — added to CLAUDE.md's human-in-the-loop list) or the unauthenticated
+      data.gouv.fr mirror (automation terms unconfirmed).
+      T09: no direct radiation-scheme literature found for Meteo-France ARPEGE specifically — not covered by
+      T09's 5-model-family survey; treat as unknown/unassessed for eclipse-awareness."
 
   arome_france:
     provider: Meteo-France
     kind: deterministic
-    grid: {deg: 0.025, hd_variant_deg: 0.01}
-    cycles: {"00": 48, "03": 42, "06": 42, "12": 48, "18": 42}   # verify T05
-    steps: [{to_h: 51, every_h: 1}]
-    publication_lag_h: [2, 4]
-    first_covering: "2026-08-10T18Z"   # +-1 cycle pending T05
-    coverage_limit: "NE Spain + Balearics only - domain S edge ~38-39N, verify T05.
-                     Relevant for Zaragoza/Castellon/Palma leg; useless for Galicia/Leon."
+    grid: {deg: 0.025, hd_variant_deg: 0.01}   # EURW1S40 / EURW1S100
+    cycles: {"00": 51, "03": 51, "06": 51, "09": 51, "12": 51, "15": 51, "18": 51, "21": 51}
+      # CORRECTED T05 — was {"00":48,"03":42,"06":42,"12":48,"18":42} and MISSING the 09/15 UTC cycles entirely.
+      # Real value: 8 cycles/day (00/03/06/09/12/15/18/21), uniform 51h on every one.
+    steps: [{to_h: 51, every_h: 1}]   # T05: this guess was already correct
+    publication_lag_h: [2, 4]   # unchanged, not re-verified this pass
+    first_covering: "2026-08-10T18Z"   # unchanged — still correct given uniform 51h
+    coverage_limit: >
+      CORRECTED T05 — NOT limited to NE Spain + Balearics as previously assumed. Confirmed by two independent
+      official sources (data.gouv.fr dataset page + Meteo-France's own "LE MODELE AROME" PDF, 2025-08-06):
+      EURW1S40/EURW1S100 domain is 55.4N 37.5N 12W 16E — covers essentially ALL of mainland Spain + Balearics
+      north of ~37.5N (Madrid, Barcelona, Valencia, Zaragoza, Galicia, most of Andalusia). Only the southernmost
+      Andalusian coastal strip (Cadiz/Gibraltar/Malaga, below ~37.5N) falls outside. Caveat: the native grid has
+      been trapezoidal (not rectangular) since 2019 per Meteo-France's own documentation, so the declared
+      rectangular bbox has some missing-value padding near its edges — spot-check one real GRIB/inventory file's
+      Iberia-bbox crop (36-44N,10W-5E) before fully trusting pixel-level edge coverage.
     cloud:
-      levels: {params: [lcc, mcc, hcc], status: verify, task: T05}
-    source: {same_as: arpege_europe, status: verify}
+      levels: {params: [lcc, mcc, hcc], package: "SP2", status: confirmed, task: T05,
+               note: "Same SP2 package as arpege_europe (NEBBAS/NEBMOY/NEBHAU), confirmed via the official AROME
+                      packages PDF (v01/04/2025), native model output."}
+    source:
+      primary: {via: mf_api, url: "https://public-api.meteofrance.fr/previnum/DPPaquetAROME",
+                auth: api_key, human_action: true,
+                note: "Same new Meteo-France API-key registration as arpege_europe — one registration covers both."}
+      alt_no_auth: {via: data_gouv_fr, url: "https://www.data.gouv.fr/datasets/paquets-arome-resolution-0-025deg",
+                    retention: "~14 days, per data.gouv.fr's own docs", status: verify,
+                    note: "Same automation-terms caveat as arpege_europe's alt_no_auth path."}
+      aws_bucket: {name: "mf-nwp-models", status: dead, note: "Same dead bucket as arpege_europe — do not use."}
+      status: confirmed
     fetch: http_grib
-    notes: "Best orographic cloud handling for eastern path IF domain check passes."
+    notes: "Best orographic cloud handling AND full-Iberia domain (corrected from the prior NE-Spain-only
+      assumption — see coverage_limit). Package SP2 holds NEBBAS/NEBHAU/NEBMOY, native.
+      T09: not covered by T09's 5-model-family survey; treat as unknown/unassessed for eclipse-awareness."
 
   aemet_harmonie:
     provider: AEMET
     kind: deterministic
     grid: {km: 2.5, open_product_deg: 0.025}
     cycles: {"00": 48, "06": 48, "12": 48, "18": 48}
-    steps: [{to_h: 48, every_h: 1}]   # open-product cadence: verify T07
-    publication_lag_h: [2, 4]         # verify T07
+    steps: [{to_h: 48, every_h: 1}]   # open-product cadence: verify T07(b) — not yet done, see notes
+    publication_lag_h: [2, 4]         # verify T07(b) — not yet done
     first_covering: "2026-08-10T18Z"
     cloud:
       total: {param: nubosidad, format: geotiff, status: confirmed}
-      levels: {status: verify, task: T07, note: "not in known open feed; check OpenData catalog + GRIB availability"}
+      levels: {status: verify, task: "T07(b)", note: "not in known open feed; check OpenData catalog + GRIB
+               availability — NOT yet attempted: the OpenData API key was only registered 2026-07-22 and basic
+               auth validity was confirmed (HTTP 200 against a climatological endpoint), but the actual
+               HARMONIE-AROME field-catalog hunt via opendata.aemet.es has not been run yet. Remaining work."}
     source:
-      open_endpoint: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB"
-      api: {url: "https://opendata.aemet.es", auth: api_key, human_action: true}
-      retention: "latest run only (!)"
-      status: verify
+      open_endpoint: {url: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB",
+                      auth: none, status: confirmed, task: "T07(c)",
+                      note: "Confirmed public, no auth needed — HEAD/GET (headers only) returns HTTP 200,
+                        Content-Type: application/tar+gzip, filename=descargas_<unixtime>.tar.gz. Cadence could
+                        not be read from headers directly (no Last-Modified/Cache-Control exposed); one sample
+                        (12Z run) suggested a ~2h45min-3h45min publication lag, consistent with but not proof of
+                        AEMET's documented 00/06/12/18Z cycle. Only one sample captured — sample all 4 cycles over
+                        a full day before hardening scheduler lag/margin. CAUTION for any future automated check
+                        of this URL: it serves a real file download (Content-Disposition: attachment) — use
+                        curl/WebFetch header-only requests, never an interactive/real browser navigation to this
+                        URL, which will trigger an OS-level save dialog."}
+      api: {url: "https://opendata.aemet.es", auth: api_key, human_action: true, key_registered: true,
+            note: "Key registered 2026-07-22, confirmed live against a basic climatological endpoint. Full
+                   HARMONIE-AROME field-catalog hunt (T07b) still pending."}
+      retention: "latest run only (!) — T10: confirmed via AEMET's own model-viewer page language ('última pasada
+                 disponible del modelo'), no historical run archive exposed on the platform."
+      status: verify   # stays verify until T07(b)'s field-catalog hunt completes
     fetch: geotiff
-    notes: "Home-team model, AEMET-rated strongest on fog/low cloud over Spanish orography. Treat as high-trust total-cloud cross-check. Also check AEMET's eclipse-2026 pages (T07)."
+    notes: "Home-team model, AEMET-rated strongest on fog/low cloud over Spanish orography. Treat as high-trust
+      total-cloud cross-check.
+      T07(d): no dedicated real-time eclipse forecast product exists on aemet.es as of 2026-07-22. Found only a
+      historical-climatology news article (published 2026-05-29, 'Estará despejado el día del eclipse de 2026?'),
+      analyzing 2010-2025 cloud-frequency stats for Aug 11-13 17:00-20:00 UTC by region — AEMET explicitly
+      disclaims this as NOT a forecast, stating a real forecast won't be knowable until 'a few days before' Aug
+      12. Re-check aemet.es in early August rather than treating this as a settled negative result."
 
   open_meteo:
     provider: aggregator
@@ -240,14 +436,67 @@ models:
     role: [prototyping, backfill, ukmo_primary_path, sim_mode_data]
     api:
       forecast: "https://api.open-meteo.com/v1/forecast"
-      previous_runs: {host: "previous-runs-api.open-meteo.com (verify T08)", task: T08}
+      previous_runs:
+        host: "previous-runs-api.open-meteo.com"
+        endpoint: "https://previous-runs-api.open-meteo.com/v1/forecast"
+        status: confirmed   # T08: host guess was correct, verified live against 6 target models at once
+        caveat: >
+          T08 CRITICAL FINDING: the `_previous_dayN` lead-time-offset mechanism (the actual per-run-history
+          feature, N=0..7) works for cloud_cover (TOTAL) but returns HTTP 200 with every value NULL for
+          cloud_cover_low/mid/high_previous_dayN, for every model and offset tested — confirmed against a GitHub
+          maintainer's own list of which variables support this suffix (cloud_cover_low/mid/high are absent from
+          it). This is NOT a typo/config issue — plain cloud_cover_low/mid/high (no suffix) works fine, but that
+          is only a single stitched "current-run" series, not a run-by-run matrix. This host CANNOT backfill true
+          L/M/H run-evolution history — only total-cloud run-evolution. Use single_runs (below) for L/M/H.
+      single_runs:
+        host: "single-runs-api.open-meteo.com"
+        endpoint: "https://single-runs-api.open-meteo.com/v1/forecast"
+        param: "run=<ISO8601 no seconds>, e.g. run=2026-07-20T00:00"
+        status: confirmed   # T08: cloud_cover_low/mid/high confirmed working here, per real run, live-tested
+        retention: "~April 2026 onward only (~3.5 months as of 2026-07-22) — confirmed via run= boundary test
+                   (icon_eu: 2026-04-01 fails, 2026-04-15 succeeds). Enough for a 16-day time-shifted ECLIPSE_T
+                   backfill (T16), not for deep historical backtests."
+        notes: "Needed for true native per-run L/M/H history — previous_runs alone cannot provide it for L/M/H."
       historical: "https://archive-api.open-meteo.com/v1/archive"   # ERA5, for climatology
     variables: [cloud_cover, cloud_cover_low, cloud_cover_mid, cloud_cover_high]
     model_ids_candidates: [gfs_global, ecmwf_ifs025, ecmwf_aifs025, icon_global, icon_eu,
                            meteofrance_arpege_europe, meteofrance_arome_france,
                            meteofrance_arome_france_hd, ukmo_global_deterministic_10km]
-    id_status: verify   # T08 confirms exact ids + per-model native-vs-derived cloud flags
-    provenance_warning: "L/M/H derived from humidity for models lacking native fields - record per-model flag from docs (T08); never mix silently with native values."
+    id_status: verify   # T08 live-tested 6 of these (see confirmed_for below); ecmwf_aifs025/arome_france/
+                        # arome_france_hd remain verify — not part of T08's tested set
+    confirmed_for: [gfs_global, ecmwf_ifs025, icon_global, icon_eu, meteofrance_arpege_europe,
+                    ukmo_global_deterministic_10km]   # T08: live-tested, all 6 returned real data
+    cloud_provenance:   # T08: per-model native vs Open-Meteo-derived — the flag Hard Constraint #3 requires
+      gfs_global: {status: native, evidence: "gfs-api docs: the RH-derivation caveat applies only to AIGFS/HGEFS
+                   variants, not classic GFS016/GFS025"}
+      ecmwf_ifs025: {status: derived,
+                     method: "RH on pressure levels (low:1000/925/850hPa, mid:700/500hPa, high:300/250/200hPa);
+                              total = weighted function of the three",
+                     evidence: "ecmwf-api docs, verbatim — every level here, including total, is Open-Meteo-derived
+                                from RH, not native IFS cloud output"}
+      icon_global: {status: native, evidence: "dwd-api docs: no RH-derivation caveat on surface low/mid/high,
+                    unlike the same page's pressure-level cloud_cover_XXXhPa variable, which explicitly IS
+                    Sundqvist-derived"}
+      icon_eu: {status: native, evidence: "same as icon_global"}
+      meteofrance_arpege_europe: {status: native,
+                                  evidence: "meteofrance-api docs, verbatim: 'ARPEGE World and Europe includes
+                                             parameterised cloud cover directly' (contrasted against AROME, whose
+                                             cloud cover IS RH-derived per the same docs)"}
+      ukmo_global_deterministic_10km: {status: verify,
+                                       note: "No explicit doc statement either way. Live test showed varying,
+                                             non-null low/mid/high values (consistent with native), but this is
+                                             NOT a documentation confirmation — see ukmo_global's own provenance
+                                             note, since this model's Open-Meteo path is its PRIMARY source,
+                                             not just backfill."}
+    retention_depth_confirmed:   # T08: live-bisected via past_days on previous-runs-api (day0/current-run series)
+      gfs_global: ">= 2021-05-09 (edge not found, consistent with GFS's documented March-2021 start)"
+      ecmwf_ifs025: "2024-02-03T00:00 (hard boundary, reproducible across multiple window sizes)"
+      icon_global: "~2022-11-16T08:00"
+      icon_eu: "~2022-11-23T06:00"
+      meteofrance_arpege_europe: "~2022-11-09T06:00"
+      ukmo_global_deterministic_10km: "~2022-03-01T00:00"
+    provenance_warning: "L/M/H derived from humidity for models lacking native fields - record per-model flag from
+      docs (T08 — done, see cloud_provenance above); never mix silently with native values."
 
   climatology:
     provider: baseline
