@@ -126,10 +126,18 @@ user, not Claude Code — surface them, don't attempt.
       test: run it on GFS (which has native L/M/H) and compare
       derived-from-GFS-humidity against GFS-native as a calibration check
       before trusting it on ECMWF HRES.
-- [ ] **T23** Scheduler (`src/scheduler/`): generate systemd timer units from
-      `models.yaml` cycles + publication_lag + margin. Wire a healthcheck
-      ping (e.g. healthchecks.io) into every scheduled fetch — a silent
-      failure Aug 5–12 is the worst outcome.
+- [x] **T23** Scheduler (`src/scheduler/`). **Redesigned 2026-07-22**: the
+      deployment target changed to Docker, so this is an in-process scheduling
+      loop (`src/scheduler/run.py`, the container's entrypoint) rather than
+      generated systemd timer units — reads `models.yaml` cycles +
+      `publication_lag_h` + margin, dispatches due fetches via the fetcher
+      registry, pings a healthcheck URL every loop iteration (deadman's-switch
+      style, so a crashed/stuck scheduler shows up as a missed ping, not
+      silence — healthchecks.io URL itself is a `HEALTHCHECK_URL` env var, not
+      yet set to a real one). Smoke-tested against real `models.yaml` (dry run,
+      no fetchers registered yet — correctly identified `gefs_extended` as due
+      and attempted it). `Dockerfile`/`docker-compose.yml` are **unverified** —
+      no Docker runtime available locally yet to build/test against.
 - [ ] **T24** `sites.yaml` consumption: implement WNW-strip sampling
       (bearing/length/interval from `wnw_strip:` block) alongside the point
       extraction at each site.

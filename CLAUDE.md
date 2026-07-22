@@ -38,7 +38,8 @@ first covers T, (b) how each model's eclipse forecast evolves run-over-run
     src/extract/            # GRIB/GeoTIFF -> xarray -> bbox slice + point rows
     src/derive/             # humidity -> L/M/H cloud (for models lacking native fields)
     src/viz/                # availability gantt, run-evolution charts, maps
-    src/scheduler/          # systemd timer / cron generation from models.yaml
+    src/scheduler/          # in-process loop (Docker entrypoint) - reads models.yaml,
+                            # computes due fetches from cycles + publication_lag + margin
     data/raw/{model}/{initYYYYMMDDHH}/   # Iberia-box slices (GRIB2/GeoTIFF)
     data/points.parquet     # extracted point/strip values (append-only)
     TASKS.md                # ordered work queue — work top-down, tick boxes
@@ -69,15 +70,20 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
 - Python 3.12, **uv** (`uv sync`, `uv run <script>`); ruff for lint.
 - Libraries: herbie-data (idx byte-range subsetting — never download full GRIBs;
   a L/M/H Iberia slice is a few MB vs 500 MB), ecmwf-opendata, cfgrib + eccodes,
-  xarray, wgrib2 (inspection), cdo (only if ICON global needs icosahedral
-  remap — T04 decides), rasterio (AEMET GeoTIFF), polars + Parquet,
+  xarray, wgrib2 (inspection), cdo (ICON Global remap — T04 confirmed
+  icosahedral-only, no regular-lat-lon variant exists, so this is mandatory,
+  not conditional), rasterio (AEMET GeoTIFF), polars + Parquet,
   matplotlib (static SVG first) then plotly.
 - Fetch politeness: exponential backoff, ≤4 concurrent per host, honor
   Open-Meteo non-commercial limits. Every scheduled fetch pings a
   healthcheck URL (dead archiver during Aug 5–12 is the worst failure mode).
-- Deployment target: an always-on Linux box with systemd timers (timer units
-  generated from models.yaml: fire at init + publication_lag + margin). Own
-  directory, own port, isolated from any other services on the box. Box
+- Deployment target: an always-on Linux box, archiver runs in **Docker**
+  (decided 2026-07-22 — a single long-running container with an in-process
+  scheduler loop, not systemd timers; see `src/scheduler/run.py` and the
+  `Dockerfile`/`docker-compose.yml`, currently unverified — no Docker runtime
+  available in dev to build/test against yet). `data/` must be a mounted
+  volume, never ephemeral container storage — a missed run is unrecoverable.
+  Own directory, own port, isolated from any other services on the box. Box
   chosen 2026-07-22 — see private ops notes, not this repo. This tool's own
   disk footprint is estimated well under 1 GB if `data/raw/` is cropped to
   the Iberia bbox before archiving as designed (T21) — see T25.

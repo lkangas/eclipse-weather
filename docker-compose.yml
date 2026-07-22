@@ -1,0 +1,10 @@
+# UNVERIFIED — see Dockerfile's header note; not yet built/run anywhere.
+services:
+  archiver:
+    build: .
+    restart: unless-stopped
+    environment:
+      - ECLIPSE_T=${ECLIPSE_T:-2026-08-12T18:30:00Z}
+      - HEALTHCHECK_URL=${HEALTHCHECK_URL:-}
+    volumes:
+      - ./data:/app/data   # persistent — a missed run is unrecoverable, must survive container recreation
