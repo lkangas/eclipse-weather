@@ -93,10 +93,16 @@ models:
     publication_lag_h: [7, 9]
     first_covering: "2026-07-29T00Z"
     cloud:
-      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01,
+      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01, units: fraction_0_1,
               note: "T01 REFUTES the prior '12Z-only' assumption — tcc confirmed present at all 4 daily cycles,
-                     both directly (index-file evidence, 2 dates) and via ECMWF's own docs. Member-level: 1 cf +
-                     50 pf messages per step, stream=enfo, class=od (classic IFS ENS)."}
+                     both directly (index-file evidence, 2 dates) and via ECMWF's own docs. Live-verified [0,1]
+                     fraction, not 0-100 percent — see ecmwf_hres's matching note; T21/extract must scale by 100.
+                     CORRECTION (T20 build, 2026-07-22): T01's 'Member-level: 1 cf + 50 pf' claim does not match
+                     today's real data — every cycle/step tested (00Z, 06Z; steps 0/3/84/144h) had 50 pf messages
+                     and ZERO cf messages, no separate cf-only file either. The fetcher handles this gracefully
+                     (archives whatever's present), but this may mean ECMWF dropped the deterministic control
+                     member from classic ENS's open-data feed since T01 checked — worth a fresh spot-check rather
+                     than trusting either claim long-term."}
       levels: {status: absent_in_open_data, fallback: "none for ENS (no per-member q practical)",
                note: "T01: confirmed absent in the classic IFS ENS (class=od) enfo stream at any cycle/step checked.
                       lcc/mcc/hcc DO exist in the separate AIFS-ENS product (class=ai, model=aifs-ens, same 'enfo'
@@ -127,9 +133,14 @@ models:
     first_covering: "2026-07-28T18Z"   # T02: confirmed unconditional — 18Z run does reach full 360h
     cloud:
       levels: {params: [lcc, mcc, hcc], location: "sfc (flat surface params, no typeOfLevel split like GFS)",
-               status: confirmed, task: T02,
+               status: confirmed, task: T02, units: percent_0_100,
                note: "Confirmed via data.ecmwf.int index files, 2026-07-20/21, all 4 cycles, both control and
-                      perturbed-equivalent structure, at step 0h and 360h (not a first/last-step artifact)."}
+                      perturbed-equivalent structure, at step 0h and 360h (not a first/last-step artifact).
+                      T20 build (2026-07-22): live-verified in percent [0,100] — NOT a [0,1] fraction like
+                      ecmwf_hres/ecmwf_ens's tcc. Do not assume the same units across models."}
+      total: {param: tcc, units: percent_0_100, status: confirmed,
+              note: "Not previously documented here (only levels.params was) — added T20 build 2026-07-22.
+                     Cheap to fetch alongside lcc/mcc/hcc, native, percent [0,100]."}
     source:
       client: ecmwf-opendata
       request: {model: aifs-single}
@@ -157,9 +168,13 @@ models:
     source: {client: ecmwf-opendata, request: {model: aifs-ens}, status: confirmed,
              retention: "~2-3 days (12 most recent forecast runs, ~72h) — T10"}
     cloud:
-      levels: {params: [lcc, mcc, hcc], location: sfc, status: confirmed, task: T02,
+      levels: {params: [lcc, mcc, hcc], location: sfc, status: confirmed, task: T02, units: percent_0_100,
                note: "Confirmed present in both cf (control) and pf (perturbed) members, at step 0h and 360h,
-                      2 dates checked."}
+                      2 dates checked. T20 build (2026-07-22): live-verified 51 members (1 cf + 50 pf, confirmed
+                      via message count), unlike ecmwf_ens whose cf appears to be currently absent — see that
+                      entry's note."}
+      total: {param: tcc, units: percent_0_100, status: confirmed,
+              note: "Not previously documented here — added T20 build 2026-07-22, same as aifs_single."}
     notes: "T02: may be the first entry in this registry with CONFIRMED native L/M/H at ensemble scale out to 15
       days — re-ranking nuance is 'best confirmed native-L/M/H long-range ENSEMBLE', pending gefs_extended's own
       now-confirmed pgrb2b levels (T03) for comparison; both are now confirmed, so this is a genuine two-way
@@ -176,12 +191,19 @@ models:
     publication_lag_h: [7, 9]
     first_covering: "2026-08-03T00Z"   # tcc confirmed at 00Z too (T01) — no longer conditional on a 12Z-only caveat
     cloud:
-      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01,
-              note: "T01 REFUTES the prior '12Z-only' assumption — tcc present every cycle, oper stream, class=od."}
+      total: {param: tcc, cycles: ["00","06","12","18"], status: confirmed, task: T01, units: fraction_0_1,
+              note: "T01 REFUTES the prior '12Z-only' assumption — tcc present every cycle, oper stream, class=od.
+                     T20 build (2026-07-22): live-verified as a [0,1] FRACTION, not a 0-100 percent — matches
+                     ecmwf_ens.cloud.total, differs from aifs_single/aifs_ens's tcc which IS 0-100. T21/extract
+                     must scale hres/ens tcc by 100 before writing to points.parquet (schema is percent 0-100) —
+                     easy to miss since it's 'the same variable name' across models."}
       levels:
         status: derived
-        method: "q on pressure levels [1000,925,850,700,500,300] -> RH (Murphy&Koop) -> layer max/overlap"
+        method: "q, t on pressure levels [1000,925,850,700,500,300] -> RH (Murphy&Koop) -> layer max/overlap"
         task: T22
+        note: "T20 build (2026-07-22): the fetcher also pulls z (geopotential) at these levels, not named here —
+               used for terrain-masking (Iberia's Meseta/Pyrenees put 1000/925hPa below-ground over part of the
+               bbox), needed by T21/extract, not by T22's derive formula itself."
     source:
       client: ecmwf-opendata
       request: {stream: oper, type: fc}
@@ -330,12 +352,19 @@ models:
                        reinforces archiver-first design; needs a NEW free API-key/OAuth registration, same
                        human-in-the-loop category as AEMET (T07) and Met Office DataHub (T06) — see CLAUDE.md."}
       alt_no_auth: {via: data_gouv_fr, url: "https://www.data.gouv.fr/datasets/paquets-arpege-resolution-0-1deg",
+                    real_bucket_url_pattern: "https://meteofrance-pnt.s3.rbx.io.cloud.ovh.net/pnt/{ISO_DATE}Z/{product}/{resolution}/{paquet}/{product}__{resolution}__{paquet}__{group}__{ISO_DATE}Z.grib2",
                     retention: "~14 days, per data.gouv.fr's own docs ('archivés 14 jours')",
-                    status: verify,
-                    note: "No-auth bulk GRIB2 mirror, structurally similar to the old dead AWS bucket. Whether
-                           sustained/automated (systemd-timer) polling is permitted on the free tier, or requires
-                           a paid 'Premium' data.gouv.fr tier, is UNCONFIRMED — check before building a fetcher
-                           against this (T10 open question)."}
+                    status: confirmed, task: T20,
+                    note: "T20 build (2026-07-22): the data.gouv.fr URL above is only a dataset-browsing page, not
+                           a fetchable endpoint. The REAL no-auth download target is Meteo-France's own OVH
+                           object-storage bucket (real_bucket_url_pattern) — confirmed two independent ways: (1)
+                           github.com/CyrilJl/MeteoFetch's source downloads from exactly this pattern; (2) every
+                           data.gouv.fr resource redirect (/api/1/datasets/r/<id>) 302s to this same bucket, live-
+                           verified via curl. Runs are split into several GRIB2 files by lead-time 'group' windows
+                           (e.g. 000H012H, 013H024H, ...), not one file per step. Whether sustained/automated
+                           polling is within Meteo-France's acceptable-use terms is still UNCONFIRMED (no ToS page
+                           found specific to this bucket) — but it's unauthenticated and is what data.gouv.fr
+                           itself redirects end users to, so it appears to be the intended public access path."}
       aws_bucket: {name: "mf-nwp-models", status: dead,
                    note: "T05/T10: bucket name was correctly guessed, but it was PERMANENTLY SHUT DOWN
                      2024-12-09 (official Meteo-France/OpenMeteoData notice). Confirmed dead today via anonymous
@@ -380,8 +409,13 @@ models:
                 auth: api_key, human_action: true,
                 note: "Same new Meteo-France API-key registration as arpege_europe — one registration covers both."}
       alt_no_auth: {via: data_gouv_fr, url: "https://www.data.gouv.fr/datasets/paquets-arome-resolution-0-025deg",
-                    retention: "~14 days, per data.gouv.fr's own docs", status: verify,
-                    note: "Same automation-terms caveat as arpege_europe's alt_no_auth path."}
+                    real_bucket_url_pattern: "https://meteofrance-pnt.s3.rbx.io.cloud.ovh.net/pnt/{ISO_DATE}Z/{product}/{resolution}/{paquet}/{product}__{resolution}__{paquet}__{group}__{ISO_DATE}Z.grib2",
+                    retention: "~14 days, per data.gouv.fr's own docs", status: confirmed, task: T20,
+                    note: "Same real-endpoint correction as arpege_europe's alt_no_auth — see that entry's note.
+                           T20 build also observed AROME's 09Z/12Z/15Z/18Z cycles entirely 404 on one test day
+                           (2026-07-22) while 00Z/03Z/06Z and the prior day's late cycles were fine — looked like
+                           a real Meteo-France publication gap, not a URL problem; worth a few more days of
+                           spot-checks before hardening scheduler retry/give-up logic around it."}
       aws_bucket: {name: "mf-nwp-models", status: dead, note: "Same dead bucket as arpege_europe — do not use."}
       status: confirmed
     fetch: http_grib
@@ -394,11 +428,24 @@ models:
     kind: deterministic
     grid: {km: 2.5, open_product_deg: 0.025}
     cycles: {"00": 48, "06": 48, "12": 48, "18": 48}
-    steps: [{to_h: 48, every_h: 1}]   # open-product cadence: verify T07(b) — not yet done, see notes
-    publication_lag_h: [2, 4]         # verify T07(b) — not yet done
+    steps: [{to_h: 48, every_h: 1}]   # T20 build (2026-07-22): confirmed via a real live fetch — the bundle
+                                      # contains 48 hourly valid times starting at run_init+1h (analysis/t+0 hour
+                                      # itself isn't distributed). Cadence confirmed; exact publication_lag still
+                                      # only single-sampled (see publication_lag_h note).
+    publication_lag_h: [2, 4]         # single-sample estimate (T07c) still not re-confirmed across all 4 cycles
     first_covering: "2026-08-10T18Z"
     cloud:
-      total: {param: nubosidad, format: geotiff, status: confirmed, provenance: total_only}
+      total: {param: nubosidad, format: geotiff, status: confirmed, provenance: total_only,
+              aemet_product_code: "71",
+              note: "T20 build (2026-07-22): AEMET's internal numeric product code for this field is '71' (GDAL
+                     tag CAMPO=Nubosidad), confirmed by opening a real fetched file. IMPORTANT for T21/extract:
+                     these GeoTIFFs are RENDERED, COLOR-MAPPED RASTERS (4-band RGBA, near-continuous 0-255 spread,
+                     an embedded ESCALA tag giving the AEMET color-ramp legend — RGBA stops mapped to cloud-%
+                     bins), not raw scientific arrays with a direct numeric cloud-% band. Extraction will need a
+                     color-ramp-inversion step (nearest-legend-stop match per pixel) — inherently approximate/
+                     lossy, a materially different (and less precise) provenance path than every other model's
+                     native GRIB/NetCDF fields. Other product codes seen in the same bundle, unused here: 11
+                     (Temperatura), 32 (wind speed), 61 (precipitation), 228 (lightning)."}
       levels: {status: confirmed, task: "T07(b)", present: false,
                note: "T07(b) 2026-07-22, adversarially double-checked: AEMET has NO low/mid/high cloud breakdown
                anywhere, keyed API or not. Confirmed against AEMET's own live OpenAPI spec

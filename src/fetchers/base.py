@@ -73,9 +73,18 @@ def nearest_step(
 
 def steps_for_run(model_config: dict, run_init: datetime) -> dict[str, tuple[int, float] | None]:
     """For each of the eclipse archive's target valid times, the (step, misalignment)
-    this run_init/model can supply, or None if this run doesn't reach that valid time."""
+    this run_init/model can supply, or None if this run doesn't reach that valid time.
+
+    `cycles:` gives a max forecast length PER CYCLE HOUR (e.g. gefs_extended's 00Z
+    reaches 840h but 06/12/18Z only reach 384h; ecmwf_hres and ukmo_global have
+    similar splits) - this must additionally cap `steps:`'s shared cadence spec,
+    or a short cycle gets asked for steps its run was never going to publish.
+    """
     valid_hours = eclipse_config()["archive_valid_hours_utc"]
     available = generate_available_steps(model_config["steps"])
+    cycle_max = model_config.get("cycles", {}).get(f"{run_init.hour:02d}")
+    if cycle_max is not None:
+        available = [s for s in available if s <= cycle_max]
     result = {}
     for valid_time in target_valid_times(valid_hours):
         offset_hours = (valid_time - run_init).total_seconds() / 3600
