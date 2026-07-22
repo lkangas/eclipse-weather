@@ -8,7 +8,7 @@ user, not Claude Code — surface them, don't attempt.
 
 ## Phase 0 — now → Jul 24 (T-21…-19d): scaffold + research sprint
 
-- [ ] **T00** Scaffold repo layout from CLAUDE.md §"Repo layout". Init `uv`
+- [x] **T00** Scaffold repo layout from CLAUDE.md §"Repo layout". Init `uv`
       project, ruff config, empty modules per directory.
 - [ ] **T01** ECMWF open-data cloud params. Fetch one `.index` file each for
       `oper` and `enfo`, both 00Z and 12Z. Grep for `tcc`/`lcc`/`mcc`/`hcc`.
