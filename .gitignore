@@ -23,6 +23,10 @@ data/raw/**
 !data/raw/.gitkeep
 data/points.parquet
 
+# Downloaded/cached tooling artifacts (e.g. icon_extractor.py's cdo remap
+# weight bundle) — large, re-downloadable, not source.
+data/cache/
+
 # Editor / OS noise
 .vscode/
 .idea/
