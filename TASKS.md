@@ -61,15 +61,17 @@ user, not Claude Code — surface them, don't attempt.
       uniform). DataHub subsetting confirmed to exist; exact bbox-vs-region
       schema unconfirmed. Cloud provenance (native vs derived) via Open-Meteo
       still unresolved — see T08's cross-reference.
-- [x] **T07(a,c,d)** AEMET. (a) **[human]** Register an OpenData API key —
+- [x] **T07** AEMET. (a) **[human]** Register an OpenData API key —
       **done 2026-07-22**, key registered and confirmed live. (c) Public
       download-endpoint cadence — **done**, no auth needed, single-sample
       cadence only. (d) Eclipse-2026 product check — **done**, none exists yet
       (AEMET says a real forecast isn't knowable until "a few days before"
       Aug 12 — re-check in early August).
-      **(b) still open** — full field catalog for HARMONIE-AROME via the now
-      -registered API, hunting for any cloud-by-level field beyond "nubosidad"
-      (GRIB endpoint, not just the GeoTIFF map product). Not yet attempted.
+      **(b) done 2026-07-22** — full field catalog hunt via the registered API,
+      adversarially double-checked. Negative result: AEMET has no low/mid/high
+      cloud breakdown anywhere (confirmed against their own live OpenAPI spec,
+      64 endpoints, zero numeric-model category). AEMET contributes
+      total-cloud-only for good — T07 is now fully closed.
 - [x] **T08** Open-Meteo Previous-Runs API. Confirm host/endpoint, per-model
       history depth, and — critically — read their docs for which models'
       `cloud_cover_low/mid/high` are native vs humidity-derived. Record the
