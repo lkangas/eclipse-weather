@@ -398,11 +398,16 @@ models:
     publication_lag_h: [2, 4]         # verify T07(b) — not yet done
     first_covering: "2026-08-10T18Z"
     cloud:
-      total: {param: nubosidad, format: geotiff, status: confirmed}
-      levels: {status: verify, task: "T07(b)", note: "not in known open feed; check OpenData catalog + GRIB
-               availability — NOT yet attempted: the OpenData API key was only registered 2026-07-22 and basic
-               auth validity was confirmed (HTTP 200 against a climatological endpoint), but the actual
-               HARMONIE-AROME field-catalog hunt via opendata.aemet.es has not been run yet. Remaining work."}
+      total: {param: nubosidad, format: geotiff, status: confirmed, provenance: total_only}
+      levels: {status: confirmed, task: "T07(b)", present: false,
+               note: "T07(b) 2026-07-22, adversarially double-checked: AEMET has NO low/mid/high cloud breakdown
+               anywhere, keyed API or not. Confirmed against AEMET's own live OpenAPI spec
+               (https://opendata.aemet.es/AEMET_OpenData_specification.json, 64 endpoints across 15 categories,
+               zero numeric-model/gridded-forecast category), cross-checked against 2 independent OSS client
+               libraries' full endpoint lists (pablo-moreno/python-aemet, Noltari/AEMET-OpenData) and AEMET's own
+               HARMONIE-AROME viewer help page (7 surface fields listed, only one blended 'nubosidad' cloud
+               value, no L/M/H). Do not build an AEMET L/M/H fetcher — none of this data exists to fetch. AEMET
+               contributes cloud_total only (provenance: total_only) to this project."}
     source:
       open_endpoint: {url: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB",
                       auth: none, status: confirmed, task: "T07(c)",
@@ -420,7 +425,7 @@ models:
                    HARMONIE-AROME field-catalog hunt (T07b) still pending."}
       retention: "latest run only (!) — T10: confirmed via AEMET's own model-viewer page language ('última pasada
                  disponible del modelo'), no historical run archive exposed on the platform."
-      status: verify   # stays verify until T07(b)'s field-catalog hunt completes
+      status: confirmed   # T07(b) done 2026-07-22 — negative result, but fully resolved (see cloud.levels note)
     fetch: geotiff
     notes: "Home-team model, AEMET-rated strongest on fog/low cloud over Spanish orography. Treat as high-trust
       total-cloud cross-check.
