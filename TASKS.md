@@ -131,13 +131,32 @@ user, not Claude Code — surface them, don't attempt.
       the control member (31-member fan-out is a follow-up); AEMET's GeoTIFFs
       turned out to be rendered color-map images, not raw arrays — T21 will
       need a color-ramp-inversion step, inherently lossy.
-- [ ] **T21** Extract module (`src/extract/`): GRIB2/GeoTIFF → xarray → Iberia
-      bbox slice (raw archive) + per-site/per-strip point rows → append to
-      `data/points.parquet` per the schema in CLAUDE.md. Tag every row with
-      `provenance` (native/derived/total_only). **Must handle**: the ICON
-      Global cdo remap (T04); AEMET's color-ramp-to-percent inversion (T20);
-      a units mismatch where ecmwf_hres/ecmwf_ens's tcc is a [0,1] fraction
-      but every other model (incl. AIFS) is 0-100 percent — scale accordingly.
+- [x] **T21** Extract modules (`src/extract/`), built + tested in parallel
+      2026-07-22 against real archived data (from T20's testing), one per
+      `fetch:` key, wired in `src/extract/__init__.py`:
+      `grib_regular_extractor.py` (GFS, GEFS extended — handles GFS's 0-360°
+      longitude vs sites.yaml's -180..180, and GEFS's all-cloud-levels-share
+      -shortName-`tcc` trap per T03), `ecmwf_extractor.py` (HRES/ENS/AIFS —
+      percent-scaling read from models.yaml's `units:` field, not hardcoded),
+      `icon_extractor.py` (ICON-EU direct; **ICON Global's icosahedral→regular
+      remap solved** via DWD's prebuilt weight bundle + one `cdo remap+crop`
+      call, cached locally), `meteofrance_extractor.py` (selects the right
+      step out of Météo-France's multi-hour "group" GRIB2 files),
+      `aemet_extractor.py` (parses the real GeoTIFF color-ramp legend,
+      nearest-RGB match to a cloud-% bin — confirmed the "transparent pixel"
+      case means genuinely <10% cloud, not missing data), `open_meteo_extractor.py`.
+      **`ecmwf_hres` produces two PointRows per site/valid-time** (one
+      `native` with `cloud_total` only, one `derived` with L/M/H only) since
+      the schema allows one provenance per row — documented in the module,
+      worth knowing before querying `points.parquet` for this model.
+      **Bug found + fixed during review**: the archived `ecmwf_hres` pressure
+      -level files predated the T20 temperature fix and were silently stale
+      (fetcher's idempotency check skips existing files) — purged and
+      re-fetched; derive path now confirmed producing real rows off the
+      actual archive, not just a manual test file.
+      **Not done**: WNW-strip sampling (T24, next); AROME's real cadence is
+      hourly through 102h per real data, though `models.yaml`'s `steps:` only
+      asks for 3-hourly beyond 48h (harmless, just leaves resolution unused).
 - [x] **T22** Derived-cloud module (`src/derive/humidity_to_cloud.py`), built
       + calibrated 2026-07-22: q,t → RH (Murphy & Koop, both water/ice
       formulas) → cloud fraction (Sundqvist 1989) → low/mid/high via max-
