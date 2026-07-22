@@ -76,7 +76,11 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
   Open-Meteo non-commercial limits. Every scheduled fetch pings a
   healthcheck URL (dead archiver during Aug 5–12 is the worst failure mode).
 - Deployment target: an always-on Linux box with systemd timers (timer units
-  generated from models.yaml: fire at init + publication_lag + margin).
+  generated from models.yaml: fire at init + publication_lag + margin). Own
+  directory, own port, isolated from any other services on the box. Box
+  chosen 2026-07-22 — see private ops notes, not this repo. This tool's own
+  disk footprint is estimated well under 1 GB if `data/raw/` is cropped to
+  the Iberia bbox before archiving as designed (T21) — see T25.
 
 ## Human-in-the-loop items (Claude Code: flag, don't attempt)
 
@@ -84,7 +88,8 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
 - Met Office DataHub key — optional path, only if T06 shows Open-Meteo
   insufficient.
 - Final site list sign-off after totality polygon check (T33).
-- Choice of deployment box + healthcheck service account.
+- ~~Choice of deployment box~~ — decided 2026-07-22 (see private ops notes,
+  not this repo). Healthcheck service account still open.
 
 ## Simulated-eclipse testing (build UI before real data exists)
 
