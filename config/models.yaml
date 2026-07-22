@@ -1,0 +1,258 @@
+# config/models.yaml — single source of truth for the eclipse cloud tool.
+# All times UTC. status: confirmed = safe to build against;
+# verify = resolve via the referenced task in TASKS.md before building fetchers.
+# first_covering = earliest init whose valid times reach 2026-08-12T18:00Z.
+# Wall-clock availability = first_covering + publication_lag_h.
+
+eclipse:
+  t: "2026-08-12T18:30:00Z"            # override with env ECLIPSE_T in sim modes
+  archive_valid_hours_utc: [15, 18, 21] # on eclipse day, per run
+  bbox: {lat_min: 36.0, lat_max: 44.0, lon_min: -10.0, lon_max: 5.0}
+  sun_at_t: {elevation_deg: ~11, azimuth_deg: ~285}   # informational
+
+models:
+
+  gefs_extended:
+    provider: NOAA
+    kind: ensemble            # 30 perturbed + control
+    members: 31
+    grid: {deg: 0.5, note: "0.25 subset exists (pgrb2sp25) - cloud fields likely not in it"}
+    cycles: {"00": 840, "06": 384, "12": 384, "18": 384}   # hours
+    steps: [{to_h: 240, every_h: 3}, {to_h: 840, every_h: 6}]
+    publication_lag_h: [4, 6]
+    first_covering: "2026-07-09T00Z"   # ALREADY LIVE (extended run)
+    cloud:
+      total: {param: TCDC, status: confirmed}
+      levels: {params: [LCDC, MCDC, HCDC], location: "pgrb2b 0.5deg suspected",
+               status: verify, task: T03}
+    source:
+      aws_bucket: "noaa-gefs-pds"
+      path_hint: "gefs.{YYYYMMDD}/{HH}/atmos/pgrb2ap5/ge{c00|pNN}.t{HH}z.pgrb2a.0p50.f{FFF}"
+      retention: "AWS: long-term"
+      status: verify   # confirm b-family path for cloud levels (T03)
+    fetch: herbie
+    notes: "Only model already covering T today. Day-20+ skill ~ climatology; use as pattern-vs-climatology signal only."
+
+  gfs:
+    provider: NOAA
+    kind: deterministic
+    grid: {deg: 0.25}
+    cycles: {"00": 384, "06": 384, "12": 384, "18": 384}
+    steps: [{to_h: 120, every_h: 1}, {to_h: 384, every_h: 3}]
+    publication_lag_h: [3.5, 5]
+    first_covering: "2026-07-27T18Z"
+    cloud:
+      total: {param: TCDC, status: confirmed}
+      levels: {params: [LCDC, MCDC, HCDC],
+               cfgrib_hint: "shortName lcc/mcc/hcc, typeOfLevel low/middle/highCloudLayer",
+               status: confirmed}
+    source:
+      aws_bucket: "noaa-gfs-bdp-pds"
+      url_template: "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{YYYYMMDD}/{HH}/atmos/gfs.t{HH}z.pgrb2.0p25.f{FFF}"
+      idx: "{url}.idx"
+      retention: "AWS: permanent - only source that allows backfill of missed runs"
+      status: confirmed
+    fetch: herbie
+    notes: "Long-range workhorse. Summer Iberia bias: tends to over-produce convective cloud."
+
+  ecmwf_ens:
+    provider: ECMWF
+    kind: ensemble
+    members: 50
+    grid: {deg: 0.25}
+    cycles: {"00": 360, "06": 144, "12": 360, "18": 144}
+    steps: [{to_h: 144, every_h: 3}, {to_h: 360, every_h: 6}]
+    publication_lag_h: [7, 9]
+    first_covering: "2026-07-29T00Z"
+    cloud:
+      total: {param: tcc, cycles: ["12"],   # per Nov-2025 open-data announcement
+              status: verify, task: T01}
+      levels: {status: absent_in_open_data, fallback: "none for ENS (no per-member q practical)"}
+    source:
+      client: ecmwf-opendata
+      request: {stream: enfo, type: [cf, pf]}
+      root: "https://data.ecmwf.int/forecasts"
+      retention: "~4 days rolling"
+      status: confirmed
+    fetch: ecmwf-opendata
+    notes: "Best medium-range skill here. Use member tcc distribution as probability anchor: P(tcc<30%) per site."
+
+  aifs_single:
+    provider: ECMWF
+    kind: deterministic_ai
+    grid: {deg: 0.25}
+    cycles: {"00": 360, "06": 360, "12": 360, "18": 360}   # lengths: verify T02
+    steps: [{to_h: 360, every_h: 6}]
+    publication_lag_h: [7, 9]
+    first_covering: "2026-07-29T00Z"   # 2026-07-28T18Z if 18Z runs full 360 h (T02)
+    cloud:
+      levels: {params: [lcc, mcc, hcc], status: verify, task: T02,
+               note: "expected in open feed - would make AIFS best long-range L/M/H source"}
+    source:
+      client: ecmwf-opendata
+      request: {model: aifs-single}
+      retention: "~4 days rolling"
+      status: verify
+    fetch: ecmwf-opendata
+    notes: "AI model: fields smoothed toward mean; compare, don't trust alone. Eclipse-in-radiation unknown (T09)."
+
+  aifs_ens:
+    provider: ECMWF
+    kind: ensemble_ai
+    status_overall: optional
+    source: {client: ecmwf-opendata, request: {model: aifs-ens}, status: verify}
+    cloud: {levels: {status: verify, task: T02}}
+    notes: "Onboard only if T02 shows cloud params + cheap to add alongside aifs_single."
+
+  ecmwf_hres:
+    provider: ECMWF
+    kind: deterministic
+    grid: {deg: 0.25}
+    cycles: {"00": 240, "06": 90, "12": 240, "18": 90}
+    steps: [{to_h: 144, every_h: 3}, {to_h: 240, every_h: 6}]
+    publication_lag_h: [7, 9]
+    first_covering: "2026-08-03T00Z"   # tcc (12Z-only if unchanged): 2026-08-03T12Z
+    cloud:
+      total: {param: tcc, cycles: ["12"], status: verify, task: T01}
+      levels:
+        status: derived
+        method: "q on pressure levels [1000,925,850,700,500,300] -> RH (Murphy&Koop) -> layer max/overlap"
+        task: T22
+    source:
+      client: ecmwf-opendata
+      request: {stream: oper, type: fc}
+      retention: "~4 days rolling"
+      status: confirmed
+    fetch: ecmwf-opendata
+    notes: "Deterministic reference from T-10d. Derived-L/M/H module doubles as calibration tool: run on GFS, compare vs GFS native (T22 acceptance)."
+
+  icon_global:
+    provider: DWD
+    kind: deterministic
+    grid: {km: 13, layout: icosahedral, regular_latlon_available: verify, task: T04}
+    cycles: {"00": 180, "06": 120, "12": 180, "18": 120}
+    steps: [{to_h: 78, every_h: 1}, {to_h: 180, every_h: 3}]
+    publication_lag_h: [2.5, 4]
+    first_covering: "2026-08-05T12Z"
+    cloud:
+      levels: {params: [CLCL, CLCM, CLCH], layers_hPa: "sfc-800 / 800-400 / 400-0", status: confirmed}
+      total: {param: CLCT, status: confirmed}
+    source:
+      url_template: "https://opendata.dwd.de/weather/nwp/icon/grib/{HH}/{param_lower}/icon_global_icosahedral_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
+      retention: "~24 h (!) - archiver critical"
+      status: confirmed_shape   # exact regular-grid variant: T04
+    fetch: http_bz2
+    notes: "If T04 finds no regular-lat-lon files: cdo remap with DWD grid-description files, cache weights."
+
+  icon_eu:
+    provider: DWD
+    kind: deterministic
+    grid: {deg: 0.0625}
+    cycles: {"00": 120, "06": 120, "12": 120, "18": 120}   # short 03/09/15/21 cycles ignored
+    steps: [{to_h: 78, every_h: 1}, {to_h: 120, every_h: 3}]
+    publication_lag_h: [2.5, 4]
+    first_covering: "2026-08-07T18Z"
+    hourly_at_t_from: "2026-08-09T18Z"
+    cloud:
+      levels: {params: [CLCL, CLCM, CLCH], status: confirmed}
+      total: {param: CLCT, status: confirmed}
+    source:
+      url_template: "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{HH}/{param_lower}/icon-eu_europe_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
+      retention: "~24 h (!)"
+      status: confirmed
+    fetch: http_bz2
+    notes: "Primary regional source from Aug 7. Many small per-param/per-step files - batch politely."
+
+  ukmo_global:
+    provider: Met Office
+    kind: deterministic
+    grid: {km: 10}
+    cycles: {"00": 168, "06": 168, "12": 168, "18": 168}   # lengths by cycle: verify T06
+    steps: [{to_h: 54, every_h: 1}, {to_h: 144, every_h: 3}, {to_h: 168, every_h: 6}]
+    publication_lag_h: [6, 10]   # includes ~4 h extra open-data delay via Open-Meteo
+    first_covering: "2026-08-06T00Z"
+    cloud:
+      levels: {params: [lcc, mcc, hcc], status: confirmed}
+    source:
+      primary: {via: open_meteo, model_id: "ukmo_global_deterministic_10km", id_status: verify, task: T06}
+      fallback: {via: datahub, auth: api_key, quota: "1 GB/month free", human_action: true,
+                 area_subset_possible: verify, task: T06}
+    fetch: open_meteo_json
+    notes: "Independent model family (UM). Open-Meteo path avoids DataHub quota if id + delay acceptable."
+
+  arpege_europe:
+    provider: Meteo-France
+    kind: deterministic
+    grid: {deg: 0.1}
+    cycles: {"00": 102, "06": 72, "12": 114, "18": 60}   # verify T05
+    steps: [{to_h: 60, every_h: 1}, {to_h: 114, every_h: 3}]   # package layout: verify T05
+    publication_lag_h: [3, 5]
+    first_covering: "2026-08-08T00Z"   # or 12Z depending on verified cycle lengths
+    cloud:
+      levels: {params: [lcc, mcc, hcc], package: "SP2/HP1 suspected", status: verify, task: T05}
+    source:
+      aws_registry: "Atmospheric models from Meteo-France (anonymous)"
+      bucket_candidate: "mf-nwp-models"
+      retention: "~14 days"
+      status: verify
+      fallback: {via: mf_api, url: "portail-api.meteofrance.fr", auth: token, human_action: true}
+    fetch: http_grib
+    notes: "Good mid-tier: 11 km + native L/M/H. AWS anonymous path preferred over token API."
+
+  arome_france:
+    provider: Meteo-France
+    kind: deterministic
+    grid: {deg: 0.025, hd_variant_deg: 0.01}
+    cycles: {"00": 48, "03": 42, "06": 42, "12": 48, "18": 42}   # verify T05
+    steps: [{to_h: 51, every_h: 1}]
+    publication_lag_h: [2, 4]
+    first_covering: "2026-08-10T18Z"   # +-1 cycle pending T05
+    coverage_limit: "NE Spain + Balearics only - domain S edge ~38-39N, verify T05.
+                     Relevant for Zaragoza/Castellon/Palma leg; useless for Galicia/Leon."
+    cloud:
+      levels: {params: [lcc, mcc, hcc], status: verify, task: T05}
+    source: {same_as: arpege_europe, status: verify}
+    fetch: http_grib
+    notes: "Best orographic cloud handling for eastern path IF domain check passes."
+
+  aemet_harmonie:
+    provider: AEMET
+    kind: deterministic
+    grid: {km: 2.5, open_product_deg: 0.025}
+    cycles: {"00": 48, "06": 48, "12": 48, "18": 48}
+    steps: [{to_h: 48, every_h: 1}]   # open-product cadence: verify T07
+    publication_lag_h: [2, 4]         # verify T07
+    first_covering: "2026-08-10T18Z"
+    cloud:
+      total: {param: nubosidad, format: geotiff, status: confirmed}
+      levels: {status: verify, task: T07, note: "not in known open feed; check OpenData catalog + GRIB availability"}
+    source:
+      open_endpoint: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB"
+      api: {url: "https://opendata.aemet.es", auth: api_key, human_action: true}
+      retention: "latest run only (!)"
+      status: verify
+    fetch: geotiff
+    notes: "Home-team model, AEMET-rated strongest on fog/low cloud over Spanish orography. Treat as high-trust total-cloud cross-check. Also check AEMET's eclipse-2026 pages (T07)."
+
+  open_meteo:
+    provider: aggregator
+    kind: aggregator
+    role: [prototyping, backfill, ukmo_primary_path, sim_mode_data]
+    api:
+      forecast: "https://api.open-meteo.com/v1/forecast"
+      previous_runs: {host: "previous-runs-api.open-meteo.com (verify T08)", task: T08}
+      historical: "https://archive-api.open-meteo.com/v1/archive"   # ERA5, for climatology
+    variables: [cloud_cover, cloud_cover_low, cloud_cover_mid, cloud_cover_high]
+    model_ids_candidates: [gfs_global, ecmwf_ifs025, ecmwf_aifs025, icon_global, icon_eu,
+                           meteofrance_arpege_europe, meteofrance_arome_france,
+                           meteofrance_arome_france_hd, ukmo_global_deterministic_10km]
+    id_status: verify   # T08 confirms exact ids + per-model native-vs-derived cloud flags
+    provenance_warning: "L/M/H derived from humidity for models lacking native fields - record per-model flag from docs (T08); never mix silently with native values."
+
+  climatology:
+    provider: baseline
+    kind: reference
+    sources:
+      - "eclipsophile.com 2026 cloud climatology (Jay Anderson) - manual read, encode per-site priors"
+      - "ERA5 Aug-evening cloud stats via open_meteo.historical (T14)"
+    role: "Phase-0 display = model minus climatology; prior for site ranking."
