@@ -10,55 +10,100 @@ user, not Claude Code — surface them, don't attempt.
 
 - [x] **T00** Scaffold repo layout from CLAUDE.md §"Repo layout". Init `uv`
       project, ruff config, empty modules per directory.
-- [ ] **T01** ECMWF open-data cloud params. Fetch one `.index` file each for
+- [x] **T01** ECMWF open-data cloud params. Fetch one `.index` file each for
       `oper` and `enfo`, both 00Z and 12Z. Grep for `tcc`/`lcc`/`mcc`/`hcc`.
       Update `models.ecmwf_ens.cloud` and `models.ecmwf_hres.cloud`.
       *Decides whether HRES/ENS need the derived-cloud path at all.*
-- [ ] **T02** AIFS cloud params + cycle lengths. Same index-grep on
+      **Done 2026-07-22.** tcc present every cycle (not 12Z-only); no lcc/mcc/hcc
+      in classic IFS oper/enfo at any cycle (that's aifs-ens's data — see T02).
+- [x] **T02** AIFS cloud params + cycle lengths. Same index-grep on
       `aifs-single` and `aifs-ens`; confirm all 4 cycles reach 360h.
       Update `models.aifs_single`, `models.aifs_ens`.
       *If lcc/mcc/hcc present: AIFS becomes the best long-range native L/M/H
       source — re-rank it above GFS in the plan doc.*
-- [ ] **T03** GEFS cloud-level location. Check pgrb2a vs pgrb2b family for
+      **Done 2026-07-22.** Native lcc/mcc/hcc confirmed on both, all 4 cycles
+      reach 360h. `aifs_ens` promoted from optional to recommended.
+- [x] **T03** GEFS cloud-level location. Check pgrb2a vs pgrb2b family for
       LCDC/MCDC/HCDC; confirm presence/absence beyond 384h in the extended run.
       Update `models.gefs_extended.cloud`, `.source`.
-- [ ] **T04** ICON Global grid. Check opendata.dwd.de for regular-lat-lon
+      **Done 2026-07-22.** L/M/H is param TCDC + level field in pgrb2b (not
+      pgrb2a, not literal LCDC/MCDC/HCDC strings); unchanged through f840.
+- [x] **T04** ICON Global grid. Check opendata.dwd.de for regular-lat-lon
       single-level files vs icosahedral-only. If icosahedral-only, fetch DWD
       grid-description files and prototype a `cdo` remap; cache weights.
       Update `models.icon_global.grid`, `.source`.
-- [ ] **T05** Météo-France. (a) AWS registry bucket layout for ARPEGE Europe +
+      **Done 2026-07-22.** Icosahedral-only confirmed, no regular-lat-lon
+      variant exists. cdo remap is mandatory; grid-description + candidate
+      prebuilt weight bundles identified, not yet prototyped.
+- [x] **T05** Météo-France. (a) AWS registry bucket layout for ARPEGE Europe +
       AROME France — confirm bucket name, which package (SP2/HP1/other) holds
       lcc/mcc/hcc. (b) Exact per-cycle max lengths for both models (00/06/12/18,
       and 03Z for AROME). (c) AROME France domain southern edge vs 38–40°N —
       does it reach Zaragoza/Castellón/Palma? Update `models.arpege_europe`,
       `models.arome_france` fully; update `sites.yaml` AROME-relevant notes.
-- [ ] **T06** UKMO. (a) Confirm cycle lengths per run hour. (b) Confirm
+      **Done 2026-07-22, with a critical correction:** the configured AWS
+      bucket (`mf-nwp-models`) was permanently shut down 2024-12-09 — it only
+      holds 2019 static files, zero forecast data. Real access is
+      portail-api.meteofrance.fr (**new [human] item** — free API key, added
+      below) or an unauthenticated data.gouv.fr mirror (automation terms
+      unconfirmed). Package SP2 confirmed for cloud; cycle lengths corrected
+      (both models uniform per-cycle, AROME has 8 cycles/day not 5); AROME's
+      domain corrected — covers virtually all of Spain, not just NE+Balearics.
+      `sites.yaml` AROME notes not yet updated for the corrected domain —
+      remaining work.
+- [x] **T06** UKMO. (a) Confirm cycle lengths per run hour. (b) Confirm
       Open-Meteo model id `ukmo_global_deterministic_10km` (or find correct id)
       and measure actual delay vs DataHub direct. (c) Check whether DataHub
       atmospheric orders support area-subsetting (matters for the 1GB/month
       quota). Update `models.ukmo_global.source`.
-- [ ] **T07** AEMET. (a) **[human]** Register an OpenData API key at
-      opendata.aemet.es. (b) Full field catalog for HARMONIE-AROME via the
-      registered API — specifically hunt for any cloud-by-level field beyond
-      "nubosidad" (GRIB endpoint, not just the GeoTIFF map product). (c) Update
-      cadence of the api-eltiempo download endpoint. (d) Check for a dedicated
-      AEMET eclipse-2026 forecast product. Update `models.aemet_harmonie` fully.
-- [ ] **T08** Open-Meteo Previous-Runs API. Confirm host/endpoint, per-model
+      **Done 2026-07-22.** Model id confirmed. Cycle lengths corrected —
+      06Z/18Z cap at 67h, not 168h like 00Z/12Z (config previously assumed
+      uniform). DataHub subsetting confirmed to exist; exact bbox-vs-region
+      schema unconfirmed. Cloud provenance (native vs derived) via Open-Meteo
+      still unresolved — see T08's cross-reference.
+- [x] **T07(a,c,d)** AEMET. (a) **[human]** Register an OpenData API key —
+      **done 2026-07-22**, key registered and confirmed live. (c) Public
+      download-endpoint cadence — **done**, no auth needed, single-sample
+      cadence only. (d) Eclipse-2026 product check — **done**, none exists yet
+      (AEMET says a real forecast isn't knowable until "a few days before"
+      Aug 12 — re-check in early August).
+      **(b) still open** — full field catalog for HARMONIE-AROME via the now
+      -registered API, hunting for any cloud-by-level field beyond "nubosidad"
+      (GRIB endpoint, not just the GeoTIFF map product). Not yet attempted.
+- [x] **T08** Open-Meteo Previous-Runs API. Confirm host/endpoint, per-model
       history depth, and — critically — read their docs for which models'
       `cloud_cover_low/mid/high` are native vs humidity-derived. Record the
       per-model flag in `models.open_meteo.model_ids_candidates` (add a
       `provenance` field per id). *Blocks T16 (sim backfill).*
-- [ ] **T09** Eclipse-in-radiation-scheme survey. For each model family
+      **Done 2026-07-22, with a critical correction:** the `_previous_dayN`
+      history mechanism only works for total cloud_cover, NOT for
+      low/mid/high (confirmed null for every model tested) — T16's backfill
+      needs the separate Single-Runs API instead for true L/M/H run history,
+      which only retains ~3.5 months (fine for T16, not for deep backtests).
+      Native/derived flags recorded for 5 of 6 models; UKMO's remains unclear.
+- [x] **T09** Eclipse-in-radiation-scheme survey. For each model family
       (IFS, ICON, UM, GFS, AIFS): does the radiation scheme simulate the
       Aug 12 solar obscuration? Add findings to each model's `notes` in
       models.yaml. *Informational — affects how much to trust 17–19 UTC
       low-cloud/convection evolution per model.*
-- [ ] **T10** Retention spot-check. Re-confirm the retention numbers already
+      **Done 2026-07-22.** Only ECMWF's IFS (hres/ens) confirmed eclipse-aware
+      (since Cycle 50r1, live 2026-05-12). AIFS, ICON, UKMO, GFS/GEFS all
+      expected eclipse-blind. Flag this in the viz — see `eclipse:` block note
+      in models.yaml.
+- [x] **T10** Retention spot-check. Re-confirm the retention numbers already
       in models.yaml (DWD ~24h, AEMET latest-only, AWS permanent, ECMWF ~4d,
       Météo-France ~14d) are still accurate. Cheap; do alongside T01–T07.
-- [ ] **T11** *(optional)* ICON-EU-EPS: does opendata.dwd.de serve a EU
+      **Done 2026-07-22, with a correction:** ECMWF is actually ~2-3 days (12
+      most recent runs, ~72h), not ~4 days — tightened in models.yaml. DWD/
+      AEMET/NOAA confirmed as-is. Météo-France's ~14d figure is correct but
+      only for the current data.gouv.fr platform, not the dead AWS bucket
+      (see T05).
+- [x] **T11** *(optional)* ICON-EU-EPS: does opendata.dwd.de serve a EU
       ensemble with cloud fields? Would add a mid-range probabilistic layer
       with real L/M/H. Add as `models.icon_eu_eps` only if it checks out.
+      **Done 2026-07-22 — doesn't pan out.** The product exists (40 members,
+      4 cycles/day, 120h) but carries only total cloud cover, no L/M/H. Not
+      added to models.yaml per its own "skip if it doesn't pan out" framing.
 - [ ] **T12** *(optional, low priority)* GEM (Canada) / JMA / KMA / CMA via
       Open-Meteo — quick check only if T01–T09 leave spare time. Coarse
       global models, marginal value; skip if the calendar is tight.

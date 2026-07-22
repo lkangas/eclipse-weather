@@ -84,7 +84,14 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
 
 ## Human-in-the-loop items (Claude Code: flag, don't attempt)
 
-- AEMET OpenData API key registration (T07).
+- ~~AEMET OpenData API key registration (T07a)~~ — done 2026-07-22.
+- **Météo-France API key registration** at portail-api.meteofrance.fr
+  (new, found by T05) — the AWS bucket this project originally assumed as
+  the fetch source was permanently shut down 2024-12-09; the real API path
+  needs a free key/OAuth registration, same category as AEMET. Needed before
+  `arpege_europe`/`arome_france` fetchers can use the `mf_api` path (the
+  unauthenticated data.gouv.fr mirror is a possible alternative — its
+  automation terms are unconfirmed, see T05/T10 notes in models.yaml).
 - Met Office DataHub key — optional path, only if T06 shows Open-Meteo
   insufficient.
 - Final site list sign-off after totality polygon check (T33).
