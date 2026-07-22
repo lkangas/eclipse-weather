@@ -86,6 +86,11 @@ user, not Claude Code — surface them, don't attempt.
 - [ ] **T24** `sites.yaml` consumption: implement WNW-strip sampling
       (bearing/length/interval from `wnw_strip:` block) alongside the point
       extraction at each site.
+- [ ] **T25** Reserve hosting per the deployment decision made 2026-07-22
+      (box + hostname intentionally not named in this repo — see private ops
+      notes). Own isolated directory/port; DNS + ingress live in a separate
+      ops repo, not here. Do this once T23's scheduler exists; no need to
+      stand up hosting before there's anything to run on it.
 
 ## Phase 1 — Jul 25–26 (T-18…-17d): prove the UI before real data exists
 
