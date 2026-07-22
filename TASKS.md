@@ -112,20 +112,43 @@ user, not Claude Code — surface them, don't attempt.
 
 ## Phase 0 — build against confirmed metadata
 
-- [ ] **T20** Fetcher modules (`src/fetchers/`): herbie-based (GFS, GEFS,
-      AIFS), `ecmwf-opendata`-based (ENS, HRES), `http_bz2` (DWD ×2),
-      `http_grib` (Météo-France ×2), `geotiff` (AEMET), `open_meteo_json`
-      (aggregator + UKMO primary path). One module per `fetch:` value in
-      models.yaml — don't hardcode URLs, read the template from the registry.
+- [x] **T20** Fetcher modules (`src/fetchers/`), built + tested in parallel
+      2026-07-22 against real, live endpoints (not stubs): `herbie_fetcher.py`
+      (GFS, GEFS extended — control member only, see below), `ecmwf_opendata_
+      fetcher.py` (ENS/HRES/AIFS single+ens), `dwd_bz2_fetcher.py` (ICON
+      Global/EU), `meteofrance_fetcher.py` (ARPEGE/AROME — discovered the real
+      no-auth endpoint, see models.yaml), `aemet_geotiff_fetcher.py`,
+      `open_meteo_fetcher.py` (UKMO + backfill stubs for T16). Each registers
+      itself against `models.yaml`'s `fetch:` key via `src/fetchers/registry.py`;
+      wired up in `src/fetchers/__init__.py`. Real archived files from testing
+      are already sitting in `data/raw/` (gitignored).
+      **Fixed during review**: HRES fetcher was missing temperature (derive
+      needs it, would have raised KeyError); a real bug in `base.py`'s
+      `steps_for_run` that ignored per-cycle max forecast length (caused
+      gefs_extended's short 06/12/18Z cycles to request steps hundreds of
+      hours past what they publish) — both fixed and re-verified against real
+      data. **Known scope limits, not yet done**: gefs_extended only fetches
+      the control member (31-member fan-out is a follow-up); AEMET's GeoTIFFs
+      turned out to be rendered color-map images, not raw arrays — T21 will
+      need a color-ramp-inversion step, inherently lossy.
 - [ ] **T21** Extract module (`src/extract/`): GRIB2/GeoTIFF → xarray → Iberia
       bbox slice (raw archive) + per-site/per-strip point rows → append to
       `data/points.parquet` per the schema in CLAUDE.md. Tag every row with
-      `provenance` (native/derived/total_only).
-- [ ] **T22** Derived-cloud module (`src/derive/`): humidity (q, pressure
-      levels) → RH (Murphy & Koop) → low/mid/high cloud fraction. Acceptance
-      test: run it on GFS (which has native L/M/H) and compare
-      derived-from-GFS-humidity against GFS-native as a calibration check
-      before trusting it on ECMWF HRES.
+      `provenance` (native/derived/total_only). **Must handle**: the ICON
+      Global cdo remap (T04); AEMET's color-ramp-to-percent inversion (T20);
+      a units mismatch where ecmwf_hres/ecmwf_ens's tcc is a [0,1] fraction
+      but every other model (incl. AIFS) is 0-100 percent — scale accordingly.
+- [x] **T22** Derived-cloud module (`src/derive/humidity_to_cloud.py`), built
+      + calibrated 2026-07-22: q,t → RH (Murphy & Koop, both water/ice
+      formulas) → cloud fraction (Sundqvist 1989) → low/mid/high via max-
+      overlap. Acceptance test run against a real, current GFS run (native
+      L/M/H vs. derived-from-GFS-humidity): mean abs diff ~3-4.5pp per band,
+      correlation 0.31 (low) / 0.77 (mid) / 0.71 (high) — low-band fit is the
+      weakest, likely because only 3 discrete pressure levels under-resolve
+      GFS's own boundary-layer scheme; worth another look once real HRES data
+      is flowing. Reproducible via `scripts/calibrate_humidity_to_cloud.py`.
+      Critical-RH constants are a single-sample tune — re-run the calibration
+      once more real archived runs exist, don't trust long-term as-is.
 - [x] **T23** Scheduler (`src/scheduler/`). **Redesigned 2026-07-22**: the
       deployment target changed to Docker, so this is an in-process scheduling
       loop (`src/scheduler/run.py`, the container's entrypoint) rather than
