@@ -1,4 +1,5 @@
-# UNVERIFIED — see Dockerfile's header note; not yet built/run anywhere.
+# Verified 2026-07-22 — image builds and the entrypoint runs correctly
+# against a mounted volume (see Dockerfile's header note).
 services:
   archiver:
     build: .
