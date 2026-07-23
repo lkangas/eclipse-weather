@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 3 — eclipse valid-time, all models, run-init slider (real data)</title>
 <style>
   body {
@@ -67,6 +68,7 @@
     padding: 5px 14px 5px 0;
     user-select: none;
     cursor: ew-resize;
+    touch-action: none;
   }
   .row { display: flex; align-items: center; height: 15px; cursor: pointer; }
   .row:hover { background: #f6f4ef; }
@@ -161,6 +163,17 @@
     border: 1px dashed #d8d4c8;
   }
   .galleryCell.noCoverage .cellBody { color: #c99; border-color: #e6c9c9; }
+
+  /* Touch-target bump for coarse pointers only (fingers, not mice) - keeps
+     desktop mouse users pixel-identical to before. .row is 15px tall (fine
+     for a mouse click) but under the ~20px minimum comfortable tap target;
+     the viewToggle buttons are already close to that floor. Ticks inside
+     .rowTrack are absolutely positioned (top:3px height:9px) so a taller
+     row just adds blank space below them - harmless, no relayout needed. */
+  @media (pointer: coarse) {
+    .row { height: 22px; }
+    .viewToggle button { padding: 8px 12px; }
+  }
 </style>
 </head>
 <body>
@@ -173,6 +186,7 @@
       <option value="low">Low cloud</option>
       <option value="mid">Mid cloud</option>
       <option value="high">High cloud</option>
+      <option value="prob_clear">P(low cloud &lt;20%) — ensembles only</option>
     </select>
   </div>
   <div>
@@ -227,14 +241,33 @@ let MODELS = []; // [{id, label, runs: [{runInit, covers, images, hasData}]}]
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
 // documented in tool1_real.html, repeated here since Tool 3 renders the
 // same underlying fields.
+// P(low cloud <20%) is a per-grid-cell ensemble spread metric (T32's own
+// pooled point metric, same threshold, applied per-pixel) - only meaningful
+// for a model with genuine multi-member native low-cloud data. Right now
+// that's aifs_ens only (aifs_single technically renders too, but degrades
+// to a binary 0%/100% map since it's a single deterministic run - not
+// listed as a gap since it does produce real output, just a degenerate one).
+const PROB_CLEAR_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
 const KNOWN_FIELD_GAPS = {
-  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
-  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arome_france: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
+  arpege_europe: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
   ecmwf_ens: {
     low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    prob_clear: PROB_CLEAR_GAP,
   },
+  gfs: { prob_clear: PROB_CLEAR_GAP },
+  gefs_extended: { prob_clear: PROB_CLEAR_GAP },
+  ecmwf_hres: { prob_clear: PROB_CLEAR_GAP },
+  icon_eu: { prob_clear: PROB_CLEAR_GAP },
+  icon_global: { prob_clear: PROB_CLEAR_GAP },
 };
 
 async function loadManifest() {
@@ -528,6 +561,28 @@ function endDrag() { dragging = false; }
 stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
 window.addEventListener("mousemove", e => moveDrag(e.clientX));
 window.addEventListener("mouseup", endDrag);
+
+// Touch counterparts of the three mouse handlers above, reusing the same
+// startDrag/moveDrag/endDrag functions (and the same `dragging` flag) so
+// touch and mouse drags are one code path. touchstart is passive (never
+// preventDefault'd) so taps still synthesize a "click" afterward - that's
+// what makes per-row tap-to-select work, same as a mouse click does.
+// touchmove only preventDefault's while a drag is actually in progress, so
+// scrolling/pinch-zoom elsewhere on the page (and taps on the quantity/view
+// controls, which live outside #stackWrap) are never intercepted.
+stackWrap.addEventListener("touchstart", e => {
+  const t = e.touches[0];
+  if (t) startDrag(t.clientX);
+}, { passive: true });
+window.addEventListener("touchmove", e => {
+  if (!dragging) return;
+  const t = e.touches[0];
+  if (!t) return;
+  e.preventDefault();
+  moveDrag(t.clientX);
+}, { passive: false });
+window.addEventListener("touchend", endDrag);
+window.addEventListener("touchcancel", endDrag);
 quantitySelect.addEventListener("change", updateUI);
 
 function setViewMode(mode) {

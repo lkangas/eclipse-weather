@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 1 — latest run per model (real data, 10 gridded models)</title>
 <style>
   body {
@@ -59,6 +60,10 @@
     background: #fff;
     padding: 5px 14px 5px 0;
     user-select: none;
+    touch-action: none; /* this element owns the drag-to-scrub gesture -
+      stop the browser's own pan/zoom gestures inside it so touchmove
+      dragging (see script) isn't fought over with native scrolling. Scoped
+      to this element only, not body - page scroll elsewhere is untouched. */
   }
   .row {
     display: flex;
@@ -87,6 +92,20 @@
     color: #a8a498;
     cursor: pointer;
     font-variant-numeric: tabular-nums;
+    position: relative;
+  }
+  .preloadBtn::before {
+    /* Invisible tap-target bump: the row (and so this button) is only 11px
+       tall, too small to comfortably hit on a phone, but growing the row
+       itself would reflow the whole dense stack. This pseudo-element is
+       absolutely positioned (out of flow) so it doesn't change layout at
+       all - it only widens the *hit area* for touch/click. */
+    content: "";
+    position: absolute;
+    top: -3px;
+    bottom: -3px;
+    left: -4px;
+    right: -4px;
   }
   .preloadBtn:hover { color: #232320; }
   .preloadBtn.loading { color: #8b3a2f; }
@@ -197,6 +216,7 @@
       <option value="low">Low cloud</option>
       <option value="mid">Mid cloud</option>
       <option value="high">High cloud</option>
+      <option value="prob_clear">P(low cloud &lt;20%) — ensembles only</option>
       <option value="combined_rain">Combined cloud + rain (not yet designed)</option>
       <option value="surface_temp">Surface temperature (not yet researched)</option>
     </select>
@@ -317,14 +337,33 @@ const IMAGE_FIELDS = ["total", "low", "mid", "high"];
 //     total-cloud field, only low/mid/high.
 //   - ecmwf_ens: classic ECMWF ENS via ecmwf-opendata has no native
 //     low/mid/high at all (T01 research) - only AIFS ens has that split.
+// P(low cloud <20%) is a per-grid-cell ensemble spread metric (T32's own
+// pooled point metric, same threshold, applied per-pixel) - only meaningful
+// for a model with genuine multi-member native low-cloud data. Right now
+// that's aifs_ens only (aifs_single technically renders too, but degrades
+// to a binary 0%/100% map since it's a single deterministic run - not
+// listed as a gap since it does produce real output, just a degenerate one).
+const PROB_CLEAR_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
 const KNOWN_FIELD_GAPS = {
-  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
-  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arome_france: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
+  arpege_europe: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
   ecmwf_ens: {
     low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    prob_clear: PROB_CLEAR_GAP,
   },
+  gfs: { prob_clear: PROB_CLEAR_GAP },
+  gefs_extended: { prob_clear: PROB_CLEAR_GAP },
+  ecmwf_hres: { prob_clear: PROB_CLEAR_GAP },
+  icon_eu: { prob_clear: PROB_CLEAR_GAP },
+  icon_global: { prob_clear: PROB_CLEAR_GAP },
 };
 const preloadedModels = new Set();
 
@@ -519,6 +558,27 @@ stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
 window.addEventListener("mousemove", e => moveDrag(e.clientX));
 window.addEventListener("mouseup", endDrag);
 quantitySelect.addEventListener("change", updateCursorUI);
+
+// Touch support - reuses the exact same startDrag/moveDrag/endDrag functions
+// the mouse handlers above call, just fed touch coordinates instead of mouse
+// ones. No separate touch-vs-mouse hit-zone tolerance here: unlike a
+// "grab the handle precisely" widget, this file's drag surface has no
+// proximity gating at all - mousedown/touchstart anywhere inside #stackWrap
+// already jumps the cursor there and starts dragging (cursorHandle is purely
+// decorative; it inherits pointer-events:none from #cursorLine), so there's
+// no tolerance constant to widen.
+stackWrap.addEventListener("touchstart", e => {
+  if (!e.touches.length) return;
+  startDrag(e.touches[0].clientX);
+}, { passive: true });
+window.addEventListener("touchmove", e => {
+  if (!dragging) return; // let untouched scrolling/other controls behave normally
+  if (!e.touches.length) return;
+  e.preventDefault(); // only while a drag is actually in progress
+  moveDrag(e.touches[0].clientX);
+}, { passive: false });
+window.addEventListener("touchend", endDrag);
+window.addEventListener("touchcancel", endDrag); // e.g. OS interrupts the touch mid-drag
 
 extentInput.addEventListener("input", () => {
   axisRightMs = parseInt(extentInput.value, 10);

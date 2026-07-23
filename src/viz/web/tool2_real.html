@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 2 — one model, stacked historical runs (real data)</title>
 <style>
   body {
@@ -62,6 +63,7 @@
     padding: 5px 14px 5px 0;
     user-select: none;
     cursor: default;
+    touch-action: none;
   }
   #stackWrap.hint-time { cursor: ew-resize; }
   #stackWrap.hint-row { cursor: ns-resize; }
@@ -93,6 +95,19 @@
     color: #a8a498;
     cursor: pointer;
     font-variant-numeric: tabular-nums;
+    position: relative;
+  }
+  /* Invisible enlarged hit-box for touch - the 13px row height is load-bearing
+     elsewhere (tick alignment in layoutTicks), so grow the tap target via an
+     absolutely-positioned pseudo-element instead of padding/size on the real
+     box; clicks/taps on it bubble to .preloadBtn's own listener as normal. */
+  .preloadBtn::before {
+    content: "";
+    position: absolute;
+    top: -6px;
+    bottom: -6px;
+    left: -4px;
+    right: -4px;
   }
   .preloadBtn:hover { color: #232320; }
   .preloadBtn.loading { color: #8b3a2f; }
@@ -214,6 +229,7 @@
       <option value="low">Low cloud</option>
       <option value="mid">Mid cloud</option>
       <option value="high">High cloud</option>
+      <option value="prob_clear">P(low cloud &lt;20%) — ensembles only</option>
     </select>
   </div>
   <div>
@@ -254,14 +270,33 @@ let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, 
 
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
 // documented in tool1_real.html/tool3_real.html.
+// P(low cloud <20%) is a per-grid-cell ensemble spread metric (T32's own
+// pooled point metric, same threshold, applied per-pixel) - only meaningful
+// for a model with genuine multi-member native low-cloud data. Right now
+// that's aifs_ens only (aifs_single technically renders too, but degrades
+// to a binary 0%/100% map since it's a single deterministic run - not
+// listed as a gap since it does produce real output, just a degenerate one).
+const PROB_CLEAR_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
 const KNOWN_FIELD_GAPS = {
-  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
-  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arome_france: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
+  arpege_europe: {
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
+    prob_clear: PROB_CLEAR_GAP,
+  },
   ecmwf_ens: {
     low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
     high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    prob_clear: PROB_CLEAR_GAP,
   },
+  gfs: { prob_clear: PROB_CLEAR_GAP },
+  gefs_extended: { prob_clear: PROB_CLEAR_GAP },
+  ecmwf_hres: { prob_clear: PROB_CLEAR_GAP },
+  icon_eu: { prob_clear: PROB_CLEAR_GAP },
+  icon_global: { prob_clear: PROB_CLEAR_GAP },
 };
 
 async function loadManifest() {
@@ -558,16 +593,20 @@ function timeFromClientX(clientX) {
 // behavior); dragging only "sticks" to a handle grabbed within its hit zone.
 const CURSOR_HIT_PX = 8;   // horizontal tolerance around the vertical cursor line
 const ROW_HIT_PAD_PX = 6;  // vertical tolerance around the selected row's own band
+const CURSOR_HIT_PX_TOUCH = 20;  // same, widened for a finger instead of a mouse pointer
+const ROW_HIT_PAD_PX_TOUCH = 16;
 
 function isNearCursorLine(clientX) {
   const rect = cursorLine.getBoundingClientRect();
-  return Math.abs(clientX - (rect.left + rect.width / 2)) <= CURSOR_HIT_PX;
+  const tol = isTouch ? CURSOR_HIT_PX_TOUCH : CURSOR_HIT_PX;
+  return Math.abs(clientX - (rect.left + rect.width / 2)) <= tol;
 }
 
 function isNearSelectedRow(clientY) {
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) return false;
   const r = builtRows[selectedRunIdx].row.getBoundingClientRect();
-  return clientY >= r.top - ROW_HIT_PAD_PX && clientY <= r.bottom + ROW_HIT_PAD_PX;
+  const pad = isTouch ? ROW_HIT_PAD_PX_TOUCH : ROW_HIT_PAD_PX;
+  return clientY >= r.top - pad && clientY <= r.bottom + pad;
 }
 
 function rowIndexAtClientY(clientY) {
@@ -595,6 +634,7 @@ function applyHoverHint(clientX, clientY) {
 }
 
 let dragMode = null; // "time" | "row" | null (a plain click, no continued drag-follow)
+let isTouch = false; // true while the current interaction is touch-driven - widens hit tolerances
 
 function startDrag(clientX, clientY) {
   dragMode = hitZoneAt(clientX, clientY);
@@ -624,14 +664,37 @@ function moveDrag(clientX, clientY) {
   applyHoverHint(clientX, clientY);
 }
 
-function endDrag() { dragMode = null; }
+function endDrag() { dragMode = null; isTouch = false; }
 
 stackWrap.addEventListener("mousedown", e => {
   if (e.target.closest(".preloadBtn")) return;
+  isTouch = false;
   startDrag(e.clientX, e.clientY);
 });
 window.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
 window.addEventListener("mouseup", endDrag);
+
+// Touch: same startDrag/moveDrag/endDrag as mouse, same attachment points
+// (touchstart on stackWrap only, touchmove/touchend on window so a drag that
+// leaves stackWrap's bounds is still tracked) - just fed touch coordinates.
+stackWrap.addEventListener("touchstart", e => {
+  if (e.target.closest(".preloadBtn")) return;
+  const t = e.touches[0];
+  if (!t) return;
+  isTouch = true;
+  startDrag(t.clientX, t.clientY);
+  // No preventDefault here: an off-handle tap must still fall through to the
+  // "click away still jumps both" behavior, and must not block page scroll.
+});
+window.addEventListener("touchmove", e => {
+  const t = e.touches[0];
+  if (!t) return;
+  moveDrag(t.clientX, t.clientY);
+  // Only swallow the scroll/zoom gesture once a real handle drag is underway.
+  if (dragMode) e.preventDefault();
+}, { passive: false });
+window.addEventListener("touchend", endDrag);
+window.addEventListener("touchcancel", endDrag);
 quantitySelect.addEventListener("change", updateCursorUI);
 modelSelect.addEventListener("change", () => loadModel(modelSelect.value));
 
