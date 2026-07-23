@@ -1,10 +1,14 @@
 """Open-Meteo JSON point extractor.
 
 Registered fetch key: ``open_meteo_json`` (see ``config/models.yaml``'s
-``models.ukmo_global.fetch``). Reads the raw ``forecast.json`` saved by
-``src/fetchers/open_meteo_fetcher.py`` (a JSON list, one object per site, in
-``config/sites.yaml``'s site order — confirmed against the real archived
-file at ``data/raw/ukmo_global/<initYYYYMMDDHH>/forecast.json``) and emits a
+``models.ukmo_global.fetch``, and since T12, the same key on
+``models.gem_global``/``models.jma_gsm``/``models.cma_grapes_global`` — all
+four are primary-path-via-Open-Meteo models with no other native fetcher in
+this project, so they share this one extractor). Reads the raw
+``forecast.json`` saved by ``src/fetchers/open_meteo_fetcher.py`` (a JSON
+list, one object per site, in ``config/sites.yaml``'s site order — confirmed
+against the real archived file at
+``data/raw/ukmo_global/<initYYYYMMDDHH>/forecast.json``) and emits a
 ``PointRow`` for every (site, target valid time) pair actually present.
 
 Open-Meteo's hourly payload already carries real clock timestamps (not
@@ -51,33 +55,63 @@ logger = logging.getLogger(__name__)
 HOURLY_VALID_TIME_FMT = "%Y-%m-%dT%H:%M"
 
 # ---------------------------------------------------------------------------
-# PROVENANCE — OPEN QUESTION, NOT A SETTLED FACT.
+# PROVENANCE per model_name, per config/models.yaml's models.open_meteo.
+# cloud_provenance table (T08, extended by T12). Covers the live primary-path
+# models (ukmo_global, gem_global, jma_gsm, cma_grapes_global) and T16's
+# backfill-only models (gfs_global, ecmwf_ifs025, om_icon_global, om_icon_eu,
+# meteofrance_arpege_europe - see scripts/backfill_open_meteo.py for why two
+# of these are "om_"-prefixed: Open-Meteo's own model ids for ICON happen to
+# collide with this registry's own native icon_global/icon_eu model names,
+# which are a DIFFERENT pipeline/provenance - renamed to avoid silently
+# conflating the two in points.parquet). gem_global/jma_gsm/cma_grapes_global
+# need no such prefix - this project has no other native fetch path for them,
+# so there's nothing to collide with.
 #
-# config/models.yaml's models.ukmo_global.cloud.levels.provenance_via_open_meteo
-# is `verify`, not `confirmed`: Open-Meteo's docs give no explicit
-# native-vs-derived statement for ukmo_global, unlike gfs/ecmwf/icon/arpege
-# (which all have explicit doc language either way). T06/T08 only observed
-# live, non-null, varying low/mid/high values — consistent with native model
-# output, but that is a data-shape observation, not a documentation proof.
-#
-# CLAUDE.md hard constraint #3 requires a provenance flag on every row, and
-# src/extract/base.py's PointRow only accepts native | derived | total_only
-# (no fourth "unconfirmed" option). We write "native" here because it is the
-# closest fit to what's actually been observed — but this is a live-data
-# best guess standing in for an unresolved doc question, not a resolved one.
-# Resolving it for real means diffing Open-Meteo's UKMO cloud values against
-# a raw Met Office DataHub GRIB sample (see models.yaml's own note on this
-# entry) — do not let a future refactor treat "native" here as settled just
-# because it's what ends up on disk.
+# ukmo_global and cma_grapes_global are genuine open questions, not settled
+# facts: config/models.yaml's models.ukmo_global.cloud.levels.
+# provenance_via_open_meteo and models.cma_grapes_global.cloud.levels.
+# provenance_via_open_meteo are both `verify`, not `confirmed` (Open-Meteo's
+# docs give no explicit native-vs-derived statement for either, unlike
+# gem_global/jma_gsm - T12 found explicit doc language for those two: GEM's
+# low/mid/high is transitively humidity-derived, JMA's is not). "native" is
+# the closest schema fit to observed non-null/varying values for the two
+# `verify` models, not a documentation proof - do not let a future refactor
+# treat it as settled. See each model's own models.yaml entry for what would
+# actually resolve it. (cma_grapes_global also carries a much bigger caveat
+# unrelated to provenance - see its reliability_caveat in models.yaml - the
+# model's real-world forecast horizon fell well short of its documented
+# 240h/10-day design when live-tested T12/2026-07-23.)
 # ---------------------------------------------------------------------------
-_PROVENANCE = "native"
-_PROVENANCE_WARNING = (
-    "ukmo_global cloud L/M/H provenance is UNRESOLVED "
-    "(config/models.yaml: models.ukmo_global.cloud.levels.provenance_via_open_meteo="
+_PROVENANCE_BY_MODEL = {
+    "ukmo_global": "native",  # verify, not confirmed - see docstring above
+    "gfs_global": "native",
+    "ecmwf_ifs025": "derived",
+    "om_icon_global": "native",
+    "om_icon_eu": "native",
+    "meteofrance_arpege_europe": "native",
+    "gem_global": "derived",  # T12: doc-confirmed - see gem_global.cloud.levels.note, models.yaml
+    "jma_gsm": "native",  # T12: doc-confirmed - see jma_gsm.cloud.levels.note, models.yaml
+    "cma_grapes_global": "native",  # verify, not confirmed - see docstring above
+}
+_UNRESOLVED_PROVENANCE_MODELS = {"ukmo_global", "cma_grapes_global"}
+_UNRESOLVED_PROVENANCE_WARNING = (
+    "%s cloud L/M/H provenance is UNRESOLVED "
+    "(config/models.yaml: models.%s.cloud.levels.provenance_via_open_meteo="
     "'verify'). Writing provenance=%r as the closest schema fit to observed "
     "non-null/varying Open-Meteo values -- this is NOT a confirmed fact. "
-    "See models.yaml's ukmo_global entry for what would actually resolve it."
+    "See models.yaml's %s entry for what would actually resolve it."
 )
+
+
+def _provenance_for(model_name: str) -> str:
+    try:
+        return _PROVENANCE_BY_MODEL[model_name]
+    except KeyError:
+        raise KeyError(
+            f"open_meteo_extractor has no provenance mapping for model '{model_name}' "
+            f"(known: {sorted(_PROVENANCE_BY_MODEL)}) - add one to _PROVENANCE_BY_MODEL, "
+            "matching config/models.yaml's models.open_meteo.cloud_provenance table."
+        ) from None
 
 
 def _format_init_dir(run_init: datetime) -> str:
@@ -116,7 +150,11 @@ def _safe_float(seq: list, idx: int) -> float | None:
 
 @register("open_meteo_json")
 def extract(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
-    logger.warning(_PROVENANCE_WARNING, _PROVENANCE)
+    provenance = _provenance_for(model_name)
+    if model_name in _UNRESOLVED_PROVENANCE_MODELS:
+        logger.warning(
+            _UNRESOLVED_PROVENANCE_WARNING, model_name, model_name, provenance, model_name
+        )
 
     path = _forecast_path(model_name, run_init)
     if not path.exists():
@@ -165,7 +203,7 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
                     cloud_mid=_safe_float(cloud_mid, idx),
                     cloud_high=_safe_float(cloud_high, idx),
                     cloud_total=_safe_float(cloud_total, idx),
-                    provenance=_PROVENANCE,
+                    provenance=provenance,
                     fetched_at=fetched_at,
                 )
             )
