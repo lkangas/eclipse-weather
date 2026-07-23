@@ -125,6 +125,23 @@
     top: 0;
     background: #8b3a2f;
   }
+  .tick.isInit {
+    background: #55534c;
+    width: 2px;
+    height: 11px;
+    top: 0;
+  }
+  .row.selected .tick.isInit { background: #232320; }
+  #nowLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 1px;
+    background: #2f6f3f;
+    pointer-events: none;
+    z-index: 4;
+    opacity: 0.6;
+  }
   #cursorLine {
     position: absolute;
     top: 0;
@@ -187,12 +204,14 @@
 </head>
 <body>
 
-<h1>Tool 1 — latest run per model (real data: gfs, arome_france)</h1>
+<h1>Tool 1 — latest run per model (real data, 10 gridded models)</h1>
 <p class="note">
-  Real full-range fetches for gfs and arome_france only so far (more models are a follow-up,
-  see TASKS.md). Each row's "+0h" is that model's OWN latest run_init, not a shared clock across
-  rows - gfs and arome_france's latest runs may be a few hours apart in real wall-clock time.
-  Click a row to select a model, drag the cursor to scrub its steps.
+  Each row is one model's latest archived run. The axis is absolute calendar time, not hours
+  since each row's own init - models don't all publish their latest run at the same wall-clock
+  moment (fetch/publication lag varies a lot per model, e.g. ecmwf-opendata models can lag
+  several hours behind gfs/icon), so a shared "+Nh" axis would silently compare different real
+  moments across rows. Each row's own run_init is marked with a bolder tick; the green line
+  marks "now". Click a row to select a model, drag the cursor to scrub through real time.
 </p>
 
 <div class="controls">
@@ -209,7 +228,7 @@
   </div>
   <div>
     <label for="extentInput">Extent</label>
-    <input type="range" id="extentInput" min="12" max="384" step="12" value="384">
+    <input type="range" id="extentInput" min="0" max="1" step="3600000" value="1">
     <span id="extentReadout">384h</span>
   </div>
   <div id="cursorReadout">—</div>
@@ -219,6 +238,7 @@
   <div id="rows"></div>
   <div id="axisRow"><div class="rowLabel"></div><div class="preloadBtn"></div><div class="rowTrack" id="axisTrack"></div></div>
   <div id="cursorLine"><div id="cursorHandle"></div></div>
+  <div id="nowLine"></div>
 </div>
 
 <div id="mapArea">
@@ -230,16 +250,17 @@
 
 <script>
 let MODELS = [];        // [{id, label, runInit (Date), steps: [h,...], imagesByStep: {h: {total,low,mid,high}}}]
-let FULL_REACH_H = 384; // real max step across all loaded models, set after manifest loads
-let AXIS_MAX_H = FULL_REACH_H;
+let AXIS_START = new Date(), AXIS_END = new Date(); // full span across all loaded models' runs/reach
+let axisRightMs = 0;    // current right edge, ms from AXIS_START - narrowed by the extent slider
 let selectedModel = null;
-let cursorH = 0;
+let cursorTime = new Date();
 
 const rowsEl = document.getElementById("rows");
 const axisTrack = document.getElementById("axisTrack");
 const stackWrap = document.getElementById("stackWrap");
 const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
+const nowLine = document.getElementById("nowLine");
 const mapAreaTag = document.getElementById("mapAreaTag");
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
@@ -256,6 +277,11 @@ function stepValidTime(model, h) {
 
 function fmtTime(d) {
   return d.toISOString().slice(0, 16).replace("T", " ") + "Z";
+}
+
+function fmtDuration(ms) {
+  const h = ms / 3600000;
+  return h < 48 ? h.toFixed(0) + "h" : (h / 24).toFixed(1) + "d";
 }
 
 async function loadManifest() {
@@ -275,20 +301,38 @@ async function loadManifest() {
     hasDataByStep: Object.fromEntries(m.steps.map(s => [s.h, s.has_data || null])),
   }));
 
-  const allSteps = MODELS.flatMap(m => m.steps);
-  FULL_REACH_H = allSteps.length ? Math.max(...allSteps) : 384;
-  AXIS_MAX_H = FULL_REACH_H;
-  extentInput.max = FULL_REACH_H;
-  extentInput.value = FULL_REACH_H;
-  extentReadout.textContent = FULL_REACH_H + "h";
+  AXIS_START = new Date(Math.min(...MODELS.map(m => m.runInit.getTime())));
+  const reaches = MODELS.map(m => stepValidTime(m, m.steps.length ? Math.max(...m.steps) : 0).getTime());
+  AXIS_END = new Date(Math.max(...reaches, AXIS_START.getTime()));
+  axisRightMs = Math.max(AXIS_END - AXIS_START, 3600 * 1000);
+
+  extentInput.min = 0;
+  extentInput.max = axisRightMs;
+  extentInput.step = 3600 * 1000;
+  extentInput.value = axisRightMs;
+  extentReadout.textContent = fmtDuration(axisRightMs);
+
+  // Default cursor to "now" (clamped into the axis span) rather than the axis
+  // start - the whole point of a shared absolute-time cursor is comparing
+  // models around the current moment, not around whichever model happens to
+  // have archived the oldest run.
+  cursorTime = new Date();
+  if (cursorTime < AXIS_START) cursorTime = new Date(AXIS_START);
+  if (cursorTime - AXIS_START > axisRightMs) cursorTime = new Date(AXIS_START.getTime() + axisRightMs);
 }
 
-function pickAxisInterval(extentH) {
-  const candidates = [1, 2, 3, 6, 12, 24, 48, 96, 168];
-  for (const c of candidates) {
-    if (extentH / c <= 10) return c;
+function pickAxisIntervalMs(spanMs) {
+  const hourMs = 3600 * 1000;
+  const candidatesH = [1, 2, 3, 6, 12, 24, 48, 96, 168, 336];
+  for (const c of candidatesH) {
+    if (spanMs / (c * hourMs) <= 10) return c * hourMs;
   }
-  return candidates[candidates.length - 1];
+  return candidatesH[candidatesH.length - 1] * hourMs;
+}
+
+function timeToPx(t, trackWidthPx) {
+  const frac = (t - AXIS_START) / axisRightMs;
+  return Math.round(Math.min(1, Math.max(0, frac)) * trackWidthPx);
 }
 
 const IMAGE_FIELDS = ["total", "low", "mid", "high"];
@@ -376,30 +420,43 @@ function layoutTicks() {
   builtRows.forEach(({ model, track }) => {
     track.innerHTML = "";
     model.steps.forEach(h => {
-      if (h > AXIS_MAX_H) return;
+      const vt = stepValidTime(model, h);
+      if (vt - AXIS_START > axisRightMs) return;
       const tick = document.createElement("div");
-      tick.className = "tick";
-      tick.style.left = Math.round((h / AXIS_MAX_H) * trackWidthPx) + "px";
+      tick.className = "tick" + (h === 0 ? " isInit" : "");
+      tick.style.left = timeToPx(vt, trackWidthPx) + "px";
       tick.dataset.hour = h;
       track.appendChild(tick);
     });
   });
 
   axisTrack.innerHTML = "";
-  const interval = pickAxisInterval(AXIS_MAX_H);
-  for (let h = 0; h <= AXIS_MAX_H; h += interval) {
-    const t = document.createElement("div");
-    t.className = "axisTick";
-    t.style.left = Math.round((h / AXIS_MAX_H) * trackWidthPx) + "px";
-    t.textContent = "+" + h + "h";
-    axisTrack.appendChild(t);
+  const intervalMs = pickAxisIntervalMs(axisRightMs);
+  for (let ms = 0; ms <= axisRightMs; ms += intervalMs) {
+    const t = new Date(AXIS_START.getTime() + ms);
+    const el = document.createElement("div");
+    el.className = "axisTick";
+    el.style.left = timeToPx(t, trackWidthPx) + "px";
+    el.textContent = t.toISOString().slice(5, 16).replace("T", " ");
+    axisTrack.appendChild(el);
+  }
+
+  const trackRect = axisTrack.getBoundingClientRect();
+  const wrapRect = stackWrap.getBoundingClientRect();
+  const trackOffsetPx = trackRect.left - wrapRect.left;
+  const now = new Date();
+  if (now >= AXIS_START && now - AXIS_START <= axisRightMs) {
+    nowLine.style.display = "block";
+    nowLine.style.left = Math.round(trackOffsetPx + timeToPx(now, trackRect.width)) + "px";
+  } else {
+    nowLine.style.display = "none";
   }
 }
 
-function nearestStep(model, h) {
+function nearestStep(model, targetTime) {
   if (!model.steps.length) return null;
-  return model.steps.reduce((best, s) =>
-    Math.abs(s - h) < Math.abs(best - h) ? s : best
+  return model.steps.reduce((best, h) =>
+    Math.abs(stepValidTime(model, h) - targetTime) < Math.abs(stepValidTime(model, best) - targetTime) ? h : best
   );
 }
 
@@ -415,13 +472,13 @@ function updateCursorUI() {
   const trackRect = axisTrack.getBoundingClientRect();
   const wrapRect = stackWrap.getBoundingClientRect();
   const trackOffsetPx = trackRect.left - wrapRect.left;
-  const leftPx = trackOffsetPx + (cursorH / AXIS_MAX_H) * trackRect.width;
+  const leftPx = trackOffsetPx + timeToPx(cursorTime, trackRect.width);
   cursorLine.style.left = Math.round(leftPx) + "px";
-  cursorReadout.textContent = "cursor +" + cursorH.toFixed(1) + "h (from each row's own run_init)";
+  cursorReadout.textContent = "cursor " + fmtTime(cursorTime);
 
   document.querySelectorAll(".row").forEach(rowEl => {
     const model = MODELS.find(m => m.id === rowEl.dataset.modelId);
-    const nearest = nearestStep(model, cursorH);
+    const nearest = nearestStep(model, cursorTime);
     rowEl.querySelectorAll(".tick").forEach(tickEl => {
       tickEl.classList.toggle("near", parseFloat(tickEl.dataset.hour) === nearest);
     });
@@ -436,7 +493,7 @@ function updateCursorUI() {
   }
 
   const model = MODELS.find(m => m.id === selectedModel);
-  const step = nearestStep(model, cursorH);
+  const step = nearestStep(model, cursorTime);
   const field = quantitySelect.value;
   const images = step === null ? null : model.imagesByStep[step];
   const hasDataFlags = step === null ? null : model.hasDataByStep[step];
@@ -466,15 +523,15 @@ function updateCursorUI() {
   }
 }
 
-function hourFromClientX(clientX) {
+function timeFromClientX(clientX) {
   const rect = axisTrack.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  return frac * AXIS_MAX_H;
+  return new Date(AXIS_START.getTime() + frac * axisRightMs);
 }
 
 let dragging = false;
-function startDrag(clientX) { dragging = true; cursorH = hourFromClientX(clientX); updateCursorUI(); }
-function moveDrag(clientX) { if (dragging) { cursorH = hourFromClientX(clientX); updateCursorUI(); } }
+function startDrag(clientX) { dragging = true; cursorTime = timeFromClientX(clientX); updateCursorUI(); }
+function moveDrag(clientX) { if (dragging) { cursorTime = timeFromClientX(clientX); updateCursorUI(); } }
 function endDrag() { dragging = false; }
 
 stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
@@ -483,9 +540,9 @@ window.addEventListener("mouseup", endDrag);
 quantitySelect.addEventListener("change", updateCursorUI);
 
 extentInput.addEventListener("input", () => {
-  AXIS_MAX_H = parseInt(extentInput.value, 10);
-  extentReadout.textContent = AXIS_MAX_H + "h";
-  cursorH = Math.min(cursorH, AXIS_MAX_H);
+  axisRightMs = parseInt(extentInput.value, 10);
+  extentReadout.textContent = fmtDuration(axisRightMs);
+  cursorTime = new Date(Math.min(cursorTime.getTime(), AXIS_START.getTime() + axisRightMs));
   layoutTicks();
   updateCursorUI();
 });
