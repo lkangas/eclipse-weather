@@ -409,8 +409,13 @@ function layoutTicks() {
 }
 
 function nearestRun(model, targetTime) {
-  if (!model.runs.length) return null;
-  return model.runs.reduce((best, r) =>
+  // Same fix as Tool 1/2's own nearestStep - only consider runs still
+  // inside the extent slider's current window, or a run the slider has
+  // hidden can get picked as "nearest" with nothing on the visible axis
+  // to show for it.
+  const visible = model.runs.filter(r => r.runInit - AXIS_START <= axisRightMs);
+  if (!visible.length) return null;
+  return visible.reduce((best, r) =>
     Math.abs(r.runInit - targetTime) < Math.abs(best.runInit - targetTime) ? r : best
   );
 }
