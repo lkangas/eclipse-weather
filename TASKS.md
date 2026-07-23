@@ -423,8 +423,13 @@ user, not Claude Code — surface them, don't attempt.
       after each fetch. Only errors seen are benign upstream 404s (DWD
       hasn't published every icon_global step yet at request time) — handled
       as designed (logged, skipped, loop continues). This is the real
-      fetch/parse path test T16 bypasses; it passed. Container is still
-      running — leave it, it's free ongoing validation.
+      fetch/parse path test T16 bypasses; it passed.
+      **Stopped 2026-07-23** (~8h runtime) — its job was done hours
+      earlier (already verified above), continuing to run added no new
+      information while still hitting live upstream APIs every 5 min, and
+      it was testing the narrow eclipse-cropped `fetch()` path that the
+      same-day archiver-consolidation discussion (rollout step 4) may
+      retire anyway.
 - [x] **T30** Availability Gantt, done 2026-07-23 (`src/viz/availability_gantt.py`).
       Deliberately simple/matplotlib per the user's explicit direction. Bar per
       model from `first_covering`, ticks per subsequent cycle that reaches T,
