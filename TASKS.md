@@ -878,6 +878,29 @@ started. Laid out 2026-07-23 per explicit user direction.
       becomes relevant once step 1's service has been running a while
       and/or step 4's production pipeline is live.
 
+## Viewing Tool 1/2/3 locally (dev desktop)
+
+`file://` fetches are NOT reliable for these widgets - same-directory
+relative `fetch()` calls work in the embedded dev Browser pane used
+during this project's own build sessions, but real browsers (confirmed
+2026-07-23, user's own browser) can block even that. Don't fight this -
+use the standing local HTTP server instead:
+
+    python3 -m http.server 8734   # run from E:\data\eclipse-weather\viz\tool1_frames\
+
+Then open, from any real browser (WSL2 forwards localhost to Windows
+automatically):
+
+    http://localhost:8734/index.html          # Tool 1
+    http://localhost:8734/tool2_index.html    # Tool 2
+    http://localhost:8734/tool3_index.html    # Tool 3
+
+All three served copies live in that one directory alongside their real
+manifests (`manifest.json`, `tool2_manifest.json`, `tool3_manifest.json`)
+and rendered PNGs - never edit these directly, they're synced copies of
+the real source files in `src/viz/web/` (`tool1_real.html`,
+`tool2_real.html`, `tool3_real.html`) after each edit.
+
 ## Deferred / not now
 
 - Met Office DataHub key **[human]** — only pursue if T06 shows the
