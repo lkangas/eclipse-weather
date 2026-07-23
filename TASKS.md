@@ -614,6 +614,26 @@ user, not Claude Code — surface them, don't attempt.
       sibling sections - not attempted here, this task was research only,
       same "confirm findings, then a separate scoping decision" gate T01-T09
       themselves went through before code was built against them).
+- [ ] **T39** Tool 3 scope decided, 2026-07-23 - not started. Original vision
+      (way back when the 3 tools were first described) was "eclipse valid-
+      time weather, models stacked, slider over run-inits" - a multi-model
+      view at a fixed valid time. User's own observation this same day: once
+      the eclipse date falls inside Tool 2's window for a given model, Tool
+      3 "reduces to" Tool 2 with the time cursor parked on the eclipse valid
+      time and the (T36) row/run cursor scrubbed vertically - the general
+      2-axis Tool 2 widget already subsumes the single-model case entirely.
+      Decision: still build a DEDICATED Tool 3 page anyway, for simplicity -
+      not the original multi-model-stacked idea, but a deliberately smaller
+      single-model view purpose-built for the one valid time that actually
+      matters: model dropdown, quantity dropdown, and a run slider (no
+      draggable time axis at all - time is permanently locked to the eclipse
+      valid time, so there's only one degree of freedom: which run). Reuses
+      T36's row-slider mechanics (nearest-step-by-valid-time, hit-zone-
+      gated... though with only one axis here, likely simpler - no
+      precedence rule needed since there's no second cursor to conflict
+      with). Not yet built - same "mock prototype first, confirm the
+      interaction, then wire real data" sequence as T34/T36 before this
+      goes further.
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
