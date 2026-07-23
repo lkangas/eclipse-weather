@@ -533,7 +533,12 @@ started. Laid out 2026-07-23 per explicit user direction.
       service, not just smoke-tested once. This is the user's own service
       to start/own (a standing decision, not something to launch
       unilaterally per session) — a long-lived Docker container on this
-      desktop. Old eclipse-archiver data (`data/raw/`, `points.parquet`,
+      desktop, named `eclipse-collector`, run with `--restart unless-
+      stopped` so it survives a reboot/Docker Desktop restart on its own
+      (an explicit `docker stop` is still respected, only crashes/reboots
+      trigger the auto-restart). `Dockerfile` now bakes in `scripts/`
+      (previously needed a bind-mount workaround) so this runs from the
+      image alone. Old eclipse-archiver data (`data/raw/`, `points.parquet`,
       the icon_global cdo remap cache) was migrated off OneDrive to
       `E:\data\eclipse-weather\` the same day this was written, so both
       trees now live off OneDrive consistently.
