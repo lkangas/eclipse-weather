@@ -111,7 +111,20 @@ def _render_run(model_id: str, run_init: datetime, steps: list[int]) -> list[dic
     return step_entries
 
 
+def _write_manifest(manifest_models: list[dict]) -> None:
+    manifest = {"generated_at": _iso_z(datetime.now(UTC)), "models": manifest_models}
+    manifest_path = OUTPUT_DIR / "tool2_manifest.json"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+
 def main() -> None:
+    # Written after every model (not just once at the end) - this job is
+    # the slow one (thousands of renders per model), and the manifest is
+    # what the real page fetches. Without incremental writes the file
+    # simply doesn't exist until the entire multi-hour job finishes, and
+    # anyone opening the page in the meantime gets a 404 rather than a
+    # partial-but-real picture of whatever has rendered so far.
     manifest_models = []
     for model_id, label in MODELS:
         model_config = get_model(model_id)
@@ -131,18 +144,21 @@ def main() -> None:
                 "steps": step_entries,
             })
             log.info("%s %s: rendered %d steps", model_id, run_init.isoformat(), len(step_entries))
+            # Flush after every run, not just every model - some models
+            # (aifs_ens) take long enough per single run that even
+            # per-model granularity would leave the manifest stale for a
+            # long stretch.
+            _write_manifest([*manifest_models, {"id": model_id, "label": label, "runs": run_entries}])
 
         manifest_models.append({
             "id": model_id,
             "label": label,
             "runs": run_entries,
         })
+        _write_manifest(manifest_models)
+        log.info("wrote manifest after completing %s (%d model(s) so far)", model_id, len(manifest_models))
 
-    manifest = {"generated_at": _iso_z(datetime.now(UTC)), "models": manifest_models}
-    manifest_path = OUTPUT_DIR / "tool2_manifest.json"
-    manifest_path.parent.mkdir(parents=True, exist_ok=True)
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    log.info("wrote %s", manifest_path)
+    log.info("done - %d model(s) total", len(manifest_models))
 
 
 if __name__ == "__main__":
