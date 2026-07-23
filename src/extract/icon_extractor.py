@@ -88,7 +88,7 @@ from pathlib import Path
 import httpx
 import xarray as xr
 
-from src.config import REPO_ROOT, eclipse_config
+from src.config import DATA_ROOT, eclipse_config
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import raw_output_dir, steps_for_run
@@ -102,7 +102,7 @@ _SUPPORTED = {"icon_eu", "icon_global"}
 _PARAM_TO_BAND = {"CLCL": "low", "CLCM": "mid", "CLCH": "high", "CLCT": "total"}
 
 # --- icon_global cdo remap: cached weight bundle -----------------------------------
-_CACHE_DIR = REPO_ROOT / "data" / "cache" / "icon_global_remap"
+_CACHE_DIR = DATA_ROOT / "cache" / "icon_global_remap"
 _EASY_BUNDLE_URL = "https://opendata.dwd.de/weather/lib/cdo/ICON_GLOBAL2WORLD_025_EASY.tar.bz2"
 _GRID_FILENAME = "target_grid_world_025.txt"
 _WEIGHTS_FILENAME = "weights_icogl2world_025.nc"
