@@ -513,6 +513,63 @@ user, not Claude Code — surface them, don't attempt.
 - [ ] Aug 12: nowcast mode — Meteosat imagery + AEMET obs/radar alongside
       final NWP runs. Site call ~15 UTC.
 
+## Tool 1/2/3 rollout — desktop now, petzval later
+
+A separate timeline from Phase 2 above — this is the "latest run" explorer
+suite's (T34+) own path to production, not the core archiver's. Order
+matters: each step assumes the one before it is genuinely done, not just
+started. Laid out 2026-07-23 per explicit user direction.
+
+- [ ] **1. Robust raw-archiving service (desktop, now).**
+      `scripts/collect_full_range.py` (built 2026-07-23) checks every 15 min
+      for newly-available runs across all 10 wired gridded models and
+      fetches them into `data/raw_latest/` — fetch only, no rendering.
+      Needs to actually be running continuously as a standing background
+      service, not just smoke-tested once. This is the user's own service
+      to start/own (a standing decision, not something to launch
+      unilaterally per session) — a long-lived Docker container on this
+      desktop. Old eclipse-archiver data (`data/raw/`, `points.parquet`,
+      the icon_global cdo remap cache) was migrated off OneDrive to
+      `E:\data\eclipse-weather\` the same day this was written, so both
+      trees now live off OneDrive consistently.
+- [ ] **2. Polish renderings (desktop, ongoing, no deadline of its own).**
+      Basemap (coastline/roads) + totality-path overlay done (T34).
+      Explicitly still open, not urgent: contourf/smoothed rendering for
+      coarse-resolution models (gfs etc. — matplotlib pcolormesh currently
+      shows visible grid cells), assorted UI polish (e.g. preload-button
+      visibility at the current row height). Runs as long as it needs to
+      against whatever step 1 has archived — steps 3 and 4 below don't
+      start until the user is actually happy with how renderings look, not
+      on any calendar trigger.
+- [ ] **3. Migrate existing renderings to petzval** (once step 2 is
+      approved, not before). Copy already-rendered output from this desktop
+      to petzval, bootstrapping production with real historical renders
+      instead of starting from zero — "up to a certain point at least" per
+      the user; exact cutoff (all of it vs. a recent window) not yet
+      decided. Needs T25 (hosting reserved) done first.
+- [ ] **4. Petzval's own fetch → render → discard pipeline.** Unlike this
+      desktop (which keeps raw data forever, per explicit direction — disk
+      isn't constrained here, see private notes), production must NOT
+      accumulate raw GRIB2/GeoTIFF indefinitely: fetch a run, render it,
+      then delete the raw file once its renders exist. A genuinely
+      different pipeline shape from `collect_full_range.py`'s current
+      "fetch and keep" design for the desktop — do not deploy that script
+      unmodified to petzval.
+- [ ] **5. Status/monitoring UI page.** What's been fetched, what's been
+      rendered, any errors per model/run, and predicted next-run
+      availability (derivable from `models.yaml`'s `cycles`/
+      `publication_lag_h` — the same data T30's availability Gantt already
+      reads, so this is likely a natural sibling view to that chart, not a
+      from-scratch design).
+- [ ] **6. Rendering-priority scheme as Aug 12 approaches.** Once render
+      throughput can't keep up with everything due, prioritize "dense"
+      runs first — short-range/high-resolution models (AROME, HARMONIE,
+      ICON-EU) that become more informative/urgent the closer the eclipse
+      gets, matching CLAUDE.md's own phased model-onboarding calendar —
+      over coarser/longer-range models. Not needed while volume is low;
+      becomes relevant once step 1's service has been running a while
+      and/or step 4's petzval pipeline is live.
+
 ## Deferred / not now
 
 - Met Office DataHub key **[human]** — only pursue if T06 shows the
