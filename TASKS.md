@@ -552,10 +552,36 @@ started. Laid out 2026-07-23 per explicit user direction.
       this desktop (which keeps raw data forever, per explicit direction —
       disk isn't constrained here, see private notes), production must NOT
       accumulate raw GRIB2/GeoTIFF indefinitely: fetch a run, render it,
-      then delete the raw file once its renders exist. A genuinely
-      different pipeline shape from `collect_full_range.py`'s current
-      "fetch and keep" design for the desktop — do not deploy that script
-      unmodified to production.
+      then delete the raw file — only once render success is confirmed,
+      never speculatively (a failed/partial render must not lose the raw
+      it would have needed to retry). A genuinely different pipeline shape
+      from `collect_full_range.py`'s current "fetch and keep" design for
+      the desktop — do not deploy that script unmodified to production.
+      **Hard blocker, not just T25**: `points.parquet` (site-level numeric
+      extraction — cloud_low/mid/high/total per site per run, what T30/
+      T31/T32's Gantt/run-evolution/site-ranking views actually consume)
+      is a second byproduct of the same fetch, same as rendered images —
+      2026-07-23 discussion confirmed the current 7-site `sites.yaml` list
+      is far too short to be the permanent extraction set. Once raw gets
+      discarded after rendering, a site NOT in the extraction list at fetch
+      time can never be added retroactively for that run. The site list
+      must be made comprehensive BEFORE this step goes live — see the new
+      placename-picker tool noted under Deferred below; do not enable
+      delete-after-render until that's settled.
+      **Consolidation question raised the same day, not yet decided**:
+      does the ORIGINAL eclipse-cropped archiver (`fetch()`/
+      `steps_for_run()`, `data/raw/`) still need to exist as a separate
+      thing, or does the full-range fetch (`fetch_full_range()`) now
+      subsume it entirely, since production discards raw either way and
+      eclipse-hour renders are just specific frames out of the full range?
+      If yes: retire the narrow fetch path, unify `data/raw`+`data/
+      raw_latest` into one tree, and have point-extraction run against the
+      full range instead of a separate cropped fetch. Would also mean
+      rewriting CLAUDE.md's hard constraints (the eclipse-cropped schema is
+      currently enshrined there), not just this file. User's own reasoning
+      (2026-07-23) points this direction, but whether to actually execute
+      it — vs. just confirming the direction and holding off — is still an
+      open question, not yet answered.
 - [ ] **5. Status/monitoring UI page.** What's been fetched, what's been
       rendered, any errors per model/run, and predicted next-run
       availability (derivable from `models.yaml`'s `cycles`/
@@ -577,3 +603,18 @@ started. Laid out 2026-07-23 per explicit user direction.
   Open-Meteo path insufficient.
 - Deployment box + healthcheck account **[human]**.
 - Final go/no-go site choice **[human]** — the tool informs it, doesn't make it.
+- **Placename-picker tool for the extraction site list** — blocks rollout
+  step 4 above (see that note). A map showing every real placename inside
+  the umbra path, plus a threshold slider to quickly pick "how small a
+  place" gets included (population/significance cutoff) — lets the user
+  land on a comprehensive extraction list fast, rather than curating it by
+  hand. Likely data source: Natural Earth's populated-places cultural
+  layer (has a population/significance rank field built for exactly this
+  kind of size-threshold filtering) clipped to `config/totality_path.json`
+  — same source family and bbox-clip pattern already verified working for
+  `src/viz/basemap.py`'s coastline/roads, not a new data source to vet from
+  scratch. Explicitly deferred by the user 2026-07-23 ("we will get back to
+  populating the list later") — do not start building this until asked.
+  Distinct from the existing 7-candidate `sites.yaml` list (that's curated
+  human-facing viewing-site recommendations with WNW-strip sampling; this
+  is comprehensive data-extraction coverage, a much larger set).
