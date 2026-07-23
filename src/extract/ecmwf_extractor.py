@@ -104,7 +104,7 @@ import numpy as np
 import xarray as xr
 
 from src.derive.humidity_to_cloud import derive_cloud_fractions
-from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
+from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import raw_output_dir, steps_for_run
 
@@ -297,7 +297,7 @@ def _extract_hres(model_name: str, model_config: dict, run_init: datetime) -> li
     by_step = _valid_times_by_step(model_config, run_init)
     total_shortname = model_config["cloud"]["total"]["param"]
     scale = _percent_scale(model_config["cloud"]["total"], "total")
-    site_list = sites()
+    site_list = all_sample_points()
 
     rows: list[PointRow] = []
     for step, valid_times in by_step.items():
@@ -317,7 +317,7 @@ def _extract_ens(model_name: str, model_config: dict, run_init: datetime) -> lis
     by_step = _valid_times_by_step(model_config, run_init)
     total_shortname = model_config["cloud"]["total"]["param"]
     scale = _percent_scale(model_config["cloud"]["total"], "total")
-    site_list = sites()
+    site_list = all_sample_points()
 
     rows: list[PointRow] = []
     for step, valid_times in by_step.items():
@@ -411,7 +411,7 @@ def _extract_aifs(model_name: str, model_config: dict, run_init: datetime) -> li
             f"expected a subset of {sorted(_SHORTNAME_TO_BAND)}"
         )
 
-    site_list = sites()
+    site_list = all_sample_points()
     rows: list[PointRow] = []
     for step, valid_times in by_step.items():
         cloud_path = out_dir / f"cloud_f{step:03d}.grib2"

@@ -77,7 +77,7 @@ import cfgrib
 import xarray as xr
 
 from src.config import DATA_RAW
-from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
+from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import format_init_dir, steps_for_run
 
@@ -172,7 +172,7 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
         if missing:
             log.warning("gfs %s: missing layer(s) %s", path, sorted(missing))
 
-        for site in sites():
+        for site in all_sample_points():
             lon_360 = _lon_360(site["lon"])
             values = {
                 layer: _read_value(layers.get(layer), var, site["lat"], lon_360)
@@ -232,7 +232,7 @@ def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[Point
         if missing:
             log.warning("gefs_extended %s: missing layer(s) %s", levels_path, sorted(missing))
 
-        for site in sites():
+        for site in all_sample_points():
             lon_360 = _lon_360(site["lon"])
             total_val = _read_value(total_ds, "tcc", site["lat"], lon_360)
             level_vals = {

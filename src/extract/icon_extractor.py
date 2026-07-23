@@ -89,7 +89,7 @@ import httpx
 import xarray as xr
 
 from src.config import REPO_ROOT, eclipse_config
-from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
+from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import raw_output_dir, steps_for_run
 
@@ -281,7 +281,7 @@ def _extract_icon_eu(model_name: str, model_config: dict, run_init: datetime) ->
     by_step = _valid_times_by_step(model_config, run_init)
     url_template = model_config["source"]["url_template"]
     params = _cloud_params(model_config)
-    site_list = sites()
+    site_list = all_sample_points()
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
 
@@ -318,7 +318,7 @@ def _extract_icon_global(model_name: str, model_config: dict, run_init: datetime
     by_step = _valid_times_by_step(model_config, run_init)
     url_template = model_config["source"]["url_template"]
     params = _cloud_params(model_config)
-    site_list = sites()
+    site_list = all_sample_points()
     bbox = eclipse_config()["bbox"]
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")

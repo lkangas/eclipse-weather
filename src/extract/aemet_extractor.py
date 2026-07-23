@@ -72,7 +72,7 @@ from datetime import UTC, datetime
 import rasterio
 
 from src.config import DATA_RAW
-from src.extract.base import PointRow, file_fetched_at, sites
+from src.extract.base import PointRow, all_sample_points, file_fetched_at
 from src.extract.registry import register
 from src.fetchers.base import format_init_dir
 
@@ -169,7 +169,7 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
         return []
 
     filename_re = re.compile(_FILENAME_RE_TEMPLATE.format(model=re.escape(model_name)))
-    site_list = sites()
+    site_list = all_sample_points()
     rows: list[PointRow] = []
 
     for path in sorted(run_dir.glob(f"{model_name}_nubosidad_*.tif")):
