@@ -32,7 +32,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import xarray as xr
 
-from src.config import DATA_RAW, REPO_ROOT, eclipse_config, get_model, load_sites
+from src.config import DATA_RAW, DATA_ROOT, REPO_ROOT, eclipse_config, get_model, load_sites
 from src.derive.humidity_to_cloud import derive_cloud_fractions
 from src.extract.icon_extractor import (
     _ensure_remap_weights,
@@ -52,7 +52,7 @@ from src.fetchers.base import format_init_dir, steps_for_run
 
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = REPO_ROOT / "data" / "viz"
+OUTPUT_DIR = DATA_ROOT / "viz"
 TOTALITY_PATH_JSON = REPO_ROOT / "config" / "totality_path.json"
 
 

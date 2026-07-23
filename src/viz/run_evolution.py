@@ -79,9 +79,9 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import polars as pl
 
-from src.config import POINTS_PARQUET, REPO_ROOT, eclipse_config, load_models, load_sites
+from src.config import DATA_ROOT, POINTS_PARQUET, eclipse_config, load_models, load_sites
 
-OUTPUT_DIR = REPO_ROOT / "data" / "viz"
+OUTPUT_DIR = DATA_ROOT / "viz"
 OUTPUT_PATH = OUTPUT_DIR / "run_evolution.svg"
 
 # A (model, site) panel needs at least this many distinct run_inits at the

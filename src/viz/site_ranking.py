@@ -99,7 +99,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import polars as pl
 
-from src.config import POINTS_PARQUET, REPO_ROOT, eclipse_config, load_models, load_sites
+from src.config import DATA_ROOT, POINTS_PARQUET, eclipse_config, load_models, load_sites
 
 # NOTE on not importing src.fetchers.base.eclipse_t: that would force Python
 # to run src/fetchers/__init__.py first, which eagerly imports the herbie
@@ -113,7 +113,7 @@ CLEAR_THRESHOLD_PCT_DEFAULT = 20.0
 MIN_SAMPLES_WARN = 5  # flag a site's estimate if fewer pooled samples than this
 WNW_SUFFIX_RE = re.compile(r"_wnw\d+km$")
 
-OUTPUT_SVG_DEFAULT = REPO_ROOT / "data" / "viz" / "site_ranking.svg"
+OUTPUT_SVG_DEFAULT = DATA_ROOT / "viz" / "site_ranking.svg"
 
 
 def eclipse_t() -> datetime:

@@ -24,11 +24,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import polars as pl
 
-from src.config import POINTS_PARQUET, eclipse_config, load_sites
+from src.config import DATA_ROOT, POINTS_PARQUET, REPO_ROOT, eclipse_config, load_sites
 
-REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 TOTALITY_PATH_JSON = REPO_ROOT / "config" / "totality_path.json"
-OUTPUT_DIR = REPO_ROOT / "data" / "viz"
+OUTPUT_DIR = DATA_ROOT / "viz"
 
 FIELD_COLUMN = {
     "low": "cloud_low",

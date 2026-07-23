@@ -38,9 +38,9 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 
-from src.config import REPO_ROOT, eclipse_config, load_models
+from src.config import DATA_ROOT, eclipse_config, load_models
 
-OUT_PATH = REPO_ROOT / "data" / "viz" / "availability_gantt.svg"
+OUT_PATH = DATA_ROOT / "viz" / "availability_gantt.svg"
 
 # Entries with no cycles/first_covering of their own -- aggregator or
 # reference-only, not a real archiver source with its own onboarding date.
