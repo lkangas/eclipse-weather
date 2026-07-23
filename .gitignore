@@ -27,6 +27,10 @@ data/points.parquet
 # weight bundle) — large, re-downloadable, not source.
 data/cache/
 
+# Generated chart output (src/viz/*.py regenerates these from points.parquet
+# on demand) — not source.
+data/viz/
+
 # Editor / OS noise
 .vscode/
 .idea/
