@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Placename picker — totality band (real data)</title>
+<style>
+  body {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    background: #f6f4ef;
+    color: #232320;
+    margin: 0;
+    padding: 24px;
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 22px;
+    margin-bottom: 12px;
+    font-size: 11.5px;
+    border-top: 1px solid #232320;
+    border-bottom: 1px solid #d8d4c8;
+    padding: 6px 0;
+  }
+  .controls label {
+    color: #7a776c;
+    margin-right: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 9.5px;
+  }
+  .controls input[type="range"] { width: 220px; accent-color: #8b3a2f; vertical-align: middle; }
+  .readout { font-variant-numeric: tabular-nums; color: #55534c; margin-left: 6px; white-space: nowrap; }
+  #countReadout {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: #8b3a2f;
+    font-weight: 700;
+    white-space: nowrap;
+    font-size: 13px;
+  }
+
+  #mapWrap {
+    position: relative;
+    border: 1px solid #232320;
+    background: #fff;
+    width: 100%;
+    max-width: 1100px;
+    overflow: hidden;
+    user-select: none;
+  }
+  #mapSvg { position: absolute; top: 0; left: 0; pointer-events: none; }
+
+  .place {
+    position: absolute;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    z-index: 2;
+  }
+  .place.hidden { display: none; }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #8b3a2f;
+    border: 1px solid #5a1f16;
+    flex: none;
+  }
+  .dotLabel {
+    font-size: 9.5px;
+    color: #232320;
+    white-space: nowrap;
+    background: rgba(246, 244, 239, 0.85);
+    padding: 0 2px;
+    display: none;
+    pointer-events: none;
+  }
+  #mapWrap.showLabels .dotLabel { display: inline-block; }
+  .place:hover { z-index: 3; }
+  .place:hover .dot { background: #5a4a8b; border-color: #34275a; width: 8px; height: 8px; }
+  .place:hover .dotLabel { display: inline-block; font-weight: 700; background: rgba(246, 244, 239, 0.97); }
+
+  .cornerLabel {
+    position: absolute;
+    font-size: 8.5px;
+    color: #a8a498;
+    pointer-events: none;
+    z-index: 1;
+  }
+
+  .legend { font-size: 9.5px; color: #7a776c; margin-top: 8px; }
+  .legend span { margin-right: 16px; }
+  .legend .sw { display: inline-block; width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
+  .legend .ln { display: inline-block; width: 14px; height: 0; border-top: 2px solid; vertical-align: 2px; margin-right: 3px; }
+
+  #sourceNote { font-size: 9.5px; color: #a8a498; margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <div>
+    <label for="popInput">Min population</label>
+    <input type="range" id="popInput" min="0" max="0" value="0">
+    <span class="readout" id="popReadout">—</span>
+  </div>
+  <div>
+    <label for="sigInput">Max significance rank (0=biggest, 10=smallest)</label>
+    <input type="range" id="sigInput" min="0" max="10" value="10">
+    <span class="readout" id="sigReadout">—</span>
+  </div>
+  <div id="countReadout">—</div>
+</div>
+
+<div id="mapWrap">
+  <svg id="mapSvg"></svg>
+  <div id="dotsLayer"></div>
+</div>
+
+<div class="legend">
+  <span><span class="ln" style="border-color:#8b3a2f"></span>totality band edge (north/south limit)</span>
+  <span><span class="ln" style="border-color:#5a4a8b; border-top-style:dashed"></span>central line</span>
+  <span><span class="sw" style="background:#8b3a2f; border-radius:50%"></span>place (hover for name + numbers)</span>
+</div>
+<div id="sourceNote">
+  Natural Earth ne_10m_populated_places, clipped to config/totality_path.json's north/south limit band
+  (see scripts/generate_placename_data.py). Decision-support prototype only — does not write sites.yaml.
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Real data via placenames.json (scripts/generate_placename_data.py).
+// No time dimension here (unlike Tool 1/2/3) - purely a lat/lon + threshold
+// browsing tool, so none of the run-init/cursor machinery those tools use
+// is needed. Projection is plain equirectangular (lon->x, lat->y linear)
+// with a light cos(mean latitude) correction on the x-axis only, matching
+// the same aspect-ratio-compensation idea this project's matplotlib maps
+// already use (tool1_renderer.py/basemap.py's ax.set_aspect(1.3) - tuned
+// there for the ~40N Iberia bbox; recomputed here from THIS map's own real
+// extent since the totality band reaches much further north, ~51.6N at
+// its NW corner over open Atlantic).
+// ---------------------------------------------------------------------------
+let DATA = null;
+let EXTENT = null; // padded {lonMin, lonMax, latMin, latMax}
+let COS_FACTOR = 1;
+let DIMS = { width: 0, height: 0 };
+let PLACES = []; // [{p, el, dotEl, labelEl}]
+
+const LABEL_DENSITY_THRESHOLD = 60; // show all labels below this visible count, else hover-only
+
+const mapWrap = document.getElementById("mapWrap");
+const mapSvg = document.getElementById("mapSvg");
+const dotsLayer = document.getElementById("dotsLayer");
+const popInput = document.getElementById("popInput");
+const sigInput = document.getElementById("sigInput");
+const popReadout = document.getElementById("popReadout");
+const sigReadout = document.getElementById("sigReadout");
+const countReadout = document.getElementById("countReadout");
+
+async function loadData() {
+  const resp = await fetch("placenames.json");
+  if (!resp.ok) throw new Error("placenames.json fetch failed: HTTP " + resp.status);
+  DATA = await resp.json();
+}
+
+function computeExtent() {
+  const e = DATA.extent;
+  const lonPad = (e.lon_max - e.lon_min) * 0.04;
+  const latPad = (e.lat_max - e.lat_min) * 0.04;
+  EXTENT = {
+    lonMin: e.lon_min - lonPad, lonMax: e.lon_max + lonPad,
+    latMin: e.lat_min - latPad, latMax: e.lat_max + latPad,
+  };
+  const meanLatRad = ((EXTENT.latMin + EXTENT.latMax) / 2) * Math.PI / 180;
+  COS_FACTOR = Math.cos(meanLatRad);
+}
+
+function project(lon, lat) {
+  const x = (lon - EXTENT.lonMin) / (EXTENT.lonMax - EXTENT.lonMin) * DIMS.width;
+  const y = (EXTENT.latMax - lat) / (EXTENT.latMax - EXTENT.latMin) * DIMS.height;
+  return { x, y };
+}
+
+function layoutDims() {
+  const width = Math.max(200, Math.round(mapWrap.getBoundingClientRect().width));
+  const lonSpan = EXTENT.lonMax - EXTENT.lonMin;
+  const latSpan = EXTENT.latMax - EXTENT.latMin;
+  const height = Math.round(width * latSpan / (lonSpan * COS_FACTOR));
+  DIMS = { width, height };
+  mapWrap.style.height = height + "px";
+  mapSvg.setAttribute("width", width);
+  mapSvg.setAttribute("height", height);
+  mapSvg.setAttribute("viewBox", "0 0 " + width + " " + height);
+}
+
+function pointsAttr(coords) {
+  // coords: [[lon, lat], ...]
+  return coords.map(([lon, lat]) => {
+    const { x, y } = project(lon, lat);
+    return x.toFixed(1) + "," + y.toFixed(1);
+  }).join(" ");
+}
+
+function drawBand() {
+  const band = DATA.totality_band;
+  const bandFillCoords = band.north_limit.concat([...band.south_limit].reverse());
+
+  mapSvg.innerHTML =
+    '<polygon points="' + pointsAttr(bandFillCoords) + '" fill="#8b3a2f" fill-opacity="0.05" stroke="none"></polygon>' +
+    '<polyline points="' + pointsAttr(band.north_limit) + '" fill="none" stroke="#8b3a2f" stroke-width="1.2" stroke-opacity="0.7"></polyline>' +
+    '<polyline points="' + pointsAttr(band.south_limit) + '" fill="none" stroke="#8b3a2f" stroke-width="1.2" stroke-opacity="0.7"></polyline>' +
+    '<polyline points="' + pointsAttr(band.central_line) + '" fill="none" stroke="#5a4a8b" stroke-width="1.3" stroke-opacity="0.85" stroke-dasharray="5,4"></polyline>';
+
+  // corner extent labels - minimal orientation aid, no full lat/lon grid
+  document.querySelectorAll(".cornerLabel").forEach(el => el.remove());
+  const corners = [
+    [EXTENT.lonMin, EXTENT.latMax, "top", "left"],
+    [EXTENT.lonMax, EXTENT.latMax, "top", "right"],
+    [EXTENT.lonMin, EXTENT.latMin, "bottom", "left"],
+    [EXTENT.lonMax, EXTENT.latMin, "bottom", "right"],
+  ];
+  corners.forEach(([lon, lat, vAnchor, hAnchor]) => {
+    const { x, y } = project(lon, lat);
+    const el = document.createElement("div");
+    el.className = "cornerLabel";
+    el.textContent = lat.toFixed(1) + "°, " + lon.toFixed(1) + "°";
+    el.style[vAnchor] = "2px";
+    el.style[hAnchor === "left" ? "left" : "right"] = "3px";
+    mapWrap.appendChild(el);
+  });
+}
+
+function fmtPop(n) { return n.toLocaleString("en-US"); }
+
+function buildDots() {
+  dotsLayer.innerHTML = "";
+  PLACES = DATA.places.map(p => {
+    const { x, y } = project(p.lon, p.lat);
+    const el = document.createElement("div");
+    el.className = "place";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.title = p.name + " (" + p.admin0 + ")  pop " +
+      (p.pop_max != null ? fmtPop(p.pop_max) : "unknown") +
+      "  scalerank " + p.scalerank + "  rank_max " + p.rank_max;
+
+    const dotEl = document.createElement("div");
+    dotEl.className = "dot";
+    const labelEl = document.createElement("span");
+    labelEl.className = "dotLabel";
+    labelEl.textContent = p.name;
+
+    el.appendChild(dotEl);
+    el.appendChild(labelEl);
+    dotsLayer.appendChild(el);
+    return { p, el };
+  });
+}
+
+function repositionDots() {
+  PLACES.forEach(({ p, el }) => {
+    const { x, y } = project(p.lon, p.lat);
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+  });
+}
+
+function setupSliders() {
+  const pops = DATA.places.map(p => p.pop_max || 0);
+  const maxPop = Math.max(0, ...pops);
+  popInput.min = 0;
+  popInput.max = maxPop;
+  popInput.step = Math.max(1, Math.round(maxPop / 500) || 1);
+  popInput.value = 0;
+
+  const ranks = DATA.places.map(p => p.scalerank);
+  // Keep the slider's own max at least 10 (Natural Earth's documented
+  // 0-10 SCALERANK domain, per TASKS.md's own field description) even if
+  // this particular clip's real places don't reach the low-significance
+  // end - a re-run over a bigger totality band could.
+  const maxRank = Math.max(10, ...ranks);
+  sigInput.min = 0;
+  sigInput.max = maxRank;
+  sigInput.step = 1;
+  sigInput.value = maxRank;
+}
+
+function updateFilter() {
+  const popThreshold = parseInt(popInput.value, 10);
+  const sigThreshold = parseInt(sigInput.value, 10);
+  popReadout.textContent = fmtPop(popThreshold);
+  sigReadout.textContent = String(sigThreshold);
+
+  let visibleCount = 0;
+  PLACES.forEach(({ p, el }) => {
+    const popOk = (p.pop_max || 0) >= popThreshold;
+    const sigOk = p.scalerank <= sigThreshold;
+    const show = popOk && sigOk;
+    el.classList.toggle("hidden", !show);
+    if (show) visibleCount++;
+  });
+
+  countReadout.textContent = visibleCount + " / " + PLACES.length + " places shown";
+  mapWrap.classList.toggle("showLabels", visibleCount <= LABEL_DENSITY_THRESHOLD);
+}
+
+function render() {
+  layoutDims();
+  drawBand();
+  repositionDots();
+}
+
+let resizePending = false;
+window.addEventListener("resize", () => {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(() => { render(); resizePending = false; });
+});
+
+popInput.addEventListener("input", updateFilter);
+sigInput.addEventListener("input", updateFilter);
+
+loadData()
+  .then(() => {
+    computeExtent();
+    setupSliders();
+    render();
+    buildDots();
+    updateFilter();
+  })
+  .catch(err => {
+    document.body.innerHTML = "<pre style='color:#8b3a2f'>failed to load placenames.json: " + err + "</pre>";
+    console.error(err);
+  });
+</script>
+</body>
+</html>
