@@ -332,12 +332,24 @@ def render_frame(
     if model_name not in _MODEL_READERS:
         raise KeyError(f"tool1_renderer has no reader for model '{model_name}'")
 
+    output_path = output_path or (
+        OUTPUT_DIR / model_name / field / f"{format_init_dir(run_init)}_{step:03d}.png"
+    )
+
     bbox = eclipse_config()["bbox"]
     try:
         result = _MODEL_READERS[model_name](field, run_init, step, bbox)
     except Exception:
         log.exception("tool1_renderer: %s/%s/+%dh/%s failed", model_name, run_init, step, field)
         result = None
+
+    if output_path.exists():
+        # Already rendered by an earlier pass over this same (model, run,
+        # step, field) - archived data for a past step never changes, so
+        # re-drawing/re-saving the PNG would be pure waste. Still calls the
+        # reader above (needed for an accurate has_data), just skips the
+        # expensive matplotlib construction/savefig below.
+        return output_path, result is not None
 
     fig, ax = plt.subplots(figsize=(6, 5))
     if result is None:
@@ -367,9 +379,6 @@ def render_frame(
     ax.set_title(f"{model_name}  run {run_init:%Y-%m-%d %HZ}  +{step}h  ({field})", fontsize=10)
     fig.tight_layout()
 
-    output_path = output_path or (
-        OUTPUT_DIR / model_name / field / f"{format_init_dir(run_init)}_{step:03d}.png"
-    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=100)
     plt.close(fig)
