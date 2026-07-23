@@ -106,9 +106,39 @@ user, not Claude Code — surface them, don't attempt.
       **Done 2026-07-22 — doesn't pan out.** The product exists (40 members,
       4 cycles/day, 120h) but carries only total cloud cover, no L/M/H. Not
       added to models.yaml per its own "skip if it doesn't pan out" framing.
-- [ ] **T12** *(optional, low priority)* GEM (Canada) / JMA / KMA / CMA via
+- [x] **T12** *(optional, low priority)* GEM (Canada) / JMA / KMA / CMA via
       Open-Meteo — quick check only if T01–T09 leave spare time. Coarse
       global models, marginal value; skip if the calendar is tight.
+      **Done 2026-07-23, run for real at the user's explicit request rather
+      than skipped.** 3 of 4 pan out. GEM (`gem_global`) and JMA (`jma_gsm`)
+      both confirmed via a live API call (Madrid + a fog-prone Iberian
+      coastal site, 10-day window): real, non-null, varying low/mid/high
+      cloud. Provenance differs between them per Open-Meteo's own docs, read
+      verbatim rather than assumed: GEM's low/mid/high is stated to be
+      "calculated from pressure level data" which is itself explicitly
+      RH/Sundqvist-approximated for GEM → `provenance: derived`. JMA's
+      surface low/mid/high carries no such caveat (only its separate
+      pressure-level variable does) — same doc pattern already used for
+      icon_global/icon_eu (T08) → `provenance: native`. CMA (`cma_grapes_
+      global`) also returned real varying data live, but Open-Meteo's own
+      CMA docs page currently carries a first-party reliability warning
+      ("heavily overloaded ... nearly impossible to download forecasts
+      reliably"), and live testing confirmed a real-world shortfall: only
+      ~4.75 days of the documented 240h/10-day forecast actually came back
+      non-null, for the identical request shape that returned a full 240h
+      for GEM and JMA. Added anyway (real access, real fields) but flagged
+      with a `reliability_caveat` and `provenance_via_open_meteo: verify` —
+      not recommended for archiver scheduling without a re-check closer to
+      Aug 12. **KMA doesn't pan out**: `kma_gdps` and `kma_seamless` both
+      returned HTTP 200 with every field null — not just cloud, temperature
+      too — at Madrid AND at Seoul (KMA's own home turf), ruling out an
+      Iberia-coverage gap. Real model id, real endpoint, no live data behind
+      it right now; not added to models.yaml. All three additions use the
+      existing generic `open_meteo_json` fetch path unchanged — confirmed
+      `src/fetchers/open_meteo_fetcher.py`'s `fetch()` needed no code
+      changes, only `config/models.yaml` (3 new `models.*` entries + the
+      `models.open_meteo` candidate/provenance tables) and
+      `src/extract/open_meteo_extractor.py`'s `_PROVENANCE_BY_MODEL` dict.
 
 ## Phase 0 — build against confirmed metadata
 

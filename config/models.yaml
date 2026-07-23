@@ -336,6 +336,162 @@ models:
       study. No evidence found this became standard for later eclipses. Treat ukmo_global as eclipse-blind
       (confidence: confirmed absent, moderate-high — evidence is from 2015, not reconfirmed since)."
 
+  gem_global:
+    provider: Environment and Climate Change Canada
+    kind: deterministic
+    grid: {deg: 0.15, note: "~15 km, global GEM. GEM Regional/HRDPS variants are North-America-only, not usable
+                             for Iberia — gem_global is the only relevant Open-Meteo GEM id for this project."}
+    cycles: {"00": 240, "12": 240}   # T12 (2026-07-23): Open-Meteo's GEM docs page model table confirms 00Z/12Z
+                                      # only (every 12h), unlike UKMO's 4-cycles-with-a-short-pair pattern
+    steps: [{to_h: 240, every_h: 3}]   # T12: native temporal resolution is 3-hourly per Open-Meteo's own model
+                                        # table ("For GEM Global, values are interpolated from 3-hourly to
+                                        # 1-hourly values" in the API response) — this records the underlying
+                                        # model's real output cadence, matching this project's convention
+                                        # elsewhere (e.g. gefs_extended.steps), not the interpolated API cadence
+    publication_lag_h: [7, 10]   # T12: BORROWED from ukmo_global — Open-Meteo's GEM docs page states no explicit
+                                  # ingestion-delay figure (unlike ukmo_global's page, which states an "additional
+                                  # delay of 4 hours"); unverified placeholder, re-check before hardening scheduler
+                                  # margins if this model is ever actually prioritized for real fetching
+    first_covering: "2026-08-03T00Z"   # T12: earliest 00Z/12Z cycle whose 240h forecast reaches 2026-08-12T18:30Z
+                                        # (Aug 2 12Z's window ends 6.5h short, at Aug 12 12:00Z)
+    cloud:
+      levels: {params: [cloud_cover_low, cloud_cover_mid, cloud_cover_high], status: confirmed, task: T12,
+               provenance_via_open_meteo: derived,
+               note: "T12 (2026-07-23), verbatim from Open-Meteo's GEM docs page: 'Low, medium and high clouds are
+                 calculated from pressure level data' for the surface low/mid/high variables, AND separately,
+                 GEM's own pressure-level cloud_cover_XXXhPa fields are explicitly RH-approximated ('GEM does not
+                 include parameterised cloud cover directly. It is approximated based on relative humidity using
+                 Sundqvist et al. (1989)') — so GEM's low/mid/high is transitively humidity-derived, not native
+                 model output, unlike icon_global/icon_eu's Open-Meteo entries (T08) which carry NO such caveat on
+                 their surface-level fields. Live-tested 2026-07-23 (A Coruna, 43.37N/-8.4E, 10-day window):
+                 non-null, varying values confirmed for cloud_cover/_low/_mid/_high (max 98/100/50/22 respectively
+                 over the window) — real data, just not native."}
+      total: {param: cloud_cover, status: confirmed, task: T12,
+              note: "T12: docs note 'Total cloud cover might differ' from the low/mid/high sum, implying total may
+                be a separately-sourced value rather than simply a function of the (derived) L/M/H bands — but no
+                explicit native-vs-derived statement was found for total specifically. Not treated as native given
+                the ambiguity; open_meteo_extractor.py writes one provenance per row (unlike ecmwf_hres's two-row
+                split), so 'derived' is used as the conservative, whole-row tag — see that module's
+                _PROVENANCE_BY_MODEL note."}
+    source:
+      primary: {via: open_meteo, model_id: "gem_global", id_status: confirmed, task: T12,
+                note: "T12 (2026-07-23): confirmed via Open-Meteo's GEM docs page model-id table (GEM Seamless /
+                  GEM Global / GEM Regional / GEM HRDPS Continental / GEM HRDPS West) and a live GET
+                  https://api.open-meteo.com/v1/forecast?...&models=gem_global returning real, non-null, varying
+                  hourly cloud_cover/_low/_mid/_high for a real Iberia-adjacent coastal site (A Coruna)."}
+    fetch: open_meteo_json
+    notes: "T12 (2026-07-23, optional/low-priority per TASKS.md, run at the user's explicit request rather than
+      skipped). Coarse global model (~15km), marginal incremental value vs the higher-resolution/native-L/M/H
+      models already in this registry, but real, working, and free via the existing generic open_meteo_json
+      fetcher — confirmed src/fetchers/open_meteo_fetcher.py's fetch() is fully generic (keyed only off
+      source.primary.model_id), no new fetcher code needed. No eclipse-radiation-scheme assessment done (out of
+      T09's original 5-model-family survey scope; not reassessed here)."
+
+  jma_gsm:
+    provider: Japan Meteorological Agency
+    kind: deterministic
+    grid: {deg: 0.5, note: "~55 km, global GSM. JMA's other component (MSM) is Japan/Korea-only, not usable for
+                            Iberia — jma_gsm is the only relevant Open-Meteo JMA id for this project."}
+    cycles: {"00": 264, "06": 264, "12": 264, "18": 264}   # T12 (2026-07-23): Open-Meteo's JMA docs page confirms
+                                                            # GSM updates every 6h, uniform per cycle (11-day/264h
+                                                            # forecast length stated model-wide, no shorter-cycle
+                                                            # caveat like UKMO's 06Z/18Z truncation)
+    steps: [{to_h: 264, every_h: 6}]   # T12: native temporal resolution is 6-hourly per Open-Meteo's model table;
+                                        # interpolated to 1-hourly in the API response (same convention as
+                                        # gem_global — this records native cadence, not the interpolated one)
+    publication_lag_h: [7, 10]   # T12: BORROWED from ukmo_global, same caveat as gem_global — JMA's Open-Meteo
+                                  # docs page states no explicit ingestion-delay figure; unverified placeholder
+    first_covering: "2026-08-02T00Z"   # T12: earliest 6-hourly cycle whose 264h forecast reaches 2026-08-12T18:30Z
+                                        # (Aug 1 18Z's window ends 30min short, at Aug 12 18:00Z — the same
+                                        # structural 30-min-shortfall CLAUDE.md/T30 already document as expected
+                                        # for any 6-hourly-cycle model, since every model steps on whole hours and
+                                        # T is :30)
+    cloud:
+      levels: {params: [cloud_cover_low, cloud_cover_mid, cloud_cover_high], status: confirmed, task: T12,
+               provenance_via_open_meteo: native,
+               note: "T12 (2026-07-23): unlike gem_global, Open-Meteo's JMA docs page's surface-level
+                 cloud_cover_low/mid/high variable descriptions carry NO RH-derivation caveat at all — only the
+                 separate PRESSURE-LEVEL cloud_cover_XXXhPa variant is explicitly Sundqvist-RH-derived ('JMA
+                 models do not include parameterised cloud cover directly [at pressure levels]. It is approximated
+                 based on relative humidity using Sundqvist et al. (1989)'). This is the EXACT doc pattern already
+                 used to classify icon_global/icon_eu as native in models.open_meteo.cloud_provenance (T08) — same
+                 reasoning applied here. Live-tested 2026-07-23 (A Coruna, 43.37N/-8.4E, 10-day window): non-null,
+                 varying values confirmed for cloud_cover/_low/_mid/_high (max 100/100/60/83 respectively over the
+                 window)."}
+      total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: native,
+              note: "No derivation caveat found for total either; treated as native alongside low/mid/high."}
+    source:
+      primary: {via: open_meteo, model_id: "jma_gsm", id_status: confirmed, task: T12,
+                note: "T12 (2026-07-23): confirmed via Open-Meteo's JMA docs page model-id table (JMA Seamless /
+                  JMA MSM / JMA GSM) and a live GET returning real, non-null, varying hourly cloud fields. Chose
+                  jma_gsm over jma_seamless deliberately — MSM (seamless's other component) is Japan/Korea-only
+                  and would silently degrade seamless's Iberia coverage to GSM anyway; requesting gsm directly is
+                  more explicit about what's actually being fetched for this project's bbox."}
+    fetch: open_meteo_json
+    notes: "T12 (2026-07-23, optional/low-priority per TASKS.md, run at the user's explicit request rather than
+      skipped). Coarse global model (~55km, coarsest in this registry), marginal incremental value, but real,
+      working, and — per the doc-pattern reasoning above — native L/M/H, via the existing generic open_meteo_json
+      fetcher (no new fetcher code needed, same as gem_global). No eclipse-radiation-scheme assessment done (out
+      of T09's original scope)."
+
+  cma_grapes_global:
+    provider: China Meteorological Administration
+    kind: deterministic
+    grid: {deg: 0.125, note: "~15 km, GFS GRAPES Global"}
+    cycles: {"00": 240, "06": 240, "12": 240, "18": 240}   # T12: per Open-Meteo's CMA docs page DESIGN SPEC
+                                                            # (240h/10-day forecast, every 6h at 00/06/12/18 UTC,
+                                                            # stated verbatim in the docs) — see reliability
+                                                            # caveat in notes below: NOT confirmed as currently
+                                                            # achievable in practice
+    steps: [{to_h: 240, every_h: 3}]   # T12: native temporal resolution 3-hourly per docs; NOT confirmed reachable
+                                        # end-to-end right now, see notes
+    publication_lag_h: [7, 10]   # T12: BORROWED from ukmo_global, same caveat as gem_global/jma_gsm — no
+                                  # documented Open-Meteo ingestion-delay figure found for CMA either
+    first_covering: "2026-08-03T00Z"   # T12: computed from the DESIGN SPEC (240h every 6h) — earliest cycle whose
+                                        # nominal forecast reaches 2026-08-12T18:30Z (Aug 2 18Z's window ends
+                                        # 30min short, same structural pattern as jma_gsm above). DO NOT TRUST
+                                        # without a re-check closer to the date — see the reliability caveat below;
+                                        # live testing 2026-07-23 could not confirm the model actually reaches
+                                        # anywhere near 240h in practice right now.
+    reliability_caveat: >
+      T12 (2026-07-23) — THE main finding for this model. Open-Meteo's own CMA docs page currently carries a
+      first-party warning banner, quoted verbatim: "CMA's open-data services have been heavily overloaded in
+      recent weeks, making it nearly impossible to download forecasts reliably. We hope these issues are resolved
+      soon so the open-data community can once again access CMA weather forecasts." Live-tested 2026-07-23 against
+      a 10-day request window (A Coruna, 43.37N/-8.4E): real, varying, non-null cloud data was returned only
+      through +~114h (~4.75 days) from request time, then EVERY field (cloud_cover and _low/_mid/_high alike) went
+      null for the remaining ~126h of the requested 240h window — a live-observed shortfall consistent with
+      Open-Meteo's own disclaimer, not a request/id/parameter error (the identical request shape, same call,
+      returned a full 240h of real data for gem_global and jma_gsm — see result_T12.json). Given Hard Constraint #1
+      (archiver reliability is the top priority — a missed run is unrecoverable) and this model's own
+      "optional/marginal value, skip if tight" framing in TASKS.md, this entry is added for completeness (real
+      access, real fields, genuinely works when CMA's backend cooperates) but should NOT be treated as a
+      trustworthy archiver source without re-testing closer to Aug 12.
+    cloud:
+      levels: {params: [cloud_cover_low, cloud_cover_mid, cloud_cover_high], status: confirmed, task: T12,
+               provenance_via_open_meteo: verify,
+               note: "T12 (2026-07-23): no RH-derivation (or any provenance) statement found anywhere on
+                 Open-Meteo's CMA docs page for cloud_cover_low/mid/high, at surface OR pressure level (CMA's
+                 pressure-level cloud_cover_XXXhPa entry is also undocumented either way, unlike GEM/JMA's explicit
+                 Sundqvist note) — same 'verify' situation as ukmo_global, not a documentation-confirmed fact
+                 either way. Live-tested 2026-07-23: non-null, varying values confirmed for
+                 cloud_cover/_low/_mid/_high (max 92/47/47/92 respectively) for the portion of the window CMA
+                 actually served — real data, native-vs-derived genuinely unknown."}
+      total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: verify,
+              note: "Same undocumented status as low/mid/high; live-confirmed non-null and varying."}
+    source:
+      primary: {via: open_meteo, model_id: "cma_grapes_global", id_status: confirmed, task: T12,
+                note: "T12 (2026-07-23): confirmed via Open-Meteo's CMA docs page and a live GET returning real,
+                  non-null, varying hourly cloud fields for a real Iberia-adjacent site — for the portion of the
+                  requested window CMA actually served data for (see reliability_caveat above)."}
+    fetch: open_meteo_json
+    notes: "T12 (2026-07-23, optional/low-priority per TASKS.md, run at the user's explicit request rather than
+      skipped). See reliability_caveat above — the field/id access genuinely works via the existing generic
+      open_meteo_json fetcher (no new fetcher code needed), but real-world reliability is currently poor per
+      Open-Meteo's own disclaimer and this project's own live test. Treat as present-but-unproven; not recommended
+      for archiver scheduling without a fresh check closer to Aug 12. No eclipse-radiation-scheme assessment done
+      (out of T09's scope)."
+
   arpege_europe:
     provider: Meteo-France
     kind: deterministic
@@ -522,11 +678,20 @@ models:
     variables: [cloud_cover, cloud_cover_low, cloud_cover_mid, cloud_cover_high]
     model_ids_candidates: [gfs_global, ecmwf_ifs025, ecmwf_aifs025, icon_global, icon_eu,
                            meteofrance_arpege_europe, meteofrance_arome_france,
-                           meteofrance_arome_france_hd, ukmo_global_deterministic_10km]
-    id_status: verify   # T08 live-tested 6 of these (see confirmed_for below); ecmwf_aifs025/arome_france/
-                        # arome_france_hd remain verify — not part of T08's tested set
+                           meteofrance_arome_france_hd, ukmo_global_deterministic_10km,
+                           gem_global, jma_gsm, cma_grapes_global]   # T12 (2026-07-23) added the last 3
+    id_status: verify   # T08 live-tested 6 of these, T12 live-tested 3 more (see confirmed_for below);
+                        # ecmwf_aifs025/arome_france/arome_france_hd remain verify — not part of either tested set.
+                        # T12 also checked kma_gdps/kma_seamless (Korea) — real API call, real model id, but
+                        # returned NULL for every field at every location tested (Madrid AND Seoul) — not added
+                        # as a candidate at all, doesn't pan out. See T12 note in TASKS.md.
     confirmed_for: [gfs_global, ecmwf_ifs025, icon_global, icon_eu, meteofrance_arpege_europe,
-                    ukmo_global_deterministic_10km]   # T08: live-tested, all 6 returned real data
+                    ukmo_global_deterministic_10km,
+                    gem_global, jma_gsm, cma_grapes_global]   # T08: live-tested, first 6 returned real data.
+                    # T12 (2026-07-23): gem_global/jma_gsm/cma_grapes_global live-tested, also returned real data —
+                    # cma_grapes_global's real-world reliability is separately caveated (see models.cma_grapes_
+                    # global.reliability_caveat); "confirmed_for" here means the id/endpoint/fields work, not that
+                    # the model is production-ready.
     cloud_provenance:   # T08: per-model native vs Open-Meteo-derived — the flag Hard Constraint #3 requires
       gfs_global: {status: native, evidence: "gfs-api docs: the RH-derivation caveat applies only to AIGFS/HGEFS
                    variants, not classic GFS016/GFS025"}
@@ -549,6 +714,23 @@ models:
                                              NOT a documentation confirmation — see ukmo_global's own provenance
                                              note, since this model's Open-Meteo path is its PRIMARY source,
                                              not just backfill."}
+      gem_global: {status: derived, task: T12,
+                  evidence: "gem-api docs, verbatim: surface low/mid/high 'are calculated from pressure level
+                             data', and GEM's own pressure-level cloud is separately documented as RH-approximated
+                             (Sundqvist et al. 1989) — transitively humidity-derived, same pattern as
+                             ecmwf_ifs025. See models.gem_global.cloud.levels.note for full quote."}
+      jma_gsm: {status: native, task: T12,
+               evidence: "jma-api docs: no RH-derivation caveat on surface low/mid/high, unlike the same page's
+                          pressure-level cloud_cover_XXXhPa variable, which explicitly IS Sundqvist-derived — the
+                          exact same doc pattern already used for icon_global/icon_eu above."}
+      cma_grapes_global: {status: verify, task: T12,
+                          note: "No explicit doc statement either way for cloud fields (surface or pressure-level).
+                                Live test showed varying, non-null low/mid/high values while CMA's backend was
+                                actually serving data — see models.cma_grapes_global.reliability_caveat for a much
+                                bigger caveat: Open-Meteo's own docs page warns CMA's open-data service is
+                                currently 'heavily overloaded ... nearly impossible to download forecasts
+                                reliably', consistent with a live-observed truncated forecast horizon (~4.75 days
+                                served vs the documented 240h/10-day design)."}
     retention_depth_confirmed:   # T08: live-bisected via past_days on previous-runs-api (day0/current-run series)
       gfs_global: ">= 2021-05-09 (edge not found, consistent with GFS's documented March-2021 start)"
       ecmwf_ifs025: "2024-02-03T00:00 (hard boundary, reproducible across multiple window sizes)"
