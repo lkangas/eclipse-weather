@@ -414,6 +414,81 @@ user, not Claude Code — surface them, don't attempt.
       **Not yet done**: contourf/smoothed rendering for coarse-resolution
       models (explicitly deferred by the user, "future improvement... but
       not now").
+- [x] **T35** Archiver consolidation, done 2026-07-23. The "consolidation
+      question" T34 raised (does the narrow eclipse-cropped `fetch()` still
+      need to exist separately from `fetch_full_range()`?) was answered by
+      the user same day: **"Yes, retire it, if everything can be done from
+      the big archive."** Executed for all 10 gridded models (aemet_harmonie/
+      ukmo_global deliberately untouched — image-snapshot/point-API shapes
+      that were never split into narrow/full-range paths to begin with):
+      - `herbie_fetcher.py`, `meteofrance_fetcher.py`, `ecmwf_opendata_fetcher.py`,
+        `dwd_bz2_fetcher.py`: narrow `fetch()` and `fetch_full_range()` merged
+        into one `fetch()` per module, using `full_range_steps()` +
+        `raw_output_dir()` unconditionally. `steps_for_run()` kept — still
+        used by extractors to pick which archived steps feed
+        `points.parquet`'s eclipse-hour rows.
+      - `src/scheduler/run.py`: removed the `steps_for_run()`-based
+        reachability gate in `run_once()` — it now fetches every due run
+        unconditionally, same as the (now-deleted) `collect_full_range.py`'s
+        own simpler loop.
+      - `src/config.py`/`src/fetchers/base.py`: `DATA_RAW_LATEST`/
+        `raw_latest_output_dir()` removed entirely.
+      - `tool1_renderer.py`/`generate_tool1_manifest.py`: switched to
+        `DATA_RAW`; the manifest generator's fetch dispatch now goes through
+        `src/fetchers/registry.py`'s shared `FETCHERS` dict (the same one
+        the scheduler uses) instead of its own now-dead
+        `fetch_full_range()`-keyed dict.
+      **Production cutover**: stopped/removed the `eclipse-collector`
+      container (running `collect_full_range.py`, started earlier the same
+      day per rollout step 1), merged `E:\data\eclipse-weather\raw_latest\`'s
+      20 run-init directories into `raw\` (zero collisions — verified per-
+      model/run_init before moving), deleted `scripts/collect_full_range.py`,
+      and started `eclipse-scheduler` (same `--restart unless-stopped`, same
+      data mount, running the image's default `python -m src.scheduler.run`
+      entrypoint — no separate command override needed, this was always the
+      Dockerfile's CMD). Files under `raw_latest/` were root-owned (written
+      by the Dockerized collector) and undeletable/unmovable as the plain
+      WSL user — worked around by running `mv`/`rmdir` inside a throwaway
+      root container rather than via `sudo` (no passwordless sudo available).
+      **Verified for real** before cutover: rebuilt the Docker image, ran the
+      4 consolidated fetch paths (herbie/http_grib/ecmwf-opendata/http_bz2)
+      against real live endpoints — gfs (herbie) 208 real files, arome_france
+      (http_grib) 9/9 group files, ecmwf_hres (ecmwf-opendata) 80 real files
+      before the test was cut short (HRES's full 360h range makes a
+      from-scratch test slow; already-real successful downloads were enough
+      signal). http_bz2 (icon_eu/icon_global) not re-tested standalone —
+      its download mechanics are byte-for-byte unchanged by this refactor
+      and were separately proven live seconds before the cutover by the
+      still-running `eclipse-collector`'s own logs. After cutover,
+      `eclipse-scheduler` started cleanly, correctly logged-and-skipped
+      point-extraction for merged runs missing their far-future steps
+      (partial backfills from the just-stopped collector, not a bug), and
+      began a real fresh fetch for a newly-due `aifs_ens` run within its
+      first minute.
+      **New finding, real disk-footprint numbers** (previous CLAUDE.md
+      estimate — "well under 1GB" — assumed T21's crop-before-archive step,
+      which was never built, AND assumed only 3 eclipse-hour steps per run,
+      which full-range archiving no longer does): measured 48GB across just
+      2 runs × 10 models post-merge. `aifs_ens` (50-member ensemble, 4
+      cloud fields, ~60 steps) is ~16GB PER RUN — at its own 4-cycles/day
+      cadence that's ~64GB/day if every run is kept indefinitely. Comfortably
+      fine on this desktop (906GB free) per the explicit dev-phase "disk
+      isn't constrained here" direction, but a hard new input for rollout
+      step 4's production discard-pipeline sizing and for T25's box choice —
+      a single in-flight `aifs_ens` run may not fit comfortably even
+      transiently (fetch-before-discard) on a small production disk. Flagged
+      to the user directly, not yet acted on (their call on whether e.g.
+      ensemble member archiving should be subsetted — Tool 1's own renderer
+      already only shows one representative member per model, so most of
+      that 16GB/run is currently unused by anything downstream).
+      CLAUDE.md updated: disk-footprint estimate replaced with these real
+      numbers, `data/raw/` repo-layout comment corrected (it was never
+      actually "Iberia-box slices" — herbie/ecmwf-opendata/dwd_bz2 subset by
+      variable/step, not by area; spatial cropping only ever happened
+      downstream in extract/viz, a pre-existing fact this consolidation
+      didn't change but made newly obvious at scale), and the opening
+      paragraph clarified: the archive itself is now full-range, extraction
+      to `points.parquet` is still eclipse-hour-scoped.
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
@@ -525,23 +600,21 @@ suite's (T34+) own path to production, not the core archiver's. Order
 matters: each step assumes the one before it is genuinely done, not just
 started. Laid out 2026-07-23 per explicit user direction.
 
-- [ ] **1. Robust raw-archiving service (desktop, now).**
-      `scripts/collect_full_range.py` (built 2026-07-23) checks every 15 min
-      for newly-available runs across all 10 wired gridded models and
-      fetches them into `data/raw_latest/` — fetch only, no rendering.
-      Needs to actually be running continuously as a standing background
-      service, not just smoke-tested once. This is the user's own service
-      to start/own (a standing decision, not something to launch
-      unilaterally per session) — a long-lived Docker container on this
-      desktop, named `eclipse-collector`, run with `--restart unless-
-      stopped` so it survives a reboot/Docker Desktop restart on its own
-      (an explicit `docker stop` is still respected, only crashes/reboots
-      trigger the auto-restart). `Dockerfile` now bakes in `scripts/`
-      (previously needed a bind-mount workaround) so this runs from the
-      image alone. Old eclipse-archiver data (`data/raw/`, `points.parquet`,
-      the icon_global cdo remap cache) was migrated off OneDrive to
-      `E:\data\eclipse-weather\` the same day this was written, so both
-      trees now live off OneDrive consistently.
+- [x] **1. Robust raw-archiving service (desktop, now).** Done 2026-07-23,
+      superseded same day by T35's consolidation. Originally
+      `scripts/collect_full_range.py` running as `eclipse-collector`
+      (started per the user's own explicit go-ahead), checking every 15 min
+      for newly-available runs across the 10 wired gridded models and
+      fetching them into a separate `data/raw_latest/` tree — fetch only, no
+      rendering. Once T35 decided there's no longer a separate narrow/
+      full-range split, this whole script became redundant with
+      `src/scheduler/run.py` (the same module the production Dockerfile was
+      always going to run) — merged `raw_latest/` into `raw/`, deleted
+      `collect_full_range.py`, replaced `eclipse-collector` with
+      `eclipse-scheduler` (same `--restart unless-stopped`, same
+      `E:\data\eclipse-weather` mount, unified scheduler). One standing
+      service now, not two. `Dockerfile` still bakes in `scripts/` (needed
+      for `generate_tool1_manifest.py`).
 - [ ] **2. Polish renderings (desktop, ongoing, no deadline of its own).**
       Basemap (coastline/roads) + totality-path overlay done (T34).
       Explicitly still open, not urgent: contourf/smoothed rendering for
@@ -565,8 +638,10 @@ started. Laid out 2026-07-23 per explicit user direction.
       then delete the raw file — only once render success is confirmed,
       never speculatively (a failed/partial render must not lose the raw
       it would have needed to retry). A genuinely different pipeline shape
-      from `collect_full_range.py`'s current "fetch and keep" design for
-      the desktop — do not deploy that script unmodified to production.
+      from the desktop scheduler's current "fetch and keep forever" design
+      (see T35's real disk-footprint numbers — `aifs_ens` alone is ~16GB/run
+      — for why production categorically cannot run this desktop's
+      unmodified keep-everything behavior).
       **Hard blocker, not just T25**: `points.parquet` (site-level numeric
       extraction — cloud_low/mid/high/total per site per run, what T30/
       T31/T32's Gantt/run-evolution/site-ranking views actually consume)
@@ -578,20 +653,18 @@ started. Laid out 2026-07-23 per explicit user direction.
       must be made comprehensive BEFORE this step goes live — see the new
       placename-picker tool noted under Deferred below; do not enable
       delete-after-render until that's settled.
-      **Consolidation question raised the same day, not yet decided**:
-      does the ORIGINAL eclipse-cropped archiver (`fetch()`/
-      `steps_for_run()`, `data/raw/`) still need to exist as a separate
-      thing, or does the full-range fetch (`fetch_full_range()`) now
-      subsume it entirely, since production discards raw either way and
-      eclipse-hour renders are just specific frames out of the full range?
-      If yes: retire the narrow fetch path, unify `data/raw`+`data/
-      raw_latest` into one tree, and have point-extraction run against the
-      full range instead of a separate cropped fetch. Would also mean
-      rewriting CLAUDE.md's hard constraints (the eclipse-cropped schema is
-      currently enshrined there), not just this file. User's own reasoning
-      (2026-07-23) points this direction, but whether to actually execute
-      it — vs. just confirming the direction and holding off — is still an
-      open question, not yet answered.
+      **Consolidation question raised the same day — decided and executed
+      (see T35)**: the user confirmed "retire it, if everything can be done
+      from the big archive." The narrow eclipse-cropped `fetch()` path no
+      longer exists; every fetcher always archives the full range into the
+      one `data/raw/` tree, and point-extraction (`steps_for_run()`) runs
+      against that same full-range archive rather than a separately-cropped
+      fetch. This step's own "production must discard raw after render"
+      requirement is now the ONLY reason a narrow fetch was ever
+      contemplated in the first place — with the full-range archive as the
+      single source, production's discard-after-render pipeline just needs
+      to pick which steps to render (eclipse-hour steps first) and discard
+      the rest, not maintain two parallel fetch paths.
 - [ ] **5. Status/monitoring UI page.** What's been fetched, what's been
       rendered, any errors per model/run, and predicted next-run
       availability (derivable from `models.yaml`'s `cycles`/

@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from src.config import DATA_RAW, DATA_RAW_LATEST, eclipse_config
+from src.config import DATA_RAW, eclipse_config
 
 DEFAULT_ECLIPSE_T = "2026-08-12T18:30:00Z"
 
@@ -116,14 +116,6 @@ def latest_available_run_init(model_config: dict, now: datetime) -> datetime | N
     lag = model_config.get("publication_lag_h", [0])
     due = [c for c in candidates if due_time(lag, c) <= now]
     return due[-1] if due else None
-
-
-def raw_latest_output_dir(model_name: str, run_init: datetime) -> Path:
-    """Tool 1's own storage root (DATA_RAW_LATEST) - see src/config.py for
-    why this is kept separate from DATA_RAW."""
-    d = DATA_RAW_LATEST / model_name / format_init_dir(run_init)
-    d.mkdir(parents=True, exist_ok=True)
-    return d
 
 
 def cycle_run_inits(cycles: dict, now: datetime, lookback_hours: int = 48) -> list[datetime]:

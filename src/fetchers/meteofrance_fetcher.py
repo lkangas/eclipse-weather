@@ -54,21 +54,20 @@ Package/group layout (from MeteoFetch, itself reflecting Meteo-France's own
 product structure): each paquet/run is split into several GRIB2 files, one
 per fixed lead-time "group" window (e.g. ARPEGE: 000H012H, 013H024H, ...;
 AROME: 00H06H, 07H12H, ...). A single file bundles every step inside its
-window, so fetching the step(s) models.yaml/steps_for_run() says we need
-means downloading whichever group window(s) contain those steps - there is
-no per-step file to range-fetch (unlike GFS/GEFS idx-based byte ranges).
+window, so fetching a run's full range means downloading every group window
+- there is no per-step file to range-fetch (unlike GFS/GEFS idx-based byte
+ranges).
 """
 
 from __future__ import annotations
 
 import logging
-import re
 import time
 from datetime import datetime
 
 import httpx
 
-from src.fetchers.base import FetchResult, raw_latest_output_dir, raw_output_dir, steps_for_run
+from src.fetchers.base import FetchResult, raw_output_dir
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -98,27 +97,9 @@ _MODEL_SPECS = {
     },
 }
 
-_GROUP_RANGE_RE = re.compile(r"^(\d+)H(\d+)H$")
-
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0)
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_S = 2.0
-
-
-def _parse_group_range(group: str) -> tuple[int, int]:
-    m = _GROUP_RANGE_RE.match(group)
-    if not m:
-        raise ValueError(f"Unrecognized MeteoFrance group name: {group!r}")
-    return int(m.group(1)), int(m.group(2))
-
-
-def _group_for_step(groups: list[str], step: int) -> str | None:
-    """Which fixed lead-time group file contains this forecast-hour step."""
-    for g in groups:
-        lo, hi = _parse_group_range(g)
-        if lo <= step <= hi:
-            return g
-    return None
 
 
 def _run_iso(run_init: datetime) -> str:
@@ -167,9 +148,8 @@ def _download_groups(
     *, model_name: str, spec: dict, run_init: datetime, groups: list[str], paquet: str,
     out_dir,
 ) -> tuple[list, list[str]]:
-    """Shared download loop: fetch each named group window into `out_dir`,
-    idempotently. Used by both fetch() (only the eclipse-covering groups)
-    and fetch_full_range() (every group the run publishes)."""
+    """Download loop: fetch each named group window into `out_dir`,
+    idempotently."""
     files_written = []
     errors: list[str] = []
     with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
@@ -188,67 +168,10 @@ def _download_groups(
 
 @register("http_grib")
 def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    steps = steps_for_run(model_config, run_init)
-    covering = {vt: s for vt, s in steps.items() if s is not None}
-
-    if not covering:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps, status="not_yet_covering",
-        )
-
-    spec = _MODEL_SPECS.get(model_name)
-    if spec is None:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps, status="error",
-            error=f"meteofrance_fetcher has no URL spec for model '{model_name}' "
-                  f"(only arpege_europe/arome_france are supported)",
-        )
-
-    paquet = model_config.get("cloud", {}).get("levels", {}).get("package", "SP2")
-
-    needed_groups: list[str] = []
-    missing_group_steps: list[int] = []
-    for step, _misalignment in covering.values():
-        group = _group_for_step(spec["groups"], step)
-        if group is None:
-            missing_group_steps.append(step)
-        elif group not in needed_groups:
-            needed_groups.append(group)
-
-    out_dir = raw_output_dir(model_name, run_init)
-    errors: list[str] = []
-    if missing_group_steps:
-        errors.append(
-            f"step(s) {sorted(set(missing_group_steps))} fall outside all known "
-            f"group windows for {model_name}: {spec['groups']}"
-        )
-
-    files_written, download_errors = _download_groups(
-        model_name=model_name, spec=spec, run_init=run_init, groups=needed_groups,
-        paquet=paquet, out_dir=out_dir,
-    )
-    errors.extend(download_errors)
-
-    if not files_written:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps, status="error",
-            error="; ".join(errors) if errors else "no groups needed / no files downloaded",
-        )
-
-    return FetchResult(
-        model=model_name, run_init=run_init, steps=steps,
-        files_written=files_written,
-        status="ok" if not errors else "error",
-        error="; ".join(errors) if errors else None,
-    )
-
-
-def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Tool 1's general-purpose entry point: fetch every group window this
-    run publishes, into DATA_RAW_LATEST rather than DATA_RAW. The AROME/
-    ARPEGE group layout already partitions the model's ENTIRE forecast
-    horizon into fixed windows, so "full range" here is simply every known
-    group - no per-step computation needed like herbie_fetcher's GFS path."""
+    """Fetch every group window this run publishes. The AROME/ARPEGE group
+    layout already partitions the model's ENTIRE forecast horizon into
+    fixed windows, so this is simply every known group - no per-step
+    computation needed like herbie_fetcher's GFS path."""
     spec = _MODEL_SPECS.get(model_name)
     if spec is None:
         return FetchResult(
@@ -258,7 +181,7 @@ def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) ->
         )
 
     paquet = model_config.get("cloud", {}).get("levels", {}).get("package", "SP2")
-    out_dir = raw_latest_output_dir(model_name, run_init)
+    out_dir = raw_output_dir(model_name, run_init)
 
     files_written, errors = _download_groups(
         model_name=model_name, spec=spec, run_init=run_init, groups=spec["groups"],

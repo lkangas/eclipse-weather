@@ -3,10 +3,10 @@
 Unlike cloud_field_comparison.py (T31c), which always renders every
 registered model's LATEST run for a fixed eclipse valid time,
 this module renders one arbitrary (model, run_init, step, field) frame at a
-time from data/raw_latest/ - the full, un-cropped forecast range fetched by
-src/fetchers/herbie_fetcher.py's/meteofrance_fetcher.py's fetch_full_range()
-(see src/config.py's DATA_RAW_LATEST docstring for why that's a separate
-tree from the eclipse archiver's data/raw/).
+time from data/raw/ - the full, un-cropped forecast range every fetcher now
+fetches (see TASKS.md's 2026-07-23 archiver-consolidation note; there used
+to be a separate raw_latest/ tree for this, retired the same day and
+merged back into data/raw/).
 
 Reuses the same private grid-opening helpers already built and verified in
 src/extract/*.py, same reuse rationale as cloud_field_comparison.py: no
@@ -33,7 +33,7 @@ import cfgrib
 import matplotlib.pyplot as plt
 import numpy as np
 
-from src.config import DATA_RAW_LATEST, DATA_ROOT, eclipse_config, get_model
+from src.config import DATA_RAW, DATA_ROOT, eclipse_config, get_model
 from src.derive.humidity_to_cloud import derive_cloud_fractions
 from src.extract.ecmwf_extractor import _iter_members, _percent_scale
 from src.extract.grib_regular_extractor import _gefs_levels_datasets, _gfs_layer_datasets
@@ -45,7 +45,7 @@ from src.extract.icon_extractor import (
 from src.extract.icon_extractor import (
     _expected_filename as _icon_filename,
 )
-from src.extract.meteofrance_extractor import _cloud_dataset, _step_hour_index
+from src.extract.meteofrance_extractor import _cloud_dataset, _group_files, _step_hour_index
 from src.fetchers.base import format_init_dir
 from src.viz.basemap import draw_basemap
 from src.viz.cloud_field_comparison import TOTALITY_PATH_JSON, _crop
@@ -71,18 +71,8 @@ _TOTALITY_CENTER_LAT = [p["lat"] for p in _TOTALITY_PATH["centralLine"]]
 _AROME_VAR_BY_FIELD = {"low": "lcc", "mid": "mcc", "high": "hcc"}
 
 
-def _group_files_latest(model_name: str, run_init: datetime) -> list[Path]:
-    """Same convention as meteofrance_extractor.py's _group_files(), but
-    against DATA_RAW_LATEST - that module's own version is hardcoded to
-    DATA_RAW, which isn't where fetch_full_range() writes."""
-    d = DATA_RAW_LATEST / model_name / format_init_dir(run_init)
-    if not d.exists():
-        return []
-    return sorted(p for p in d.glob("*.grib2") if p.stat().st_size > 0)
-
-
 def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
-    path = DATA_RAW_LATEST / "gfs" / format_init_dir(run_init) / f"f{step:03d}_cloud.grib2"
+    path = DATA_RAW / "gfs" / format_init_dir(run_init) / f"f{step:03d}_cloud.grib2"
     if not path.exists():
         return None
     layers = _gfs_layer_datasets(path)
@@ -103,7 +93,7 @@ def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple
     if field == "total":
         return None  # SP2 has no native total field (meteofrance_extractor.py's own note)
     var = _AROME_VAR_BY_FIELD[field]
-    for path in _group_files_latest("arome_france", run_init):
+    for path in _group_files("arome_france", run_init):
         ds = _cloud_dataset(path)
         if ds is None:
             continue
@@ -122,7 +112,7 @@ def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tupl
     if field == "total":
         return None
     var = _AROME_VAR_BY_FIELD[field]
-    for path in _group_files_latest("arpege_europe", run_init):
+    for path in _group_files("arpege_europe", run_init):
         ds = _cloud_dataset(path)
         if ds is None:
             continue
@@ -136,13 +126,13 @@ def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tupl
 
 
 def _gefs_extended_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
-    """gefs_extended's fetch_full_range() only ever fetches the control
+    """gefs_extended's fetch() only ever fetches the control
     member (c00) - see herbie_fetcher.py's _MODEL_SPECS - so there is no
     ensemble `number` dimension to select here, unlike ecmwf_ens/aifs_ens
     below; every dataset opened from these files carries a single scalar
     number=0. Longitude is 0-360 (NOAA global grid), same conversion as
     _gfs_field above."""
-    base_dir = DATA_RAW_LATEST / "gefs_extended" / format_init_dir(run_init)
+    base_dir = DATA_RAW / "gefs_extended" / format_init_dir(run_init)
 
     if field == "total":
         path = base_dir / f"f{step:03d}_c00_total.grib2"
@@ -201,7 +191,7 @@ def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> 
     source files, not two different rows here - Tool 1 renders one field at
     a time so there's no PointRow-style provenance-per-row concern)."""
     model_config = get_model("ecmwf_hres")
-    out_dir = DATA_RAW_LATEST / "ecmwf_hres" / format_init_dir(run_init)
+    out_dir = DATA_RAW / "ecmwf_hres" / format_init_dir(run_init)
 
     if field == "total":
         scale = _percent_scale(model_config["cloud"]["total"], "total")
@@ -228,7 +218,7 @@ def _ecmwf_ens_field(field: str, run_init: datetime, step: int, bbox: dict) -> t
     if field != "total":
         return None
     model_config = get_model("ecmwf_ens")
-    out_dir = DATA_RAW_LATEST / "ecmwf_ens" / format_init_dir(run_init)
+    out_dir = DATA_RAW / "ecmwf_ens" / format_init_dir(run_init)
     scale = _percent_scale(model_config["cloud"]["total"], "total")
     shortname = model_config["cloud"]["total"]["param"]
     return _read_ecmwf_grid(out_dir / f"tcc_f{step:03d}.grib2", shortname, scale, bbox)
@@ -244,7 +234,7 @@ def _aifs_field(
     with tcc/lcc/mcc/hcc all genuinely native (ecmwf_extractor.py's
     _aifs_rows note), unlike hres's native-total/derived-levels split."""
     model_config = get_model(model_name)
-    path = DATA_RAW_LATEST / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
+    path = DATA_RAW / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
     if field == "total":
         scale = _percent_scale(model_config["cloud"]["total"], "total")
         shortname = model_config["cloud"]["total"]["param"]
@@ -265,25 +255,24 @@ def _aifs_ens_field(field: str, run_init: datetime, step: int, bbox: dict) -> tu
 _ICON_PARAM_BY_FIELD = {"low": "CLCL", "mid": "CLCM", "high": "CLCH", "total": "CLCT"}
 
 
-def _icon_latest_path(model_name: str, run_init: datetime, step: int, param: str) -> Path:
-    """The path fetch_full_range() (dwd_bz2_fetcher.py) wrote for this
-    (step, param), reconstructed from models.yaml's own url_template - same
-    convention as icon_extractor.py's _expected_filename(), just rooted at
-    DATA_RAW_LATEST instead of DATA_RAW."""
+def _icon_path(model_name: str, run_init: datetime, step: int, param: str) -> Path:
+    """The path dwd_bz2_fetcher.py's fetch() wrote for this (step, param),
+    reconstructed from models.yaml's own url_template - same convention as
+    icon_extractor.py's _expected_filename()."""
     model_config = get_model(model_name)
     url_template = model_config["source"]["url_template"]
     filename = _icon_filename(
         url_template, hh=run_init.strftime("%H"), yyyymmddhh=run_init.strftime("%Y%m%d%H"),
         fff=f"{step:03d}", param=param,
     )
-    return DATA_RAW_LATEST / model_name / format_init_dir(run_init) / filename
+    return DATA_RAW / model_name / format_init_dir(run_init) / filename
 
 
 def _icon_eu_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Already regular lat/lon - direct read, no remap (unlike icon_global
     below)."""
     param = _ICON_PARAM_BY_FIELD[field]
-    path = _icon_latest_path("icon_eu", run_init, step, param)
+    path = _icon_path("icon_eu", run_init, step, param)
     if not path.exists():
         return None
     da = _open_param_dataarray(path, param)
@@ -298,7 +287,7 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     DATA_RAW-rooted icon_global path) to remap+crop to Iberia in one call,
     same as cloud_field_comparison.py's _field_icon_global."""
     param = _ICON_PARAM_BY_FIELD[field]
-    src_path = _icon_latest_path("icon_global", run_init, step, param)
+    src_path = _icon_path("icon_global", run_init, step, param)
     if not src_path.exists():
         return None
     grid_path, weights_path = _ensure_remap_weights()

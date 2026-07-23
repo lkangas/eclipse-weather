@@ -1,10 +1,12 @@
 """Herbie-based fetcher for the two `fetch: herbie` models in config/models.yaml:
 gfs and gefs_extended.
 
-Downloads ONLY the low/mid/high (and, where it lives in a separate product,
-total) cloud-cover GRIB2 messages needed for each eclipse-day archive step,
-using herbie's idx-based byte-range subsetting (`Herbie.download(search=...)`)
--- never a full GRIB2 file.
+Downloads the low/mid/high (and, where it lives in a separate product,
+total) cloud-cover GRIB2 messages for EVERY step this run publishes (not
+just eclipse-day archive hours - see TASKS.md's 2026-07-23 archiver-
+consolidation note for why the narrower fetch was retired), using herbie's
+idx-based byte-range subsetting (`Herbie.download(search=...)`) -- never a
+full GRIB2 file.
 
 Real-idx research behind the two search regexes below (verified 2026-07-22
 against live noaa-gfs-bdp-pds / noaa-gefs-pds .idx files on AWS):
@@ -32,13 +34,7 @@ from pathlib import Path
 
 from herbie import Herbie
 
-from src.fetchers.base import (
-    FetchResult,
-    full_range_steps,
-    raw_latest_output_dir,
-    raw_output_dir,
-    steps_for_run,
-)
+from src.fetchers.base import FetchResult, full_range_steps, raw_output_dir
 from src.fetchers.registry import register
 
 log = logging.getLogger(__name__)
@@ -65,7 +61,7 @@ class _Fetch:
 # mapping is unavoidable fetcher-specific glue. It does NOT duplicate model
 # metadata that base.py/models.yaml already own: cycles, steps, publication
 # lags and the AWS bucket names all still come from config/models.yaml via
-# src/fetchers/base.py (steps_for_run) -- the aws_bucket assertion below
+# src/fetchers/base.py (full_range_steps) -- the aws_bucket assertion below
 # exists only to fail loudly if models.yaml's bucket ever drifts from what
 # herbie's hardcoded template URLs assume.
 # ---------------------------------------------------------------------------
@@ -119,14 +115,6 @@ def _naive_utc(dt: datetime) -> datetime:
     if dt.tzinfo is not None:
         return dt.astimezone(UTC).replace(tzinfo=None)
     return dt
-
-
-def _unique_steps(steps: dict[str, tuple[int, float] | None]) -> list[int]:
-    """Distinct forecast-hour steps actually reachable by this run, from
-    steps_for_run()'s per-valid-time result. Multiple archive valid times
-    often round to the same step, so we only want to fetch each once."""
-    hours = {s[0] for s in steps.values() if s is not None}
-    return sorted(hours)
 
 
 def _output_filename(model_name: str, member: str | None, step: int, suffix: str) -> str:
@@ -234,11 +222,8 @@ def _download_steps(
     *, model_name: str, spec: dict, run_init: datetime, steps: list[int], out_dir: Path,
     result: FetchResult,
 ) -> None:
-    """Shared download loop: fetch every (step, product) combo in `steps`
-    into `out_dir`, idempotently, tolerating per-step/product failures.
-    Used by both fetch() (eclipse-cropped steps) and fetch_full_range()
-    (every step the run publishes) - the download mechanics don't care
-    which step list drove them."""
+    """Download loop: fetch every (step, product) combo in `steps` into
+    `out_dir`, idempotently, tolerating per-step/product failures."""
     naive_date = _naive_utc(run_init)
     member = spec["member"]
 
@@ -292,7 +277,8 @@ def _download_steps(
 
 @register("herbie")
 def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Fetch cloud-cover GRIB2 subsets for `model_name` at `run_init`.
+    """Fetch cloud-cover GRIB2 subsets for every step `model_name`'s
+    `run_init` publishes.
 
     Only gfs and gefs_extended are registered under the "herbie" fetch key
     in config/models.yaml; both are handled by this one function per
@@ -300,33 +286,12 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
     """
     spec = _require_spec(model_name, model_config)
 
-    steps = steps_for_run(model_config, run_init)
-    result = FetchResult(model=model_name, run_init=run_init, steps=steps)
-
-    reachable = _unique_steps(steps)
-    if not reachable:
-        result.status = "not_yet_covering"
-        return result
-
-    out_dir = raw_output_dir(model_name, run_init)
-    _download_steps(
-        model_name=model_name, spec=spec, run_init=run_init, steps=reachable,
-        out_dir=out_dir, result=result,
-    )
-    return result
-
-
-def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Tool 1's general-purpose entry point: fetch EVERY step this run
-    publishes (not just the eclipse-day archive hours `fetch()` targets),
-    into DATA_RAW_LATEST rather than DATA_RAW - see src/config.py for why
-    the two are kept separate. Same download mechanics as fetch(), just a
-    different step source and output root."""
-    spec = _require_spec(model_name, model_config)
-
     reachable = full_range_steps(model_config, run_init)
     # No eclipse valid-time targets here - each step's own natural valid
     # time, zero misalignment, keeps FetchResult.steps meaningful anyway.
+    # Point-extraction (which valid times matter for the eclipse archive)
+    # is a downstream concern of the extractor, not this fetcher - see
+    # steps_for_run() in src/fetchers/base.py.
     steps = {
         (run_init + timedelta(hours=h)).isoformat(): (h, 0.0)
         for h in reachable
@@ -337,7 +302,7 @@ def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) ->
         result.status = "not_yet_covering"
         return result
 
-    out_dir = raw_latest_output_dir(model_name, run_init)
+    out_dir = raw_output_dir(model_name, run_init)
     _download_steps(
         model_name=model_name, spec=spec, run_init=run_init, steps=reachable,
         out_dir=out_dir, result=result,
