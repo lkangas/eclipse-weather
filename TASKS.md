@@ -510,7 +510,7 @@ user, not Claude Code — surface them, don't attempt.
       didn't change but made newly obvious at scale), and the opening
       paragraph clarified: the archive itself is now full-range, extraction
       to `points.parquet` is still eclipse-hour-scoped.
-- [ ] **T36** Tool 2: single-model, stacked historical runs. Mock-data
+- [x] **T36** Tool 2: single-model, stacked historical runs. Mock-data
       interaction prototype built 2026-07-23
       (`src/viz/web/tool2_prototype.html`), same "prototype first, wire real
       data after feedback" sequence as T34. Real archive checked first
@@ -534,14 +534,57 @@ user, not Claude Code — surface them, don't attempt.
       cadence/360h reach; icon_eu: 9 runs/1h cadence/78h reach - both
       matched real config), row selection, cursor drag + nearest-step-by-
       valid-time, and the extent slider all behave correctly.
-      **Not started yet**: the real per-model manifest (every archived run,
-      not just latest) and real rendering - waiting on user feedback on the
-      interaction first, same gate T34 went through.
+      **Not started yet (at mock stage)**: the real per-model manifest (every
+      archived run, not just latest) and real rendering - waiting on user
+      feedback on the interaction first, same gate T34 went through.
       **Side effect of this task**: user noticed while reviewing Tool 2's
       design that Tool 1 (T34, real widget) had the SAME relative-axis flaw
       Tool 2 was built to avoid from the start - see T34's own new note
       above for that fix.
-- [ ] **T37** Rain + surface-temp field research for Tool 3 (the eclipse
+      **Wired to real data 2026-07-23** (renamed `tool2_prototype.html` ->
+      `tool2_real.html`). New `scripts/generate_tool2_manifest.py`: per
+      model, per already-archived run_init (same `MAX_RUNS_PER_MODEL = 4`
+      cap convention as T39's Tool 3 generator - "renderings aren't final
+      anyway", user's own framing), renders EVERY step of each capped run
+      (not just the one nearest a target time) across all 4 fields - the
+      expensive generator of the three (thousands of renders per model).
+      Explicitly framed by the user as ongoing/incremental work, same as
+      fetching itself ("New ones only render once new model runs become
+      available, and they need to be rendered regardless. Just don't delete
+      the old ones") rather than a one-time cost to minimize - this task's
+      own earlier instinct to scope the render job down out of concern for
+      total image count was corrected on exactly this basis. Real manifest
+      schema mirrors Tool 1/3's per-field `has_data` convention (image URLs
+      always exist via a placeholder PNG; `has_data[field] === false` is the
+      only way to tell a real frame from a placeholder). Bootstrap changed
+      from the mock's static `populateModelSelect()` to a real
+      `loadManifest().then(...)`; the preload button now actually warms the
+      browser image cache (was a no-op `stopPropagation()` in the mock).
+      **Caught one real correctness bug before it could waste render time on
+      the ensemble models**: `tool1_renderer.py`'s `_read_ecmwf_grid()`
+      (shared by all 3 tools) was picking one arbitrary representative
+      member for `ecmwf_ens`/`aifs_ens` instead of computing the ensemble
+      MEAN across all members - found by checking the render job's progress
+      before it reached the ensemble models, fixed
+      (`np.stack([...]).mean(axis=0)`), and the job restarted from a clean
+      state rather than letting it render wrong ensemble frames first. See
+      the aifs-ensemble-usage discussion (models.yaml `aifs_ens`/quantity
+      dropdown) for why mean-per-quantity is the right default for map
+      rendering specifically (point/ensemble-graph views still want full
+      per-member spread).
+      **Render job status**: a long-running background process
+      (`docker exec -d` inside `eclipse-scheduler`, log at
+      `/app/data/tool2_gen.log`) - not a blocker to closing this task, same
+      as T39's own capped-render-job framing; it only needs to be allowed to
+      finish (or re-run later to pick up newly-archived runs) before a full
+      visual pass across all 10 models is possible. Real page wiring
+      verified correct (`loadManifest()`/`init()` executed cleanly against
+      the real manifest, zero errors) via the same non-visual verification
+      method T39 used, for the same Browser-pane tooling limitation
+      documented there (dynamically-inserted `<script>` tags don't execute
+      in that environment) - a live pixel screenshot was not obtained this
+      session, flagged rather than assumed.
+- [x] **T37** Rain + surface-temp field research for Tool 3 (the eclipse
       valid-time explorer's planned combined-cloud+rain and surface-temp
       charts, currently placeholder-only in `tool1_real.html`'s Quantity
       dropdown). Same "verify via a real fetch, don't build against a docs
@@ -614,6 +657,102 @@ user, not Claude Code — surface them, don't attempt.
       sibling sections - not attempted here, this task was research only,
       same "confirm findings, then a separate scoping decision" gate T01-T09
       themselves went through before code was built against them).
+- [x] **T38** Cloud-layer altitude/pressure boundary research - what "low/
+      mid/high cloud" actually means per model family (informational: this
+      project compares L/M/H across models side by side, so it matters
+      whether "low cloud" is the same physical band everywhere or not -
+      same "verify via primary sources, don't guess" rule as T01-T09/T37).
+      Run 2026-07-23 as an 8-way parallel research fan-out (one agent per
+      model family) plus a synthesis pass. Real, confidence-tagged findings:
+      - **NCEP GFS/GEFS** (UPP `CLDRAD.f`): low >=642 hPa (~0-3.7 km), mid
+        350-642 hPa (~3.7-8.1 km), high <350 hPa (~8.1 km+, no enforced
+        upper bound in the live GFS branch despite an unused
+        `PTOP_HIGH=150 hPa` constant). **Confirmed for GFS** (UPP User's
+        Guide v4 quote + byte-for-byte cross-check against the live UPP
+        source on GitHub). **GEFS inferred only** - same UPP codebase, not
+        independently restated in any source found.
+      - **ECMWF IFS/AIFS/ERA5** (sigma coordinate, sigma = p/p_surface): low
+        1.0>sigma>0.8 (~0-2 km), mid 0.8>=sigma>0.45 (~2-6 km), high
+        sigma<=0.45 (~6 km+). **Confirmed for IFS/ERA5** (ECMWF Parameter
+        Database + Forecast User Portal Confluence FAQ, both direct quotes,
+        agree exactly). AIFS emits lcc/mcc/hcc under the same param IDs and
+        trains against this same ERA5/IFS-diagnosed label, but no ECMWF
+        document states AIFS recomputes this sigma cutoff itself at
+        inference - treat as "same definition by training-label
+        provenance", not independently reverified for AIFS.
+      - **DWD ICON** (CLCL/CLCM/CLCH): low sfc-800 hPa (~0-2 km), mid
+        800-400 hPa (~2-7 km), high <400 hPa (~7 km+, open top).
+        **Confirmed** - structure confirmed via DWD's own ICON Database
+        Reference Manual (GRIB2 level-type codes); the literal 800/400 hPa
+        numbers rest on secondary sources (DWD's product-catalog page 403'd
+        automated fetch) plus an independent third-party mirror, both
+        agreeing, plus the long-standing COSMO-inherited convention -
+        matches models.yaml's pre-existing note, no change needed.
+      - **Meteo-France ARPEGE/AROME** (NEBBAS/NEBMOY/NEBHAU): low >785 hPa
+        (typically <2500 m **above model terrain**, not sea level - a
+        separate ALTITUDE parameter is the real-terrain one, don't conflate
+        them), mid 785-450 hPa (~2500-5000 m), high <450 hPa (~>5000 m).
+        **Confirmed**, one shared boundary set for BOTH models per Meteo-
+        France's own official glossary PDF - no separate ARPEGE-vs-AROME
+        numeric split exists in this source.
+      - **UK Met Office UM** (ukmo_global): consumer-site figures
+        (weather.metoffice.gov.uk) state low <6,500 ft (~2 km), mid
+        6,500-20,000 ft (~2-6.1 km), high >20,000 ft (~>6.1 km) - **"likely",
+        NOT confirmed as the UM's actual internal diagnostic boundary**. The
+        real UM STASH diagnostics (m01s09i203/204/205) are marked "not used
+        - set to 0" (deprecated placeholders) in Met Office's own
+        STASHmaster; the real, currently-used definition isn't published
+        anywhere accessible that this research could find. Provenance stays
+        native (own field, not RH-derived) but the altitude figure carries
+        this caveat.
+      - **GEM** (`gem_global`, via Open-Meteo): Open-Meteo's own docs state
+        low 0-3 km / mid 3-8 km / high >8 km - but this is **Open-Meteo's
+        own derived altitude band** (built from GEM's pressure-level
+        fields, which are themselves RH/Sundqvist-approximated per T12's
+        existing finding), **not an ECCC-published native GEM convention**.
+        A candidate 680/440 hPa ECCC-adjacent figure surfaced in one
+        paywalled 2025 paper but could not be confirmed as GEM's own
+        diagnostic vs. an ISCCP satellite-simulator convention applied on
+        top for that study - not used.
+      - **JMA GSM** (`jma_gsm`): **unverified** - Open-Meteo's stated "3 km /
+        8 km" text for JMA is confirmed to be **generic Open-Meteo
+        boilerplate, byte-identical to the text on Open-Meteo's own GFS
+        docs page**, not JMA-sourced. JMA's own official docs confirm the
+        Cll/Clm/Clh fields exist natively but publish no numeric boundary in
+        any source checked (2 official PDFs had non-extractable CJK tables
+        - a residual gap, not a hard negative). Do not record 3 km/8 km as a
+        JMA-confirmed figure.
+      - **CMA GRAPES** (`cma_grapes_global`): **unverified**, same generic-
+        boilerplate situation as JMA (identical text also appears on GFS's
+        docs page). The one genuine CMA-authored data point found (Chen/Liu
+        /Ma 2021, Acta Meteorologica Sinica) shows GRAPES' own cloud scheme
+        splits low/mid/high by **model vertical-level index** (k<15/15-29/
+        >=29), not a fixed km/hPa band - no altitude/pressure equivalent
+        published for this. Several potentially load-bearing GRAPES papers
+        were paywalled/unreachable, so this remains a genuine open gap, not
+        just an absence of searching.
+      - **This project's own derived ECMWF HRES bucketing** (not external
+        research - `src/derive/humidity_to_cloud.py`'s
+        `DEFAULT_LEVELS_HPA = (1000,925,850,700,500,300)`, calibrated T22):
+        low={1000,925,850 hPa} ~ 0.11-1.46 km, mid={700,500 hPa} ~
+        3.01-5.57 km, high={300 hPa} ~ 9.16 km (a single sampled level, not
+        a two-sided band) - via the ICAO standard atmosphere. These same 6
+        pressure levels feed `ecmwf_hres`'s derived cloud rows only, and are
+        unrelated to ECMWF's own native sigma boundary above (that boundary
+        has no native L/M/H product for HRES to apply it to - HRES only has
+        `derived` levels in this registry, see its `cloud.levels.status`).
+      **Bottom line**: only GFS, DWD ICON, and Meteo-France ARPEGE/AROME
+      have a truly primary-sourced, model-specific numeric boundary;
+      ECMWF/AIFS's is confirmed for the general IFS/ERA5 diagnostic but
+      inferred (not independently reverified) for AIFS's own inference-time
+      behavior; UKMO's is likely-but-unconfirmed; GEM's is Open-Meteo's own
+      derived convention, not ECCC's; JMA and CMA have NO confirmed boundary
+      at all despite Open-Meteo showing numbers for them - those numbers are
+      reused boilerplate and must not be cited as model-specific. Full
+      findings written up in `docs/models-reference.md`; concise per-model
+      summaries + `task: T38` tags added to `config/models.yaml`'s
+      `cloud.levels`/`cloud.altitude` blocks. Research fan-out: 8 parallel
+      provider-specific agents + 1 synthesis agent, 2026-07-23.
 - [x] **T39** Tool 3, 2026-07-23 (design revised same day, twice; wired to
       real data the same day). Original vision (way back when the 3 tools
       were first described): "eclipse valid-time weather, models stacked,
