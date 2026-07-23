@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Tool 2 — one model, stacked historical runs (mock data)</title>
+<title>Tool 2 — one model, stacked historical runs (real data)</title>
 <style>
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
@@ -247,48 +247,41 @@
 
 <script>
 // ---------------------------------------------------------------------------
-// MOCK DATA — stands in for a future per-model manifest listing every
-// archived run_init and its steps. Shapes 3 real models with real cadence
-// differences (per config/models.yaml) so the model-switch interaction gets
-// exercised against realistically different axis spans, not just relabeled
-// copies of the same series.
+// Real data via tool2_manifest.json (scripts/generate_tool2_manifest.py).
 // ---------------------------------------------------------------------------
-const NOW = new Date("2026-07-23T15:30:00Z");
+const NOW = new Date();
+let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, hasDataByStep}]}}
 
-function genSteps(maxH, cadenceH) {
-  const steps = [0];
-  for (let h = cadenceH; h <= maxH; h += cadenceH) steps.push(h);
-  return steps;
-}
-
-function genRuns(cycleHours, maxH, cadenceH, lookbackRuns) {
-  const runs = [];
-  // Walk backward from the most recent completed cycle boundary.
-  let t = new Date(NOW);
-  t.setUTCMinutes(0, 0, 0);
-  while (!cycleHours.includes(t.getUTCHours())) t = new Date(t - 3600 * 1000);
-  for (let i = 0; i < lookbackRuns; i++) {
-    runs.push({ runInit: new Date(t), steps: genSteps(maxH, cadenceH) });
-    // step back to the previous cycle hour
-    do { t = new Date(t - 3600 * 1000); } while (!cycleHours.includes(t.getUTCHours()));
-  }
-  return runs.reverse(); // oldest first; row-building reverses again for newest-on-top
-}
-
-const MOCK_MODELS = {
-  gfs: {
-    label: "GFS",
-    runs: genRuns([0, 6, 12, 18], 384, 3, 10),
-  },
-  aifs_ens: {
-    label: "AIFS ENS",
-    runs: genRuns([0, 6, 12, 18], 360, 6, 4), // fewest runs archived so far - slow/heavy fetch
-  },
-  icon_eu: {
-    label: "ICON EU",
-    runs: genRuns([0, 6, 12, 18], 78, 1, 9), // short reach, dense hourly cadence
+// Known, permanent (not-a-bug) per-model field gaps - same facts already
+// documented in tool1_real.html/tool3_real.html.
+const KNOWN_FIELD_GAPS = {
+  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  ecmwf_ens: {
+    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
   },
 };
+
+async function loadManifest() {
+  const resp = await fetch("tool2_manifest.json");
+  if (!resp.ok) throw new Error("tool2_manifest.json fetch failed: HTTP " + resp.status);
+  const manifest = await resp.json();
+
+  MODELS = {};
+  manifest.models.forEach(m => {
+    MODELS[m.id] = {
+      label: m.label,
+      runs: m.runs.map(r => ({
+        runInit: new Date(r.run_init),
+        steps: r.steps.map(s => s.h),
+        imagesByStep: Object.fromEntries(r.steps.map(s => [s.h, s.images])),
+        hasDataByStep: Object.fromEntries(r.steps.map(s => [s.h, s.has_data])),
+      })),
+    };
+  });
+}
 // ---------------------------------------------------------------------------
 
 let selectedModelId = null;
@@ -329,9 +322,42 @@ function stepValidTime(run, h) {
   return new Date(run.runInit.getTime() + h * 3600 * 1000);
 }
 
+const IMAGE_FIELDS = ["total", "low", "mid", "high"];
+const preloadedRuns = new Set(); // run.runInit.getTime() values already preloaded
+
+function preloadRun(run, btnEl) {
+  const key = run.runInit.getTime();
+  if (preloadedRuns.has(key)) return;
+  const urls = [];
+  run.steps.forEach(h => {
+    const images = run.imagesByStep[h] || {};
+    IMAGE_FIELDS.forEach(f => { if (images[f]) urls.push(images[f]); });
+  });
+  if (!urls.length) return;
+
+  btnEl.classList.add("loading");
+  btnEl.classList.remove("done");
+  let loaded = 0;
+  btnEl.textContent = "0%";
+  urls.forEach(url => {
+    const img = new Image();
+    img.onload = img.onerror = () => {
+      loaded++;
+      btnEl.textContent = Math.round((loaded / urls.length) * 100) + "%";
+      if (loaded === urls.length) {
+        preloadedRuns.add(key);
+        btnEl.classList.remove("loading");
+        btnEl.classList.add("done");
+        btnEl.textContent = "✓";
+      }
+    };
+    img.src = url;
+  });
+}
+
 function populateModelSelect() {
   modelSelect.innerHTML = "";
-  Object.entries(MOCK_MODELS).forEach(([id, m]) => {
+  Object.entries(MODELS).forEach(([id, m]) => {
     const opt = document.createElement("option");
     opt.value = id;
     opt.textContent = m.label + " (" + m.runs.length + " runs archived)";
@@ -341,7 +367,7 @@ function populateModelSelect() {
 
 function loadModel(modelId) {
   selectedModelId = modelId;
-  const model = MOCK_MODELS[modelId];
+  const model = MODELS[modelId];
   const runsNewestFirst = [...model.runs].reverse();
 
   AXIS_START = runsNewestFirst[runsNewestFirst.length - 1].runInit;
@@ -370,8 +396,11 @@ function loadModel(modelId) {
     const preloadBtn = document.createElement("div");
     preloadBtn.className = "preloadBtn";
     preloadBtn.textContent = "⤓";
-    preloadBtn.title = "Preload all frames for this run (mock — no-op in prototype)";
-    preloadBtn.addEventListener("click", e => e.stopPropagation());
+    preloadBtn.title = "Preload all frames for this run (smoother scrubbing)";
+    preloadBtn.addEventListener("click", e => {
+      e.stopPropagation();
+      preloadRun(run, preloadBtn);
+    });
     row.appendChild(preloadBtn);
 
     const track = document.createElement("div");
@@ -483,14 +512,28 @@ function updateCursorUI() {
   const { run } = builtRows[selectedRunIdx];
   const step = nearestStep(run, cursorTime);
   const field = quantitySelect.value;
+  const images = step === null ? null : run.imagesByStep[step];
+  const hasDataFlags = step === null ? null : run.hasDataByStep[step];
+  // hasDataFlags[field] === false means this field has a URL (always
+  // written, even as a "(no data)" placeholder) but no real underlying
+  // data - null (no has_data info) falls back to "assume real".
+  const fieldHasData = hasDataFlags ? hasDataFlags[field] !== false : true;
+  const url = images && fieldHasData ? images[field] : null;
 
-  // Mock rendering: no real images exist yet, so just describe what WOULD
-  // be shown (model/run/step/field/valid-time) — same information Tool 1's
-  // real mapArea shows, minus an actual <img>.
-  mapAreaTag.textContent = "mock frame (no real render behind this yet)";
-  mapAreaImg.style.display = "none";
-  mapAreaTitle.textContent = MOCK_MODELS[selectedModelId].label + " · run " + fmtTime(run.runInit);
+  mapAreaTitle.textContent = MODELS[selectedModelId].label + " · run " + fmtTime(run.runInit);
   mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
+  if (url) {
+    mapAreaTag.textContent = "real rendered frame";
+    mapAreaImg.src = url;
+    mapAreaImg.style.display = "block";
+  } else {
+    mapAreaTag.textContent = "not available";
+    mapAreaImg.style.display = "none";
+    const knownReason = (KNOWN_FIELD_GAPS[selectedModelId] || {})[field];
+    mapAreaSub.textContent = step === null
+      ? "no step available"
+      : (knownReason || "no rendered frame for this field/step");
+  }
 }
 
 function timeFromClientX(clientX) {
@@ -603,8 +646,15 @@ window.addEventListener("resize", () => {
   });
 });
 
-populateModelSelect();
-loadModel(modelSelect.value);
+loadManifest()
+  .then(() => {
+    populateModelSelect();
+    loadModel(modelSelect.value);
+  })
+  .catch(err => {
+    document.body.innerHTML = "<pre style='color:#8b3a2f'>failed to load tool2_manifest.json: " + err + "</pre>";
+    console.error(err);
+  });
 </script>
 </body>
 </html>
