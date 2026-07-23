@@ -40,6 +40,13 @@ models:
                mid:  {param: TCDC, level: "middle cloud layer"},
                high: {param: TCDC, level: "high cloud layer"},
                provenance: native, lead_time_limit_hours: null}
+      altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                 low: ">=642hPa (~0-3.7km)", mid: "350-642hPa (~3.7-8.1km)",
+                 high: "<350hPa (~8.1km+, no enforced upper bound in code)",
+                 confidence: inferred,
+                 note: "T38 (2026-07-23): same shared NCEP UPP codebase/thresholds as gfs's own confirmed
+                   CLDRAD.f finding (see that entry) - not independently restated for GEFS in any source found,
+                   so treat as inferred by shared-codebase reasoning, not separately confirmed."}
     rain: {param: APCP, level: surface, step_type: accum, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live via herbie inventory against the SAME atmos.5 product this
              model's own total-cloud fetch already uses (member c00) - ':APCP:surface:0-6 hour acc fcst:ENS=low-res
@@ -75,6 +82,17 @@ models:
       levels: {params: [LCDC, MCDC, HCDC],
                cfgrib_hint: "shortName lcc/mcc/hcc, typeOfLevel low/middle/highCloudLayer",
                status: confirmed}
+      altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                 low: ">=642hPa (~0-3.7km)", mid: "350-642hPa (~3.7-8.1km)",
+                 high: "<350hPa (~8.1km+, no enforced upper bound in code)",
+                 confidence: confirmed,
+                 note: "T38 (2026-07-23): NCEP UPP User's Guide v4 ('the layers are >=642 hPa, >=350 hPa, and
+                   <350 hPa'), cross-verified byte-for-byte against live UPP source CLDRAD.f
+                   (PTOP_LOW=64200/PTOP_MID=35000/PTOP_HIGH=15000 Pa; only the first two are actually enforced
+                   in the GFS branch's classification logic - PTOP_HIGH is declared but unused, so 'high' has no
+                   real upper pressure bound). km figures are our own ICAO-standard-atmosphere conversion -
+                   NCEP's own docs/code only state pressure, never altitude. Classifies by cloud-BASE pressure
+                   (PCLDBASE), not cloud top."}
     rain: {params: [APCP, PRATE], level: surface, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live via herbie inventory at f006 - THREE real messages:
              ':PRATE:surface:6 hour fcst:' (instantaneous rate), ':PRATE:surface:0-6 hour ave fcst:' (windowed
@@ -165,6 +183,16 @@ models:
       total: {param: tcc, units: percent_0_100, status: confirmed,
               note: "Not previously documented here (only levels.params was) — added T20 build 2026-07-22.
                      Cheap to fetch alongside lcc/mcc/hcc, native, percent [0,100]."}
+      altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                 low: "1.0>sigma>0.8 (~0-2km)", mid: "0.8>=sigma>0.45 (~2-6km)", high: "sigma<=0.45 (~6km+)",
+                 confidence: "confirmed for the general IFS/ERA5 diagnostic; inferred for AIFS itself",
+                 note: "T38 (2026-07-23): ECMWF Parameter Database (codes.ecmwf.int, params 186/187/188) +
+                   Forecast User Portal Confluence FAQ, both direct quotes, agree exactly - sigma = p/p_surface.
+                   AIFS emits lcc/mcc/hcc under these same GRIB param IDs and trains against ERA5/operational-IFS
+                   archive data (i.e. the SAME diagnosed label), but no ECMWF document states AIFS recomputes
+                   this sigma cutoff itself at inference time (it's a data-driven emulator, not a model-level
+                   physical calculation) - treat as 'same definition by training-label provenance', not an
+                   independently-reverified AIFS-side computation."}
     rain: {param: tp, units: kg_m2, step_type: accum, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run. Same
              physical quantity as ecmwf_hres/ecmwf_ens's tp but reported in kg/m² here rather than m water-
@@ -215,6 +243,13 @@ models:
                       entry's note."}
       total: {param: tcc, units: percent_0_100, status: confirmed,
               note: "Not previously documented here — added T20 build 2026-07-22, same as aifs_single."}
+      altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                 low: "1.0>sigma>0.8 (~0-2km)", mid: "0.8>=sigma>0.45 (~2-6km)", high: "sigma<=0.45 (~6km+)",
+                 confidence: "confirmed for the general IFS/ERA5 diagnostic; inferred for AIFS itself",
+                 note: "T38 (2026-07-23): same finding as aifs_single's own altitude note - see that entry for the
+                   full citation/caveat (ECMWF Parameter Database + Confluence FAQ define the sigma boundary for
+                   the shared IFS/ERA5 diagnostic; AIFS-ENS inherits the field by training-label provenance, not
+                   an independently-confirmed internal recomputation)."}
     rain: {param: tp, units: kg_m2, step_type: accum, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) - tp present in both a
              control-shaped (no member dim) and a (50, lat, lon) perturbed-member array, same structure as
@@ -250,6 +285,15 @@ models:
         note: "T20 build (2026-07-22): the fetcher also pulls z (geopotential) at these levels, not named here —
                used for terrain-masking (Iberia's Meseta/Pyrenees put 1000/925hPa below-ground over part of the
                bbox), needed by T21/extract, not by T22's derive formula itself."
+        altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                   low: "{1000,925,850hPa} ~ 0.11-1.46km", mid: "{700,500hPa} ~ 3.01-5.57km",
+                   high: "{300hPa} ~ 9.16km (single sampled level, not a two-sided band)",
+                   confidence: "own code, not external research",
+                   note: "T38 (2026-07-23): this is THIS project's own DEFAULT_LEVELS_HPA bucketing
+                     (src/derive/humidity_to_cloud.py), converted via the ICAO standard atmosphere - not
+                     ECMWF's own native low/medium/high sigma boundary (see aifs_single/aifs_ens's altitude
+                     notes for that; it doesn't apply here since ecmwf_hres has no native L/M/H product to
+                     apply it to in open data, only derived-from-humidity levels)."}
     rain: {param: tp, units: m, step_type: accum, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run - clean
              single tp message, m water-equivalent (matches ecmwf_ens's own unit convention, differs from
@@ -281,7 +325,17 @@ models:
     publication_lag_h: [2.5, 4]
     first_covering: "2026-08-05T12Z"
     cloud:
-      levels: {params: [CLCL, CLCM, CLCH], layers_hPa: "sfc-800 / 800-400 / 400-0", status: confirmed}
+      levels: {params: [CLCL, CLCM, CLCH], layers_hPa: "sfc-800 / 800-400 / 400-0", status: confirmed,
+               altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                          low: "~0-1.95km", mid: "~1.95-7.18km", high: "~7.18km+ (open top)",
+                          confidence: confirmed,
+                          note: "T38 (2026-07-23): structure (pressure-bounded layers, CLCL open to the
+                            surface) confirmed via DWD's own ICON Database Reference Manual (GRIB2 level-type
+                            codes, Table 5.7). The literal 800/400 hPa numbers rest on secondary sources (DWD's
+                            own product-catalog page 403'd automated fetch during this research) plus an
+                            independent third-party mirror (gribstream.com), both agreeing, plus the
+                            long-standing COSMO-inherited convention - matches this entry's pre-existing
+                            layers_hPa field, no change needed, just corroboration + km conversion."}}
       total: {param: CLCT, status: confirmed}
     rain: {param: TOT_PREC, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket for the exact same URL convention
@@ -325,7 +379,13 @@ models:
     first_covering: "2026-08-07T18Z"
     hourly_at_t_from: "2026-08-09T18Z"
     cloud:
-      levels: {params: [CLCL, CLCM, CLCH], status: confirmed}
+      levels: {params: [CLCL, CLCM, CLCH], status: confirmed,
+               altitude: {task: T38, unit_source: derived_from_hpa_standard_atmosphere,
+                          low: "sfc-800hPa (~0-1.95km)", mid: "800-400hPa (~1.95-7.18km)",
+                          high: "400-0hPa (~7.18km+, open top)", confidence: confirmed,
+                          note: "T38 (2026-07-23): same DWD ICON finding as icon_global's own altitude note -
+                            see that entry for the full citation (ICON-EU shares ICON Global's CLCL/CLCM/CLCH
+                            800/400hPa convention, both DWD products from the same model family/physics)."}}
       total: {param: CLCT, status: confirmed}
     rain: {param: TOT_PREC, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket - same finding/reasoning as
@@ -363,6 +423,17 @@ models:
                                        # assuming 06Z/18Z also reach 168h would be wrong (see cycles correction)
     cloud:
       levels: {params: [lcc, mcc, hcc], status: confirmed,
+               altitude: {task: T38, unit_source: "ft->km conversion (1ft=0.3048m), not hPa/standard-atmosphere",
+                          low: "<6,500ft (~0-2.0km)", mid: "6,500-20,000ft (~2.0-6.1km)", high: ">20,000ft (~>6.1km)",
+                          confidence: likely_not_confirmed,
+                          note: "T38 (2026-07-23): sourced from Met Office's CONSUMER-FACING website
+                            (weather.metoffice.gov.uk/guides/global-map-data-layers + a second corroborating
+                            public page), NOT from Unified Model scientific documentation. The real UM STASH
+                            diagnostics for this (LOW/MEDIUM/HIGH CLOUD AMOUNT, m01s09i203/204/205) are marked
+                            'not used - set to 0' (deprecated placeholders) in Met Office's own STASHmaster -
+                            the actual currently-used internal boundary isn't published anywhere accessible
+                            found by this research. Record provenance as native (own field, not RH-derived) but
+                            do not treat these ft figures as a confirmed model-diagnostic spec."},
                provenance_via_open_meteo: verify,
                provenance_note: "T06/T08: live API test returned non-null, varying low/mid/high values (consistent
                  with native model output), but Open-Meteo's own docs give NO explicit native-vs-derived statement
@@ -427,6 +498,15 @@ models:
                  their surface-level fields. Live-tested 2026-07-23 (A Coruna, 43.37N/-8.4E, 10-day window):
                  non-null, varying values confirmed for cloud_cover/_low/_mid/_high (max 98/100/50/22 respectively
                  over the window) — real data, just not native."}
+      altitude: {task: T38, unit_source: native_km_stated, low: "0-3km", mid: "3-8km", high: ">8km",
+                 confidence: "confirmed as Open-Meteo's own convention; NOT confirmed as ECCC's native GEM spec",
+                 note: "T38 (2026-07-23): verbatim from Open-Meteo's live GEM API docs page. This is
+                   Open-Meteo's OWN derived altitude band, built from GEM's pressure-level fields which are
+                   themselves RH/Sundqvist-approximated (see this entry's own provenance note above) - NOT a
+                   published ECCC/GDPS convention. A candidate 680/440hPa figure surfaced in one paywalled 2025
+                   paper (Veilleux et al., JGR-Atmospheres) but could not be confirmed as GEM's own diagnostic
+                   vs. an ISCCP satellite-simulator convention applied on top for that study's comparison
+                   purposes - not used here."}
       total: {param: cloud_cover, status: confirmed, task: T12,
               note: "T12: docs note 'Total cloud cover might differ' from the low/mid/high sum, implying total may
                 be a separately-sourced value rather than simply a function of the (derived) L/M/H bands — but no
@@ -484,6 +564,15 @@ models:
                  reasoning applied here. Live-tested 2026-07-23 (A Coruna, 43.37N/-8.4E, 10-day window): non-null,
                  varying values confirmed for cloud_cover/_low/_mid/_high (max 100/100/60/83 respectively over the
                  window)."}
+      altitude: {task: T38, unit_source: unknown, low: not_found, mid: not_found, high: not_found,
+                 confidence: unverified,
+                 note: "T38 (2026-07-23): Open-Meteo's docs page states '0-3km/3-8km/>8km' for JMA, but this
+                   exact phrase is confirmed GENERIC OPEN-METEO BOILERPLATE - byte-identical to the text on
+                   Open-Meteo's own GFS docs page - not a JMA-sourced figure. JMA's own official docs (WIS-JMA
+                   GSM product info, 'Outline of Operational NWP' Ch.3, JMBSC GPV format specs) confirm Cll/Clm
+                   /Clh exist as native output fields but publish NO numeric hPa/km boundary in any source
+                   checked (2 official PDFs had non-machine-readable CJK tables - a residual gap, not a hard
+                   negative). Do NOT record 0-3km/3-8km/>8km as a JMA-confirmed figure anywhere downstream."}
       total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: native,
               note: "No derivation caveat found for total either; treated as native alongside low/mid/high."}
     rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
@@ -548,6 +637,16 @@ models:
                  either way. Live-tested 2026-07-23: non-null, varying values confirmed for
                  cloud_cover/_low/_mid/_high (max 92/47/47/92 respectively) for the portion of the window CMA
                  actually served — real data, native-vs-derived genuinely unknown."}
+      altitude: {task: T38, unit_source: unknown, low: not_found, mid: not_found, high: not_found,
+                 confidence: unverified,
+                 note: "T38 (2026-07-23): same generic-boilerplate situation as jma_gsm - Open-Meteo's stated
+                   '0-3km/3-8km/>8km' text for CMA is identical to the text on Open-Meteo's own GFS docs page,
+                   not CMA-sourced. The one genuine CMA-authored data point found (Chen/Liu/Ma 2021, Acta
+                   Meteorologica Sinica, GRAPES cloud-scheme diagnostic paper) shows GRAPES' own scheme splits
+                   low/mid/high by MODEL VERTICAL-LEVEL INDEX (k<15/15-29/>=29), not a fixed km/hPa band - no
+                   altitude/pressure equivalent published, and several other potentially load-bearing GRAPES
+                   papers were paywalled/unreachable during this research. Do NOT record 0-3km/3-8km/>8km as a
+                   CMA-confirmed figure anywhere downstream."}
       total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: verify,
               note: "Same undocumented status as low/mid/high; live-confirmed non-null and varying."}
     rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
@@ -587,7 +686,17 @@ models:
                note: "Package SP2 ('Paramètres additionnels à la surface') confirmed via official Meteo-France
                  PDFs to carry NEBBAS(low)/NEBMOY(mid)/NEBHAU(high), native model output (not humidity-derived).
                  SP1 only carries NEBUL (total, no L/M/H split); HP1 has no cloud fields at all — the prior
-                 'SP2/HP1 suspected' guess narrows to just SP2."}
+                 'SP2/HP1 suspected' guess narrows to just SP2.",
+               altitude: {task: T38, unit_source: native_km_stated,
+                          low: ">785hPa (typically <2500m above model terrain)", mid: "785-450hPa (~2500-5000m)",
+                          high: "<450hPa (typically >5000m above model terrain)", confidence: confirmed,
+                          note: "T38 (2026-07-23): Meteo-France's official NEBBAS/NEBMOY/NEBHAU glossary PDF
+                            (donneespubliques.meteofrance.fr), quoted verbatim, states ONE shared boundary set
+                            explicitly applying to 'les modeles ARPEGE et AROME' jointly - no separate numeric
+                            split per model exists in this source (see arome_france's altitude note, same
+                            finding). The altitude figures are height above the model's own internal orography
+                            ('relief modele'), NOT above sea level or real terrain - a separate ALTITUDE
+                            parameter is the real-terrain reference, don't conflate the two."}}
     surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
                       (000H012H) with cfgrib.open_datasets() - zero new fetch needed, same SP2 package the cloud
@@ -662,7 +771,14 @@ models:
     cloud:
       levels: {params: [lcc, mcc, hcc], package: "SP2", status: confirmed, task: T05,
                note: "Same SP2 package as arpege_europe (NEBBAS/NEBMOY/NEBHAU), confirmed via the official AROME
-                      packages PDF (v01/04/2025), native model output."}
+                      packages PDF (v01/04/2025), native model output.",
+               altitude: {task: T38, unit_source: native_km_stated,
+                          low: ">785hPa (typically <2500m above model terrain)", mid: "785-450hPa (~2500-5000m)",
+                          high: "<450hPa (typically >5000m above model terrain)", confidence: confirmed,
+                          note: "T38 (2026-07-23): same finding as arpege_europe's own altitude note - Meteo-
+                            France's official glossary PDF gives ONE shared NEBBAS/NEBMOY/NEBHAU boundary set
+                            for both models, no AROME-specific split published. Altitudes are height above
+                            model terrain ('relief modele'), not sea level or real terrain."}}
     surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
                       (00H06H) with cfgrib.open_datasets() - zero new fetch needed. Also present in the same file
