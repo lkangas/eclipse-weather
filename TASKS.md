@@ -541,6 +541,80 @@ user, not Claude Code — surface them, don't attempt.
       design that Tool 1 (T34, real widget) had the SAME relative-axis flaw
       Tool 2 was built to avoid from the start - see T34's own new note
       above for that fix.
+- [ ] **T37** Rain + surface-temp field research for Tool 3 (the eclipse
+      valid-time explorer's planned combined-cloud+rain and surface-temp
+      charts, currently placeholder-only in `tool1_real.html`'s Quantity
+      dropdown). Same "verify via a real fetch, don't build against a docs
+      guess" rule as T01-T09's original cloud-field research (CLAUDE.md
+      constraint #6). Done entirely against the SAME sources/packages each
+      model already fetches from - no new endpoints. Real findings,
+      2026-07-23:
+      - **gfs/gefs_extended (herbie/AWS idx)**: confirmed live via
+        `Herbie(...).inventory()`. GFS f006 has `:TMP:2 m above ground:6
+        hour fcst:` (clean, single message, no windowing ambiguity unlike
+        cloud) plus THREE rain-related messages - `:PRATE:surface:6 hour
+        fcst:` (instantaneous rate), `:PRATE:surface:0-6 hour ave fcst:`
+        (windowed average), `:APCP:surface:0-6 hour acc fcst:`
+        (accumulated total, x2 - GFS publishes this one twice, needs
+        de-dup same as the cloud fetcher already does for TCDC). GEFS
+        (atmos.5, same product as its total-cloud fetch) confirmed
+        `:APCP:surface:0-6 hour acc fcst:ENS=low-res ctl:` and `:TMP:2 m
+        above ground:6 hour fcst:ENS=low-res ctl:` - both ride along in the
+        SAME product/file GEFS's cloud fetch already downloads.
+      - **arome_france/arpege_europe (Meteo-France SP2)**: confirmed by
+        inspecting group-window files ALREADY on disk (zero new network
+        calls) via `cfgrib.open_datasets()`. arome_france: `t` (surface
+        temperature, K) and `tirf` (time-integral of rain flux, kg/m² =
+        accumulated mm - a real, usable rain field, cfgrib resolved the
+        shortName cleanly). arpege_europe: `t` (surface temp, K, same as
+        arome) confirmed by name; the precip field wasn't cleanly named by
+        cfgrib (grouped under a generic "unknown" var due to a local eccodes
+        table gap) - decoded directly via raw `eccodes` discipline/category/
+        parameterNumber instead of trusting the shortName: found WMO-
+        standard **0-1-6 = Total Precipitation** (stepType=accum) and a
+        bonus **0-1-64 = Total Snowfall Rate Water Equivalent**, both
+        already present in the same already-downloaded group file. Since
+        both models share the same SP2 package family, adding these fields
+        to `meteofrance_extractor.py` is a zero-new-fetch-cost extension of
+        existing archived data for BOTH models.
+      - **ecmwf_hres/ecmwf_ens/aifs_single (ecmwf-opendata)**: confirmed via
+        real live `retrieve()` calls with `param: ["2t","tp"]`. All three
+        returned clean single messages - `t2m` (2m temp, K, instant) and
+        `tp` (total precipitation, accum - `m` water-equivalent for
+        hres/ens, `kg/m²` for aifs_single, same physical quantity different
+        units convention). `ecmwf_ens` confirmed across all 50 real `pf`
+        members (same "zero cf messages" pattern already known from its
+        cloud fields - not a new finding, consistent behavior).
+        `aifs_ens` not independently re-tested (same model family/client as
+        aifs_single + same ensemble behavior as ecmwf_ens) - very likely
+        identical, but genuinely unverified; confirm before building against
+        it, per constraint #6.
+      - **icon_eu/icon_global (DWD opendata)**: confirmed live, HTTP 200 on
+        the real bucket for both `T_2M` and `TOT_PREC` at the exact same
+        URL convention (`{param_lower}/..._{PARAM}.grib2.bz2`) the cloud
+        fields already use - a direct drop-in extension of
+        `dwd_bz2_fetcher.py`'s existing `_cloud_params()` pattern.
+      - **aemet_harmonie (geotiff)**: already fully known, zero new research
+        needed - `aemet_geotiff_fetcher.py`'s own docstring already
+        documents that the bundle contains temperature (product code `11`)
+        and precipitation (code `61`, several accumulation windows:
+        `_1HH`/`_3HH`/`_6HH`) rasters. Currently downloaded and discarded
+        (only code `71`/Nubosidad is kept) - these would just need to be
+        added to the extraction allow-list, no new fetch logic.
+      - **ukmo_global (Open-Meteo)**: confirmed live via the real
+        `/v1/forecast` endpoint - `temperature_2m` and `precipitation` both
+        return real non-null hourly values alongside `cloud_cover`, same
+        endpoint/mechanism `open_meteo_fetcher.py` already uses.
+      **Bottom line**: every model this project archives already has real,
+      verified rain and surface-temp fields available at the SAME source/
+      package it already fetches from - no new endpoints, no new auth, and
+      for arome_france/arpege_europe/gefs_extended specifically, the data is
+      already sitting in already-downloaded files unused. Not yet done:
+      actually adding these params to each fetcher/extractor and to
+      `models.yaml`'s schema (a real structural change - new `cloud:`-
+      sibling sections - not attempted here, this task was research only,
+      same "confirm findings, then a separate scoping decision" gate T01-T09
+      themselves went through before code was built against them).
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
