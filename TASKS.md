@@ -414,6 +414,27 @@ user, not Claude Code — surface them, don't attempt.
       **Not yet done**: contourf/smoothed rendering for coarse-resolution
       models (explicitly deferred by the user, "future improvement... but
       not now").
+      **Real bug found and fixed 2026-07-23, after T35**: the shared cursor
+      was "+Nh since each row's OWN run_init" - looked fine with only 2
+      models wired (T34's original scope), but with all 10 real models
+      archived it's a genuine correctness bug, not cosmetic. Publication lag
+      varies a lot per model (ecmwf-opendata models lag hours behind gfs/
+      icon), so different rows' "latest run" can be many hours apart in real
+      wall-clock time - measured live: ecmwf_hres/ecmwf_ens/aifs_single/
+      aifs_ens all still on their 00Z run while arome_france was already on
+      09Z, a 9h spread. Under the old relative axis, dragging to "+12h" meant
+      12:00Z for the 00Z-init models but 21:00Z for arome_france - same
+      cursor position, 9 real hours apart. Ported the same fix already built
+      for Tool 2 (see below): axis is now absolute calendar time, cursor is a
+      Date, `nearestStep()` compares by real valid-time distance not raw
+      hour offset, each row's own run_init tick is drawn bolder (now visibly
+      NOT aligned across rows, which is the correct, honest picture), and a
+      "now" line was added since inits can fall on either side of it. Logic
+      verified by direct computation against the real measured drift (00Z/
+      06Z/09Z-init mock rows correctly converge on the same real valid time
+      at a shared cursor position) - live in-browser confirmation blocked by
+      an unrelated Browser-pane tooling hang (navigation timing out); not a
+      code issue, re-verify visually next session.
 - [x] **T35** Archiver consolidation, done 2026-07-23. The "consolidation
       question" T34 raised (does the narrow eclipse-cropped `fetch()` still
       need to exist separately from `fetch_full_range()`?) was answered by
@@ -489,6 +510,37 @@ user, not Claude Code — surface them, don't attempt.
       didn't change but made newly obvious at scale), and the opening
       paragraph clarified: the archive itself is now full-range, extraction
       to `points.parquet` is still eclipse-hour-scoped.
+- [ ] **T36** Tool 2: single-model, stacked historical runs. Mock-data
+      interaction prototype built 2026-07-23
+      (`src/viz/web/tool2_prototype.html`), same "prototype first, wire real
+      data after feedback" sequence as T34. Real archive checked first
+      (user asked "does it have enough data for some models?" before
+      committing to a build) — all 10 gridded models have 4-10
+      distinct runs archived already (aifs_ens fewest, slowest/heaviest
+      fetch; gfs/icon_eu/gefs_extended most, 10 each). Found and removed 2
+      stray non-real run directories first (`gfs/2026072606` - a future-
+      dated, empty artifact; `icon_eu/2020010100` - an empty leftover from
+      early cdo remap-weight testing) - both verified empty before deleting.
+      **Design, genuinely different from Tool 1**: rows are runs of ONE
+      model (picked via a dropdown), not different models - so unlike Tool
+      1 the axis was designed absolute-time from the start (each run has a
+      different init, no shared relative clock makes sense here). Newest
+      run on top; each run's own +0h tick drawn bolder; a "now" line;
+      extent slider narrows the axis from the right (same convention as
+      Tool 1). Verified via direct JS state inspection (screenshot tool in
+      the Browser pane was unreliable/slow to read at the rendered scale,
+      same lesson as T34's own verification passes): model-switch
+      recomputes the axis span correctly per model (aifs_ens: 4 runs/6h
+      cadence/360h reach; icon_eu: 9 runs/1h cadence/78h reach - both
+      matched real config), row selection, cursor drag + nearest-step-by-
+      valid-time, and the extent slider all behave correctly.
+      **Not started yet**: the real per-model manifest (every archived run,
+      not just latest) and real rendering - waiting on user feedback on the
+      interaction first, same gate T34 went through.
+      **Side effect of this task**: user noticed while reviewing Tool 2's
+      design that Tool 1 (T34, real widget) had the SAME relative-axis flaw
+      Tool 2 was built to avoid from the start - see T34's own new note
+      above for that fix.
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
