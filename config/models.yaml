@@ -40,6 +40,13 @@ models:
                mid:  {param: TCDC, level: "middle cloud layer"},
                high: {param: TCDC, level: "high cloud layer"},
                provenance: native, lead_time_limit_hours: null}
+    rain: {param: APCP, level: surface, step_type: accum, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via herbie inventory against the SAME atmos.5 product this
+             model's own total-cloud fetch already uses (member c00) - ':APCP:surface:0-6 hour acc fcst:ENS=low-res
+             ctl:'. Rides along in the same file, no new product/fetch needed."}
+    surface_temp: {param: TMP, level: "2 m above ground", step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live in the same atmos.5 product/file - ':TMP:2 m above
+                      ground:6 hour fcst:ENS=low-res ctl:'. Clean single message, no windowing ambiguity."}
     source:
       aws_bucket: "noaa-gefs-pds"
       path_hint: "gefs.{YYYYMMDD}/{HH}/atmos/pgrb2ap5/ge{c00|pNN}.t{HH}z.pgrb2a.0p50.f{FFF}"
@@ -68,6 +75,16 @@ models:
       levels: {params: [LCDC, MCDC, HCDC],
                cfgrib_hint: "shortName lcc/mcc/hcc, typeOfLevel low/middle/highCloudLayer",
                status: confirmed}
+    rain: {params: [APCP, PRATE], level: surface, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via herbie inventory at f006 - THREE real messages:
+             ':PRATE:surface:6 hour fcst:' (instantaneous rate), ':PRATE:surface:0-6 hour ave fcst:' (windowed
+             average rate), ':APCP:surface:0-6 hour acc fcst:' (accumulated total, published TWICE - same
+             duplicate-message pattern the existing TCDC fetch already has to filter, see herbie_fetcher.py's
+             'N hour fcst' vs 'ave' regex discipline). APCP (accumulated) is the natural default; PRATE available
+             if an instantaneous-rate view is ever wanted."}
+    surface_temp: {param: TMP, level: "2 m above ground", step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live - ':TMP:2 m above ground:6 hour fcst:'. Clean single
+                      message, unlike cloud/rain's 'ave vs fcst' duplication."}
     source:
       aws_bucket: "noaa-gfs-bdp-pds"
       url_template: "https://noaa-gfs-bdp-pds.s3.amazonaws.com/gfs.{YYYYMMDD}/{HH}/atmos/gfs.t{HH}z.pgrb2.0p25.f{FFF}"
@@ -107,6 +124,13 @@ models:
                note: "T01: confirmed absent in the classic IFS ENS (class=od) enfo stream at any cycle/step checked.
                       lcc/mcc/hcc DO exist in the separate AIFS-ENS product (class=ai, model=aifs-ens, same 'enfo'
                       stream name) — that is models.aifs_ens's data, not this entry's."}
+    rain: {param: tp, units: m, step_type: accum, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run - tp
+             present across all 50 real pf members (same zero-cf-messages pattern already known from this model's
+             own cloud fetch)."}
+    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same request as rain above - t2m present across all
+                      50 members."}
     source:
       client: ecmwf-opendata
       request: {stream: enfo, type: [cf, pf]}
@@ -141,6 +165,13 @@ models:
       total: {param: tcc, units: percent_0_100, status: confirmed,
               note: "Not previously documented here (only levels.params was) — added T20 build 2026-07-22.
                      Cheap to fetch alongside lcc/mcc/hcc, native, percent [0,100]."}
+    rain: {param: tp, units: kg_m2, step_type: accum, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run. Same
+             physical quantity as ecmwf_hres/ecmwf_ens's tp but reported in kg/m² here rather than m water-
+             equivalent - different unit convention per model family, do not assume the same scale factor across
+             models (same lesson as tcc's fraction-vs-percent split elsewhere in this file)."}
+    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same request as rain above."}
     source:
       client: ecmwf-opendata
       request: {model: aifs-single}
@@ -184,6 +215,12 @@ models:
                       entry's note."}
       total: {param: tcc, units: percent_0_100, status: confirmed,
               note: "Not previously documented here — added T20 build 2026-07-22, same as aifs_single."}
+    rain: {param: tp, units: kg_m2, step_type: accum, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) - tp present in both a
+             control-shaped (no member dim) and a (50, lat, lon) perturbed-member array, same structure as
+             ecmwf_ens/aifs_single's own fields."}
+    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same request/shape as rain above."}
     notes: "T02: may be the first entry in this registry with CONFIRMED native L/M/H at ensemble scale out to 15
       days — re-ranking nuance is 'best confirmed native-L/M/H long-range ENSEMBLE', pending gefs_extended's own
       now-confirmed pgrb2b levels (T03) for comparison; both are now confirmed, so this is a genuine two-way
@@ -213,6 +250,12 @@ models:
         note: "T20 build (2026-07-22): the fetcher also pulls z (geopotential) at these levels, not named here —
                used for terrain-masking (Iberia's Meseta/Pyrenees put 1000/925hPa below-ground over part of the
                bbox), needed by T21/extract, not by T22's derive formula itself."
+    rain: {param: tp, units: m, step_type: accum, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run - clean
+             single tp message, m water-equivalent (matches ecmwf_ens's own unit convention, differs from
+             aifs_single/aifs_ens's kg/m² - see those entries' notes)."}
+    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same request as rain above."}
     source:
       client: ecmwf-opendata
       request: {stream: oper, type: fc}
@@ -240,6 +283,12 @@ models:
     cloud:
       levels: {params: [CLCL, CLCM, CLCH], layers_hPa: "sfc-800 / 800-400 / 400-0", status: confirmed}
       total: {param: CLCT, status: confirmed}
+    rain: {param: TOT_PREC, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket for the exact same URL convention
+             the cloud params already use (param_lower dir + PARAM in filename) - a direct drop-in extension of
+             dwd_bz2_fetcher.py's existing _cloud_params()-style request, no new code shape needed."}
+    surface_temp: {param: T_2M, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same URL convention as rain above."}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon/grib/{HH}/{param_lower}/icon_global_icosahedral_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
       retention: "~24 h (!) — archiver critical. T10: confirmed via 404 test (yesterday's same-cycle run already
@@ -278,6 +327,11 @@ models:
     cloud:
       levels: {params: [CLCL, CLCM, CLCH], status: confirmed}
       total: {param: CLCT, status: confirmed}
+    rain: {param: TOT_PREC, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket - same finding/reasoning as
+             icon_global's own rain entry."}
+    surface_temp: {param: T_2M, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same URL convention as rain above."}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{HH}/{param_lower}/icon-eu_europe_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
       retention: "~24 h (!) — T10: confirmed via 404 test, same empirical/community-sourced caveat as icon_global."
@@ -317,6 +371,13 @@ models:
                  live-data-quality question, not just a sim-mode nicety — Hard Constraint #3 requires it be
                  resolved (e.g. diff Open-Meteo UKMO cloud values against a raw Met Office DataHub GRIB sample)
                  before flipping this to confirmed."}
+    rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed live via the real /v1/forecast endpoint - real non-null hourly
+             values returned alongside cloud_cover. Open-Meteo's hourly-var mechanism is generic (not model-
+             specific), so this and surface_temp below apply identically to every open_meteo_json model in this
+             file (gem_global/jma_gsm/cma_grapes_global too) - verified once here, not re-verified per model."}
+    surface_temp: {param: temperature_2m, via: open_meteo, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed live, same request as rain above."}
     source:
       primary: {via: open_meteo, model_id: "ukmo_global_deterministic_10km", id_status: confirmed, task: T06,
                 note: "Confirmed three ways: Open-Meteo docs page, open-meteo/open-data GitHub README S3 path
@@ -373,6 +434,11 @@ models:
                 the ambiguity; open_meteo_extractor.py writes one provenance per row (unlike ecmwf_hres's two-row
                 split), so 'derived' is used as the conservative, whole-row tag — see that module's
                 _PROVENANCE_BY_MODEL note."}
+    rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): Open-Meteo's hourly-var mechanism is generic, not model-specific - verified
+             once against ukmo_global (see that entry's rain note for the live test), applies identically here."}
+    surface_temp: {param: temperature_2m, via: open_meteo, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): same generic-mechanism reasoning as rain above."}
     source:
       primary: {via: open_meteo, model_id: "gem_global", id_status: confirmed, task: T12,
                 note: "T12 (2026-07-23): confirmed via Open-Meteo's GEM docs page model-id table (GEM Seamless /
@@ -420,6 +486,11 @@ models:
                  window)."}
       total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: native,
               note: "No derivation caveat found for total either; treated as native alongside low/mid/high."}
+    rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): same generic Open-Meteo mechanism as ukmo_global/gem_global - see
+             ukmo_global's rain note for the live test this generalizes from."}
+    surface_temp: {param: temperature_2m, via: open_meteo, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): same generic-mechanism reasoning as rain above."}
     source:
       primary: {via: open_meteo, model_id: "jma_gsm", id_status: confirmed, task: T12,
                 note: "T12 (2026-07-23): confirmed via Open-Meteo's JMA docs page model-id table (JMA Seamless /
@@ -479,6 +550,13 @@ models:
                  actually served — real data, native-vs-derived genuinely unknown."}
       total: {param: cloud_cover, status: confirmed, task: T12, provenance_via_open_meteo: verify,
               note: "Same undocumented status as low/mid/high; live-confirmed non-null and varying."}
+    rain: {param: precipitation, via: open_meteo, status: confirmed, task: T37,
+           note: "T37 (2026-07-23): same generic Open-Meteo mechanism as ukmo_global/gem_global/jma_gsm - see
+             ukmo_global's rain note. NOT independently exempt from this model's own reliability_caveat above -
+             if the cloud fields go null past ~4.75 days, rain/surface_temp will too, same backend."}
+    surface_temp: {param: temperature_2m, via: open_meteo, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): same generic-mechanism reasoning as rain above; same
+                      reliability_caveat applies."}
     source:
       primary: {via: open_meteo, model_id: "cma_grapes_global", id_status: confirmed, task: T12,
                 note: "T12 (2026-07-23): confirmed via Open-Meteo's CMA docs page and a live GET returning real,
@@ -510,6 +588,22 @@ models:
                  PDFs to carry NEBBAS(low)/NEBMOY(mid)/NEBHAU(high), native model output (not humidity-derived).
                  SP1 only carries NEBUL (total, no L/M/H split); HP1 has no cloud fields at all — the prior
                  'SP2/HP1 suspected' guess narrows to just SP2."}
+    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
+                      (000H012H) with cfgrib.open_datasets() - zero new fetch needed, same SP2 package the cloud
+                      fields already come from. Rides along for free."}
+    rain: {package: "SP2", grib2: {discipline: 0, category: 1, parameterNumber: 6}, step_type: accum,
+           status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed by inspecting the same already-downloaded group file, but cfgrib
+             could NOT resolve a clean shortName for it (grouped under a generic 'unknown' xarray var due to a
+             local eccodes table gap) - decoded directly via raw eccodes discipline/parameterCategory/
+             parameterNumber instead of trusting shortName, landing on WMO-standard 0-1-6 = Total Precipitation.
+             A bonus 0-1-64 (Total Snowfall Rate Water Equivalent) was also found in the same file, not yet added
+             as its own field here. IMPLEMENTATION NOTE for whoever builds this extractor: do not key on
+             GRIB_shortName=='tp' the way arome_france's tirf lookup can - key on
+             (discipline=0, parameterCategory=1, parameterNumber=6) directly via the eccodes low-level API, or
+             this field will silently vanish under cfgrib's generic 'unknown' merge collision (it collided with
+             2 OTHER unrelated params in this same file during T37's own check)."}
     source:
       primary: {via: mf_api, url: "https://public-api.meteofrance.fr/previnum/DPPaquetARPEGE",
                 auth: api_key, human_action: true,
@@ -569,6 +663,16 @@ models:
       levels: {params: [lcc, mcc, hcc], package: "SP2", status: confirmed, task: T05,
                note: "Same SP2 package as arpege_europe (NEBBAS/NEBMOY/NEBHAU), confirmed via the official AROME
                       packages PDF (v01/04/2025), native model output."}
+    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
+                      (00H06H) with cfgrib.open_datasets() - zero new fetch needed. Also present in the same file
+                      but not used here: d2m (2m dewpoint), mn2t/mx2t (windowed min/max 2m temp)."}
+    rain: {package: "SP2", cfgrib_shortname: tirf, level: surface, units: kg_m2, step_type: accum,
+           status: confirmed, task: T37,
+           note: "T37 (2026-07-23): confirmed by inspecting the same already-downloaded group file - tirf
+             (time-integral of rain flux, kg/m² = accumulated mm) resolved cleanly by cfgrib, unlike
+             arpege_europe's equivalent field (see that entry's rain note for why arpege needed raw eccodes
+             decoding instead)."}
     source:
       primary: {via: mf_api, url: "https://public-api.meteofrance.fr/previnum/DPPaquetAROME",
                 auth: api_key, human_action: true,
@@ -620,6 +724,16 @@ models:
                HARMONIE-AROME viewer help page (7 surface fields listed, only one blended 'nubosidad' cloud
                value, no L/M/H). Do not build an AEMET L/M/H fetcher — none of this data exists to fetch. AEMET
                contributes cloud_total only (provenance: total_only) to this project."}
+    surface_temp: {format: geotiff, aemet_product_code: "11", status: confirmed, task: T37,
+                    note: "T37 (2026-07-23): already known, not newly researched - aemet_geotiff_fetcher.py's own
+                      docstring already documents product code 11 (Temperatura) as present in the same bundle
+                      cloud.total's code 71 comes from. Currently downloaded-and-discarded (only 71 is kept);
+                      would need adding to the extraction allow-list, no new fetch logic. Same rendered-raster/
+                      color-ramp-inversion caveat as cloud.total applies here too - see that field's note."}
+    rain: {format: geotiff, aemet_product_code: "61", windows: ["1HH", "3HH", "6HH"], status: confirmed, task: T37,
+           note: "T37 (2026-07-23): same source as surface_temp above - product code 61 (Precipitacion), THREE
+             accumulation-window variants already in the bundle (_1HH/_3HH/_6HH suffixes). Currently downloaded-
+             and-discarded; would need adding to the extraction allow-list."}
     source:
       open_endpoint: {url: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB",
                       auth: none, status: confirmed, task: "T07(c)",
