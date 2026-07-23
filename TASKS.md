@@ -254,6 +254,30 @@ user, not Claude Code — surface them, don't attempt.
       cdo weights): 37,849 real rows across 11 models, zero duplicates.
       Reconciled the `.extracted` idempotency markers afterward so the real
       scheduler won't re-append these same rows later.
+- [x] **T31(c)** Gridded field comparison, done 2026-07-23
+      (`src/viz/cloud_field_comparison.py`) — user asked why T31(a)'s map only
+      showed 7 dots; this re-reads the raw archived GRIB2s directly (reusing
+      each extractor's private grid-opening helpers rather than duplicating
+      per-format parsing) and renders actual pcolormesh fields, small-multiples
+      across gfs/ecmwf_hres/icon_eu/icon_global/arpege_europe, totality band +
+      central line overlaid. Excludes aemet_harmonie (color-ramp image),
+      ukmo_global (no spatial grid), and ensembles (stretch goal).
+      **Found two real bugs while verifying against real archived data**:
+      (1) `_latest_run_init` picked the lexicographically-newest run
+      directory even when it was empty (a fetch still in flight) — fixed to
+      skip dirs with no files. (2) the "(no data)" fallback text used data
+      coordinates instead of `ax.transAxes`, so with the Iberia bbox's real
+      lat/lon range it rendered far outside the visible panel — fixed.
+      Also switched `pcolormesh` to `rasterized=True`: unrasterized SVG
+      output was ~9.5MB per file (one vector shape per grid cell); rasterized
+      is ~200KB with identical visual result.
+      **Verification note**: with no `ECLIPSE_T` override, every model
+      correctly reports no coverage — the real Aug 12 eclipse is still ~3
+      weeks past every model's max forecast reach, so nothing currently
+      archived can reach it yet (expected, not a bug; see Phase 2 below).
+      Verified instead with `ECLIPSE_T=2026-07-25T18:30:00Z`, matching what
+      was actually fetchable from the already-archived test runs: all 5
+      models render real fields, zero unexpected no-data panels.
 
 ## Phase 2 — Jul 27 onward: real data comes online
 
