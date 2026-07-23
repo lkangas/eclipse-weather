@@ -230,8 +230,15 @@ user, not Claude Code — surface them, don't attempt.
       automatically once T16 lands, not blocked on it. Fixed valid time, cloud%
       vs run_init, native L/M/H split from `ecmwf_hres`'s derived rows
       correctly (never averaged together). Ensembles shown as p10-90 band +
-      median. **T31(a) explicitly not built**: the map+totality-path overlay
-      needs T33's polygon data (scheduled Aug 9-10), not available yet.
+      median.
+- [x] **T31(a)** Map layer, done 2026-07-23 (`src/viz/eclipse_map.py`) — pulled
+      forward from blocked-on-T33 once T33 itself resolved (see below).
+      Iberia bbox, totality band (N/S limits) + central line, 7 sites colored
+      by a chosen model/field's latest archived value. Plain lat/lon axes, no
+      cartopy — matches the "keep it simple" direction. No runtime L/M/H
+      toggle (static images); call with a different `field` per image
+      instead. Verified against real data for gfs/ecmwf_hres/icon_eu ×
+      total/low (6 real maps, none hit the no-data fallback).
 - [x] **T32** Site ranking, done 2026-07-23 (`src/viz/site_ranking.py`). Pooled
       -sample P(cloud_low<20%): every (model, member) row from that model's
       latest run counts as one Bernoulli sample, pooled across all
@@ -255,9 +262,17 @@ user, not Claude Code — surface them, don't attempt.
 - [ ] Aug 3: HRES online; run T22's calibration check for real.
 - [ ] Aug 5–8: ICON Global → UKMO → ICON-EU → ARPEGE come online in sequence
       — confirm each against its `first_covering` as it happens; flag drift.
-- [ ] **T33** Totality path polygon (Besselian elements / Xavier Jubier KMZ).
-      Overlay on T31's map; validate/refine `sites.yaml` against the real
-      centerline before the Aug 9–10 site shortlist.
+- [x] **T33 (polygon part)** done 2026-07-23, pulled forward from Aug 9-10 —
+      turns out a validated Besselian-element calculation for this exact
+      event already existed in a sibling project (`eclipse-calc` +
+      `eclipse-dashboard`'s precomputed output), so no new calculation was
+      needed. Copied into `config/totality_path.json` with provenance
+      (centralLine/northLimit/southLimit, thinned to 5s resolution) and
+      overlaid on T31(a)'s map. Quick check: all 7 current `sites.yaml`
+      candidates fall inside the totality band with 68-184km margin from the
+      nearest edge — a good sign, not a final answer.
+      **Still human territory, unchanged**: final site-list sign-off — the
+      tool informs it, doesn't make it (see CLAUDE.md).
 - [ ] Aug 10–11: HARMONIE + AROME ingest; fetch cadence to every-cycle.
 - [ ] Aug 12: nowcast mode — Meteosat imagery + AEMET obs/radar alongside
       final NWP runs. Site call ~15 UTC.

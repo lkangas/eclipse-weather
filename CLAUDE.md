@@ -100,7 +100,10 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
   automation terms are unconfirmed, see T05/T10 notes in models.yaml).
 - Met Office DataHub key — optional path, only if T06 shows Open-Meteo
   insufficient.
-- Final site list sign-off after totality polygon check (T33).
+- Final site list sign-off — the totality polygon check itself is done
+  (T33, 2026-07-23, `config/totality_path.json`; all 7 current candidates
+  fall inside the band with 68-184km margin), but the actual go/no-go
+  shortlist call is still a human decision, not this tool's.
 - ~~Choice of deployment box~~ — decided 2026-07-22 (see private ops notes,
   not this repo). Healthcheck service account still open.
 
