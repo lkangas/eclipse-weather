@@ -9,7 +9,7 @@ from src.config import load_models
 from src.extract import registry as extract_registry
 from src.extract.base import already_extracted, append_points, mark_extracted
 from src.fetchers import registry as fetch_registry
-from src.fetchers.base import already_fetched, cycle_run_inits, due_time, steps_for_run
+from src.fetchers.base import already_fetched, cycle_run_inits, due_time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scheduler")
@@ -37,10 +37,6 @@ def run_once() -> None:
         if "cycles" not in model_config or "fetch" not in model_config:
             continue  # aggregator/reference entries (open_meteo, climatology): no direct fetch
         for run_init in cycle_run_inits(model_config["cycles"], now):
-            steps = steps_for_run(model_config, run_init)
-            if not any(v is not None for v in steps.values()):
-                continue  # this run doesn't reach any eclipse-day archive valid time
-
             already_have_files = already_fetched(model_name, run_init)
             if not already_have_files:
                 due = due_time(model_config.get("publication_lag_h", [0, 0]), run_init)

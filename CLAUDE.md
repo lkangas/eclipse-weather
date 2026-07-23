@@ -4,10 +4,14 @@ Multi-model cloud forecast comparison for the total solar eclipse over Spain,
 **2026-08-12, totality ≈ 18:25–18:33 UTC**. Working eclipse time
 `ECLIPSE_T = 2026-08-12T18:30:00Z` (env var — never hardcode; UI must work with any T).
 
-The tool archives every forecast run from ~12 NWP models, extracts low/mid/high
-cloud for the eclipse valid hours over Iberia, and visualizes (a) when each model
-first covers T, (b) how each model's eclipse forecast evolves run-over-run
-(fixed valid time, slider over init times — "d(Prog)/dt" view).
+The tool archives every forecast run from ~12 NWP models — the full forecast
+range each run publishes, not just eclipse-day hours (unified 2026-07-23; see
+TASKS.md's archiver-consolidation note) — extracts low/mid/high cloud for the
+eclipse valid hours over Iberia into `points.parquet`, and visualizes (a) when
+each model first covers T, (b) how each model's eclipse forecast evolves
+run-over-run (fixed valid time, slider over init times — "d(Prog)/dt" view),
+plus (c) a general-purpose "latest run of every model" explorer (Tool 1) that
+isn't tied to the eclipse date at all.
 
 ## Hard constraints — read before writing any code
 
@@ -40,7 +44,10 @@ first covers T, (b) how each model's eclipse forecast evolves run-over-run
     src/viz/                # availability gantt, run-evolution charts, maps
     src/scheduler/          # in-process loop (Docker entrypoint) - reads models.yaml,
                             # computes due fetches from cycles + publication_lag + margin
-    data/raw/{model}/{initYYYYMMDDHH}/   # Iberia-box slices (GRIB2/GeoTIFF)
+    data/raw/{model}/{initYYYYMMDDHH}/   # full-range GRIB2/GeoTIFF, native/global
+                                          # extent (NOT cropped to Iberia at fetch
+                                          # time - see Stack & conventions' disk
+                                          # footprint note)
     data/points.parquet     # extracted point/strip values (append-only)
     TASKS.md                # ordered work queue — work top-down, tick boxes
 
@@ -80,13 +87,30 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
 - Deployment target: an always-on Linux box, archiver runs in **Docker**
   (decided 2026-07-22 — a single long-running container with an in-process
   scheduler loop, not systemd timers; see `src/scheduler/run.py` and the
-  `Dockerfile`/`docker-compose.yml`, currently unverified — no Docker runtime
-  available in dev to build/test against yet). `data/` must be a mounted
-  volume, never ephemeral container storage — a missed run is unrecoverable.
-  Own directory, own port, isolated from any other services on the box. Box
-  chosen 2026-07-22 — see private ops notes, not this repo. This tool's own
-  disk footprint is estimated well under 1 GB if `data/raw/` is cropped to
-  the Iberia bbox before archiving as designed (T21) — see T25.
+  `Dockerfile`/`docker-compose.yml`, verified 2026-07-23 against real live
+  endpoints). `data/` must be a mounted volume, never ephemeral container
+  storage — a missed run is unrecoverable. Own directory, own port, isolated
+  from any other services on the box. Box chosen 2026-07-22 — see private ops
+  notes, not this repo.
+  **Disk footprint (measured, not estimated, 2026-07-23):** since the
+  2026-07-23 archiver consolidation, `data/raw/` holds every fetcher's FULL
+  forecast range (not just 3 eclipse-hour steps) — this is much larger than
+  originally assumed and NOT cropped to the Iberia bbox at fetch time (that
+  only happens downstream in `src/extract/`/`src/viz/`; T21's crop-before-
+  archive step was never built and archiving full-range makes it moot
+  anyway). Real numbers from 2 real runs across 10 gridded models: **48 GB**
+  total, dominated by full-ensemble products — `aifs_ens` alone is **~16 GB
+  per run** (50 members × 4 cloud fields × ~60 steps), `ecmwf_ens` **~1.5–2.3
+  GB per run**; deterministic single-message models (gfs, icon_eu/global,
+  arome/arpege) are a few hundred MB to ~1 GB per run. At aifs_ens's own
+  4-cycles/day cadence that's ~64 GB/day for that one model if every run is
+  kept — comfortably fine on this desktop (906 GB free as of 2026-07-23,
+  per explicit "disk isn't constrained here" dev-phase direction) but a real
+  constraint for production's much smaller disk (see T25/private ops notes)
+  and a hard input to rollout step 4's fetch→render→discard design (a single
+  in-flight aifs_ens run's raw files alone may not fit comfortably alongside
+  everything else on a small production disk even transiently, before
+  discard).
 
 ## Human-in-the-loop items (Claude Code: flag, don't attempt)
 

@@ -3,11 +3,10 @@ icon_global (DWD ICON global, icosahedral) and icon_eu (DWD ICON-EU,
 regular-lat-lon). Both are public, no-auth, single-file-per-step-per-param
 downloads from opendata.dwd.de.
 
-For each target eclipse-day archive step this run_init covers (per
-steps_for_run) and each cloud param (native L/M/H + total: CLCL/CLCM/CLCH/
-CLCT), this builds the download URL from the model's `source.url_template`,
-GETs the .grib2.bz2 file, decompresses it, and writes the raw .grib2 into
-raw_output_dir(model_name, run_init).
+For every step this run_init publishes and each cloud param (native L/M/H +
+total: CLCL/CLCM/CLCH/CLCT), this builds the download URL from the model's
+`source.url_template`, GETs the .grib2.bz2 file, decompresses it, and writes
+the raw .grib2 into raw_output_dir(model_name, run_init).
 
 icon_global's grid is icosahedral (native, no regular-lat-lon variant exists
 on opendata.dwd.de per T04) — this module deliberately does NOT remap it.
@@ -31,13 +30,7 @@ from pathlib import Path
 
 import httpx
 
-from src.fetchers.base import (
-    FetchResult,
-    full_range_steps,
-    raw_latest_output_dir,
-    raw_output_dir,
-    steps_for_run,
-)
+from src.fetchers.base import FetchResult, full_range_steps, raw_output_dir
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -109,9 +102,7 @@ def _download_all_params(
     *, model_name: str, model_config: dict, run_init: datetime, steps: list[int], out_dir: Path,
 ) -> tuple[list[Path], list[str]]:
     """Shared download loop: fetch every (step, param) combo into `out_dir`,
-    idempotently. Used by both fetch() (eclipse-cropped steps) and
-    fetch_full_range() (every step the run publishes) - the download
-    mechanics don't care which step list drove them."""
+    idempotently."""
     url_template = model_config["source"]["url_template"]
     params = _cloud_params(model_config)
     if not params:
@@ -189,37 +180,8 @@ def _result_from_download(
 @register("http_bz2")
 def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
     """Fetch DWD ICON cloud fields (icon_global raw icosahedral / icon_eu
-    regular-lat-lon) for every eclipse-day archive valid time this run_init
-    covers. See module docstring for scope (no cdo remap here - T21's job)."""
-    steps = steps_for_run(model_config, run_init)
-    covering = {vt: s[0] for vt, s in steps.items() if s is not None}
-    if not covering:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps, status="not_yet_covering"
-        )
-
-    out_dir = raw_output_dir(model_name, run_init)
-    try:
-        files_written, errors = _download_all_params(
-            model_name=model_name, model_config=model_config, run_init=run_init,
-            steps=sorted(set(covering.values())), out_dir=out_dir,
-        )
-    except ValueError as e:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps, status="error", error=str(e)
-        )
-
-    return _result_from_download(model_name, run_init, steps, files_written, errors)
-
-
-def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Tool 1's general-purpose entry point: fetch EVERY step this run
-    publishes (not just the eclipse-day archive hours `fetch()` targets),
-    into DATA_RAW_LATEST rather than DATA_RAW - see src/config.py for why
-    the two are kept separate. Same download mechanics as fetch(), just a
-    different step source and output root (mirrors herbie_fetcher.py's/
-    meteofrance_fetcher.py's/ecmwf_opendata_fetcher.py's own
-    fetch_full_range())."""
+    regular-lat-lon) for every step this run_init publishes. See module
+    docstring for scope (no cdo remap here - T21's job)."""
     reachable = full_range_steps(model_config, run_init)
     steps_map = {
         (run_init + timedelta(hours=h)).isoformat(): (h, 0.0)
@@ -230,7 +192,7 @@ def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) ->
             model=model_name, run_init=run_init, steps=steps_map, status="not_yet_covering"
         )
 
-    out_dir = raw_latest_output_dir(model_name, run_init)
+    out_dir = raw_output_dir(model_name, run_init)
     try:
         files_written, errors = _download_all_params(
             model_name=model_name, model_config=model_config, run_init=run_init,

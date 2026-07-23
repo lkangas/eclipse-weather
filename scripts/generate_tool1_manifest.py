@@ -6,14 +6,13 @@ Image paths in the manifest are relative to manifest.json's own directory
 so serving works regardless of exactly where that directory is mounted
 (DATA_ROOT may not even be under the repo - see src/config.py).
 
-Fetching: each model's own fetch_full_range() (one per fetcher module, see
-src/fetchers/*.py) is dispatched here by the model's models.yaml `fetch:`
-key - the same key src/fetchers/registry.py's FETCHERS dict is keyed by for
-the eclipse archiver's fetch(), but fetch_full_range() itself isn't
-registered there (it's Tool 1-only, so it doesn't belong in the shared
-registry the scheduler also reads). Idempotent per fetcher (skips
-already-downloaded files), so re-running this script only fetches whatever's
-new since the last run.
+Fetching: dispatched via src/fetchers/registry.py's shared FETCHERS registry,
+keyed by the model's models.yaml `fetch:` value - the same fetch() every
+fetcher module registers for the eclipse archiver/scheduler (see TASKS.md's
+2026-07-23 archiver-consolidation note: there used to be a separate
+Tool 1-only fetch_full_range() per module, merged into fetch() the same day).
+Idempotent per fetcher (skips already-downloaded files), so re-running this
+script only fetches whatever's new since the last run.
 
 Usage (inside Docker, GRIB deps required):
     .venv/bin/python -m scripts.generate_tool1_manifest
@@ -25,12 +24,10 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 
+from src import fetchers as _fetchers  # noqa: F401 - import for @register side-effects
 from src.config import get_model
 from src.fetchers.base import full_range_steps, latest_available_run_init
-from src.fetchers.dwd_bz2_fetcher import fetch_full_range as _fetch_full_range_http_bz2
-from src.fetchers.ecmwf_opendata_fetcher import fetch_full_range as _fetch_full_range_ecmwf
-from src.fetchers.herbie_fetcher import fetch_full_range as _fetch_full_range_herbie
-from src.fetchers.meteofrance_fetcher import fetch_full_range as _fetch_full_range_http_grib
+from src.fetchers.registry import get_fetcher
 from src.viz.tool1_renderer import OUTPUT_DIR, render_frame
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -50,29 +47,18 @@ MODELS = [
     ("icon_global", "ICON Global"),
 ]
 
-# models.yaml `fetch:` value -> this model's fetch_full_range() entry point.
-# Every fetcher module that has one is listed here; a model whose fetch key
-# isn't in this dict (shouldn't happen for anything in MODELS above) just
-# skips the fetch step and renders whatever's already archived.
-_FETCH_FULL_RANGE_BY_KEY = {
-    "herbie": _fetch_full_range_herbie,
-    "http_grib": _fetch_full_range_http_grib,
-    "ecmwf-opendata": _fetch_full_range_ecmwf,
-    "http_bz2": _fetch_full_range_http_bz2,
-}
-
 
 def _iso_z(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
 def _fetch_latest(model_id: str, model_config: dict, run_init: datetime) -> None:
-    fetch_fn = _FETCH_FULL_RANGE_BY_KEY.get(model_config.get("fetch"))
-    if fetch_fn is None:
+    try:
+        fetch_fn = get_fetcher(model_config["fetch"])
+    except KeyError as e:
         log.warning(
-            "%s: no fetch_full_range() dispatch for fetch key %r, rendering whatever's "
-            "already archived without fetching first",
-            model_id, model_config.get("fetch"),
+            "%s: %s, rendering whatever's already archived without fetching first",
+            model_id, e,
         )
         return
     log.info("%s: fetching full range for run_init=%s ...", model_id, run_init.isoformat())
