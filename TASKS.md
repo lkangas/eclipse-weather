@@ -364,7 +364,7 @@ user, not Claude Code — surface them, don't attempt.
       steps reachable, 208 fetched cleanly (1 transient failure on f000,
       not investigated further yet); arome_france run 2026-07-23T03Z, 9/9
       group files, 52 hourly steps. 890MB raw GRIB2 for just these 2 models'
-      single latest run — a real data point for the eventual petzval
+      single latest run — a real data point for the eventual production
       retention decision (T25), not acted on now per explicit "measure but
       don't gate desktop dev work on it" direction. 1044 real PNGs rendered
       (31MB), spot-checked for non-blank content (pixel std-dev, not just
@@ -513,7 +513,7 @@ user, not Claude Code — surface them, don't attempt.
 - [ ] Aug 12: nowcast mode — Meteosat imagery + AEMET obs/radar alongside
       final NWP runs. Site call ~15 UTC.
 
-## Tool 1/2/3 rollout — desktop now, petzval later
+## Tool 1/2/3 rollout — desktop now, production later
 
 A separate timeline from Phase 2 above — this is the "latest run" explorer
 suite's (T34+) own path to production, not the core archiver's. Order
@@ -541,20 +541,21 @@ started. Laid out 2026-07-23 per explicit user direction.
       against whatever step 1 has archived — steps 3 and 4 below don't
       start until the user is actually happy with how renderings look, not
       on any calendar trigger.
-- [ ] **3. Migrate existing renderings to petzval** (once step 2 is
+- [ ] **3. Migrate existing renderings to production** (once step 2 is
       approved, not before). Copy already-rendered output from this desktop
-      to petzval, bootstrapping production with real historical renders
-      instead of starting from zero — "up to a certain point at least" per
-      the user; exact cutoff (all of it vs. a recent window) not yet
-      decided. Needs T25 (hosting reserved) done first.
-- [ ] **4. Petzval's own fetch → render → discard pipeline.** Unlike this
-      desktop (which keeps raw data forever, per explicit direction — disk
-      isn't constrained here, see private notes), production must NOT
+      to the production box (see private ops notes, not this repo),
+      bootstrapping production with real historical renders instead of
+      starting from zero — "up to a certain point at least" per the user;
+      exact cutoff (all of it vs. a recent window) not yet decided. Needs
+      T25 (hosting reserved) done first.
+- [ ] **4. Production's own fetch → render → discard pipeline.** Unlike
+      this desktop (which keeps raw data forever, per explicit direction —
+      disk isn't constrained here, see private notes), production must NOT
       accumulate raw GRIB2/GeoTIFF indefinitely: fetch a run, render it,
       then delete the raw file once its renders exist. A genuinely
       different pipeline shape from `collect_full_range.py`'s current
       "fetch and keep" design for the desktop — do not deploy that script
-      unmodified to petzval.
+      unmodified to production.
 - [ ] **5. Status/monitoring UI page.** What's been fetched, what's been
       rendered, any errors per model/run, and predicted next-run
       availability (derivable from `models.yaml`'s `cycles`/
@@ -568,7 +569,7 @@ started. Laid out 2026-07-23 per explicit user direction.
       gets, matching CLAUDE.md's own phased model-onboarding calendar —
       over coarser/longer-range models. Not needed while volume is low;
       becomes relevant once step 1's service has been running a while
-      and/or step 4's petzval pipeline is live.
+      and/or step 4's production pipeline is live.
 
 ## Deferred / not now
 
