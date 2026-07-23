@@ -167,22 +167,22 @@ def _read_ecmwf_grid(path: Path, shortname: str, scale: float, bbox: dict) -> tu
     already -180..180 (ecmwf_extractor.py's own docstring) - no wraparound
     conversion needed, unlike the NOAA grids above.
 
-    For ensemble files (ecmwf_ens/aifs_ens) this picks ONE representative
-    member rather than showing all of them - Tool 1 renders a single map per
-    (model, run, step, field), unlike run_evolution.py's p10-90 band, which
-    needs every member. Convention: lowest member number (member 0 = control
-    "cf" if present, else the lowest-numbered perturbed "pf" member) - the
-    ecmwf-opendata client's own real data (per ecmwf_extractor.py's
-    docstring) makes this deterministic and reproducible, not an arbitrary
-    single-call pick."""
+    For ensemble files (ecmwf_ens/aifs_ens) this averages ACROSS ALL members
+    (the ensemble mean), not one arbitrary representative member - per
+    explicit user direction 2026-07-23: "the ensemble mean can be the
+    aifs_ens entry to whatever quantity is selected." Same convention across
+    every model this function serves, deterministic ones included - a
+    deterministic file (ecmwf_hres's total, aifs_single) has exactly one
+    "member", so averaging across it is a no-op, not a special case."""
     if not path.exists():
         return None
     members = _iter_members(path, shortname)
     if not members:
         return None
-    members.sort(key=lambda m: m[0])
-    _, da = members[0]
-    return _crop(da.latitude.values, da.longitude.values, da.values * scale, bbox)
+    stacked = np.stack([da.values for _, da in members], axis=0)
+    mean_values = stacked.mean(axis=0)
+    _, da0 = members[0]
+    return _crop(da0.latitude.values, da0.longitude.values, mean_values * scale, bbox)
 
 
 def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
