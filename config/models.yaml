@@ -165,8 +165,17 @@ models:
                   # enumerated — confirm exact perturbed-member count before finalizing
     cycles: {"00": 360, "06": 360, "12": 360, "18": 360}   # T02: confirmed all 4 cycles, 2 dates checked
     steps: [{to_h: 360, every_h: 6}]
+    publication_lag_h: [7, 9]   # borrowed from aifs_single (same provider/pipeline, T02's identical cycles/steps
+                                # table) — not independently re-verified for aifs_ens specifically
+    first_covering: "2026-07-28T18Z"   # borrowed from aifs_single, same reasoning
     source: {client: ecmwf-opendata, request: {model: aifs-ens}, status: confirmed,
              retention: "~2-3 days (12 most recent forecast runs, ~72h) — T10"}
+    fetch: ecmwf-opendata   # BUG FIX 2026-07-23: this key was missing entirely. scheduler/run.py skips any
+                            # model_config lacking "fetch" — aifs_ens was silently never being scheduled for
+                            # real fetches despite every other field being present. Found by the T30/T32 viz
+                            # work when the Gantt/ranking modules noticed the gap. The fetcher module itself
+                            # (src/fetchers/ecmwf_opendata_fetcher.py) already handles aifs_ens correctly —
+                            # only this config key was missing.
     cloud:
       levels: {params: [lcc, mcc, hcc], location: sfc, status: confirmed, task: T02, units: percent_0_100,
                note: "Confirmed present in both cf (control) and pf (perturbed) members, at step 0h and 360h,

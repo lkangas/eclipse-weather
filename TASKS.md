@@ -213,18 +213,40 @@ user, not Claude Code — surface them, don't attempt.
 - [ ] **T15** Live-forward sim mode. Set `ECLIPSE_T` ≈ now+4d; run the real
       archiver end-to-end against it. This is the actual fetch/parse path
       test that T16 bypasses — do it before Jul 27, not after.
-- [ ] **T30** Availability Gantt (`src/viz/`): one row per model from
-      `models.yaml`, bar starts at `first_covering + publication_lag`, ticks
-      at subsequent runs, encode step-density at T by opacity/color. Static
-      SVG first (matplotlib), plotly later. Read models.yaml directly — no
-      hardcoded dates.
-- [ ] **T31** Run-evolution view: fixed valid time T, slider over run-init
-      times. (a) Map layer — Iberia + chosen model/run, L/M/H toggleable,
-      totality path + sites overlaid. (b) Per-site trajectory small-multiples
-      — x=init time, y=cloud%, 3 lines (L/M/H) per model panel; ensemble
-      models as spaghetti or 10–90% band. Build against the T16 backfill.
-- [ ] **T32** Site ranking view: sort `sites.yaml` entries by latest
-      P(cloud_low < 20%) across ensemble members / model spread.
+- [x] **T30** Availability Gantt, done 2026-07-23 (`src/viz/availability_gantt.py`).
+      Deliberately simple/matplotlib per the user's explicit direction. Bar per
+      model from `first_covering`, ticks per subsequent cycle that reaches T,
+      colored by local step cadence (the originally-planned "misalignment from
+      18:30Z" metric turned out to be a constant 0.5h for every model —
+      structural, since every model steps on whole hours and T is :30 — so
+      cadence is the actual encoded signal). Verified: correct staircase order
+      (gefs_extended → gfs → AIFS/ECMWF → ICON/UKMO/ARPEGE → AROME/AEMET).
+      **Found a real bug**: `aifs_ens` was missing `models.yaml`'s `fetch:` key
+      entirely — the scheduler was silently never scheduling it. Fixed.
+- [x] **T31(b)** Run-evolution small-multiples, done 2026-07-23
+      (`src/viz/run_evolution.py`). T16 backfill doesn't exist yet, so this
+      runs against whatever real run history is already archived (multiple
+      real run_inits per model from T20-T24 testing) — designed to get richer
+      automatically once T16 lands, not blocked on it. Fixed valid time, cloud%
+      vs run_init, native L/M/H split from `ecmwf_hres`'s derived rows
+      correctly (never averaged together). Ensembles shown as p10-90 band +
+      median. **T31(a) explicitly not built**: the map+totality-path overlay
+      needs T33's polygon data (scheduled Aug 9-10), not available yet.
+- [x] **T32** Site ranking, done 2026-07-23 (`src/viz/site_ranking.py`). Pooled
+      -sample P(cloud_low<20%): every (model, member) row from that model's
+      latest run counts as one Bernoulli sample, pooled across all
+      contributing models — documented as a genuine, debatable design choice
+      (an ensemble with many members could dominate a site's estimate over
+      several one-vote deterministic models). Reports n_samples/n_models per
+      site so this is visible, not hidden. Also surfaces each site's WNW-strip
+      worst-case (T24) as a secondary annotation.
+      **Backfill note**: none of T30/T31/T32 originally had real `points.parquet`
+      to test against (only a 42-row orphan fixture) — regenerated it for real
+      by re-running the actual, unmodified extractor registry against already
+      -fetched real raw files in Docker (no new network calls except cached
+      cdo weights): 37,849 real rows across 11 models, zero duplicates.
+      Reconciled the `.extracted` idempotency markers afterward so the real
+      scheduler won't re-append these same rows later.
 
 ## Phase 2 — Jul 27 onward: real data comes online
 
