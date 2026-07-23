@@ -68,7 +68,7 @@ from datetime import datetime
 
 import httpx
 
-from src.fetchers.base import FetchResult, raw_output_dir, steps_for_run
+from src.fetchers.base import FetchResult, raw_latest_output_dir, raw_output_dir, steps_for_run
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -163,6 +163,29 @@ def _download(client: httpx.Client, url: str, dest_path) -> tuple[bool, str | No
     return False, last_error
 
 
+def _download_groups(
+    *, model_name: str, spec: dict, run_init: datetime, groups: list[str], paquet: str,
+    out_dir,
+) -> tuple[list, list[str]]:
+    """Shared download loop: fetch each named group window into `out_dir`,
+    idempotently. Used by both fetch() (only the eclipse-covering groups)
+    and fetch_full_range() (every group the run publishes)."""
+    files_written = []
+    errors: list[str] = []
+    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
+        for group in groups:
+            dest = out_dir / f"{model_name}_{paquet}_{group}.grib2"
+            if dest.exists() and dest.stat().st_size > 0:
+                files_written.append(dest)
+                continue
+            ok, err = _download(client, _build_url(spec, run_init, paquet, group), dest)
+            if ok:
+                files_written.append(dest)
+            else:
+                errors.append(f"{group}: {err}")
+    return files_written, errors
+
+
 @register("http_grib")
 def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
     steps = steps_for_run(model_config, run_init)
@@ -193,26 +216,18 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
             needed_groups.append(group)
 
     out_dir = raw_output_dir(model_name, run_init)
-    files_written = []
-    errors = []
-
+    errors: list[str] = []
     if missing_group_steps:
         errors.append(
             f"step(s) {sorted(set(missing_group_steps))} fall outside all known "
             f"group windows for {model_name}: {spec['groups']}"
         )
 
-    with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
-        for group in needed_groups:
-            dest = out_dir / f"{model_name}_{paquet}_{group}.grib2"
-            if dest.exists() and dest.stat().st_size > 0:
-                files_written.append(dest)
-                continue
-            ok, err = _download(client, _build_url(spec, run_init, paquet, group), dest)
-            if ok:
-                files_written.append(dest)
-            else:
-                errors.append(f"{group}: {err}")
+    files_written, download_errors = _download_groups(
+        model_name=model_name, spec=spec, run_init=run_init, groups=needed_groups,
+        paquet=paquet, out_dir=out_dir,
+    )
+    errors.extend(download_errors)
 
     if not files_written:
         return FetchResult(
@@ -222,6 +237,42 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
 
     return FetchResult(
         model=model_name, run_init=run_init, steps=steps,
+        files_written=files_written,
+        status="ok" if not errors else "error",
+        error="; ".join(errors) if errors else None,
+    )
+
+
+def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Tool 1's general-purpose entry point: fetch every group window this
+    run publishes, into DATA_RAW_LATEST rather than DATA_RAW. The AROME/
+    ARPEGE group layout already partitions the model's ENTIRE forecast
+    horizon into fixed windows, so "full range" here is simply every known
+    group - no per-step computation needed like herbie_fetcher's GFS path."""
+    spec = _MODEL_SPECS.get(model_name)
+    if spec is None:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps={}, status="error",
+            error=f"meteofrance_fetcher has no URL spec for model '{model_name}' "
+                  f"(only arpege_europe/arome_france are supported)",
+        )
+
+    paquet = model_config.get("cloud", {}).get("levels", {}).get("package", "SP2")
+    out_dir = raw_latest_output_dir(model_name, run_init)
+
+    files_written, errors = _download_groups(
+        model_name=model_name, spec=spec, run_init=run_init, groups=spec["groups"],
+        paquet=paquet, out_dir=out_dir,
+    )
+
+    if not files_written:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps={}, status="error",
+            error="; ".join(errors) if errors else "no groups downloaded",
+        )
+
+    return FetchResult(
+        model=model_name, run_init=run_init, steps={},
         files_written=files_written,
         status="ok" if not errors else "error",
         error="; ".join(errors) if errors else None,

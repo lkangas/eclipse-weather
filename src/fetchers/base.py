@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from src.config import DATA_RAW, eclipse_config
+from src.config import DATA_RAW, DATA_RAW_LATEST, eclipse_config
 
 DEFAULT_ECLIPSE_T = "2026-08-12T18:30:00Z"
 
@@ -71,25 +71,59 @@ def nearest_step(
     return step, abs(step - target_offset_hours)
 
 
-def steps_for_run(model_config: dict, run_init: datetime) -> dict[str, tuple[int, float] | None]:
-    """For each of the eclipse archive's target valid times, the (step, misalignment)
-    this run_init/model can supply, or None if this run doesn't reach that valid time.
-
-    `cycles:` gives a max forecast length PER CYCLE HOUR (e.g. gefs_extended's 00Z
-    reaches 840h but 06/12/18Z only reach 384h; ecmwf_hres and ukmo_global have
-    similar splits) - this must additionally cap `steps:`'s shared cadence spec,
-    or a short cycle gets asked for steps its run was never going to publish.
+def _available_steps_for_cycle(model_config: dict, run_init: datetime) -> list[int]:
+    """Every published forecast-hour step for this specific run_init's cycle,
+    capped by that cycle's own max reach. `cycles:` gives a max forecast
+    length PER CYCLE HOUR (e.g. gefs_extended's 00Z reaches 840h but
+    06/12/18Z only reach 384h; ecmwf_hres and ukmo_global have similar
+    splits) - this must additionally cap `steps:`'s shared cadence spec, or
+    a short cycle gets asked for steps its run was never going to publish.
     """
-    valid_hours = eclipse_config()["archive_valid_hours_utc"]
     available = generate_available_steps(model_config["steps"])
     cycle_max = model_config.get("cycles", {}).get(f"{run_init.hour:02d}")
     if cycle_max is not None:
         available = [s for s in available if s <= cycle_max]
+    return available
+
+
+def steps_for_run(model_config: dict, run_init: datetime) -> dict[str, tuple[int, float] | None]:
+    """For each of the eclipse archive's target valid times, the (step, misalignment)
+    this run_init/model can supply, or None if this run doesn't reach that valid time.
+    """
+    valid_hours = eclipse_config()["archive_valid_hours_utc"]
+    available = _available_steps_for_cycle(model_config, run_init)
     result = {}
     for valid_time in target_valid_times(valid_hours):
         offset_hours = (valid_time - run_init).total_seconds() / 3600
         result[valid_time.isoformat()] = nearest_step(available, offset_hours)
     return result
+
+
+def full_range_steps(model_config: dict, run_init: datetime) -> list[int]:
+    """Every available step for this run, uncropped - Tool 1's general-
+    purpose "latest run of every model" explorer wants the whole forecast
+    horizon a run actually publishes, not just the eclipse-day archive
+    hours steps_for_run() targets."""
+    return _available_steps_for_cycle(model_config, run_init)
+
+
+def latest_available_run_init(model_config: dict, now: datetime) -> datetime | None:
+    """The most recent run_init that should actually be published by now
+    (init time + this model's own publication_lag_h already elapsed) - Tool
+    1 wants the true current state of each model, not a run whose data
+    isn't out yet and would just 404."""
+    candidates = cycle_run_inits(model_config["cycles"], now, lookback_hours=48)
+    lag = model_config.get("publication_lag_h", [0])
+    due = [c for c in candidates if due_time(lag, c) <= now]
+    return due[-1] if due else None
+
+
+def raw_latest_output_dir(model_name: str, run_init: datetime) -> Path:
+    """Tool 1's own storage root (DATA_RAW_LATEST) - see src/config.py for
+    why this is kept separate from DATA_RAW."""
+    d = DATA_RAW_LATEST / model_name / format_init_dir(run_init)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
 
 
 def cycle_run_inits(cycles: dict, now: datetime, lookback_hours: int = 48) -> list[datetime]:

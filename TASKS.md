@@ -318,6 +318,60 @@ user, not Claude Code — surface them, don't attempt.
       live-confirmed physical reality, not a bug: only 00Z/12Z cycles survive
       for ukmo_global, exactly matching T06's documented 06Z/18Z 67h-cap
       finding.
+- [x] **T34** Tool 1: "latest run of every model" explorer, first real slice
+      done 2026-07-23 (gfs + arome_france only — 13 more models are a
+      follow-up). User asked for a general-purpose model-status explorer,
+      deliberately decoupled from the eclipse date: one compact stacked row
+      per model (like the Gantt, but each row shows that model's own
+      latest-run steps, not eclipse coverage), a draggable time cursor
+      spanning all rows highlighting each row's own nearest step, a model
+      selector via clicking a row, a quantity selector (cloud L/M/H/total to
+      start — combined-cloud+rain and surface temp are placeholders pending
+      their own field-availability research, same rigor as T01-T12), and an
+      adjustable right-extent slider so short-range/dense models can be
+      scrubbed with more pixel precision once longer-range models fall off
+      the edge. Iterated live with the user through several rounds on a
+      mock-data prototype (`src/viz/web/tool1_prototype.html`) before any
+      real wiring — fixed real bugs found each round: cursor/tick pixel
+      misalignment (percentage-based positioning doesn't share a coordinate
+      space with a differently-inset element), tick aliasing (sub-pixel
+      percentages render inconsistently at 1px vs 2px — fixed by rounding to
+      whole pixels, then had to redo that per-resize since a one-time round
+      broke responsiveness), and multiple simultaneous "nearest tick"
+      highlights on dense rows (was a fixed time-window, fixed to exactly one
+      nearest step per row).
+      **Real backend work**: this tool wants each model's FULL forecast
+      range, not the 3 eclipse-hour steps the rest of the archiver fetches —
+      a genuinely different fetch shape. Added `full_range_steps()` and
+      `latest_available_run_init()` to `src/fetchers/base.py` (refactored
+      `steps_for_run`'s cycle-capping logic into a shared `_available_steps_
+      for_cycle()` first, no behavior change there), and a parallel
+      `fetch_full_range()` entry point in `herbie_fetcher.py` (gfs) and
+      `meteofrance_fetcher.py` (arome_france) alongside the existing
+      eclipse-cropped `fetch()` — shared download-loop helpers extracted so
+      the mechanics aren't duplicated. Writes to a NEW `DATA_RAW_LATEST`
+      tree (`data/raw_latest/`, see `src/config.py`), deliberately separate
+      from the eclipse archiver's `data/raw/` and its `.extracted`
+      bookkeeping, per explicit user direction that dev-machine data doesn't
+      need cleanup (disk isn't constrained here — see private notes) but
+      shouldn't be conflated with the eclipse-specific tree either.
+      `src/viz/tool1_renderer.py` renders one (model, run_init, step, field)
+      PNG at a time, reusing existing extractor grid-read helpers (same
+      reuse pattern as T31(c)); `scripts/generate_tool1_manifest.py` batch-
+      renders every real step × 4 fields and writes a manifest.json the
+      widget fetches directly (`src/viz/web/tool1_real.html`).
+      **Verified for real, live endpoints**: gfs run 2026-07-23T00Z, 209/209
+      steps reachable, 208 fetched cleanly (1 transient failure on f000,
+      not investigated further yet); arome_france run 2026-07-23T03Z, 9/9
+      group files, 52 hourly steps. 890MB raw GRIB2 for just these 2 models'
+      single latest run — a real data point for the eventual petzval
+      retention decision (T25), not acted on now per explicit "measure but
+      don't gate desktop dev work on it" direction. 1044 real PNGs rendered
+      (31MB), spot-checked for non-blank content (pixel std-dev, not just
+      file existence), and the real widget verified end-to-end in-browser
+      against them: correct per-model run_init labels, correct real image
+      swap on model/field/cursor changes, correct extent auto-detected from
+      the real max step (384h).
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
