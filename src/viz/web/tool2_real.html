@@ -470,8 +470,17 @@ function layoutTicks() {
 }
 
 function nearestStep(run, targetTime) {
-  if (!run.steps.length) return null;
-  return run.steps.reduce((best, h) => {
+  // Only consider steps still inside the extent slider's current window -
+  // cursorTime itself is always clamped to [AXIS_START, AXIS_START+axisRightMs]
+  // (see timeFromClientX), but without this filter the "nearest" step could
+  // be one the extent slider has hidden (e.g. a real step just past a cadence
+  // gap - 240h/246h for gefs_extended - that's closer in raw distance than
+  // the last VISIBLE step). That desyncs the displayed step/valid-time from
+  // anything actually drawn on the (narrowed) axis - reads as the cursor not
+  // lining up with the model's hours at all.
+  const visible = run.steps.filter(h => stepValidTime(run, h) - AXIS_START <= axisRightMs);
+  if (!visible.length) return null;
+  return visible.reduce((best, h) => {
     const bestDiff = Math.abs(stepValidTime(run, best) - targetTime);
     const diff = Math.abs(stepValidTime(run, h) - targetTime);
     return diff < bestDiff ? h : best;

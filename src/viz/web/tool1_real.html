@@ -429,8 +429,14 @@ function layoutTicks() {
 }
 
 function nearestStep(model, targetTime) {
-  if (!model.steps.length) return null;
-  return model.steps.reduce((best, h) =>
+  // Only consider steps still inside the extent slider's current window
+  // (same fix as Tool 2's own nearestStep - see that file for the full
+  // rationale): without this, a step the slider has hidden past a cadence
+  // gap can be picked as "nearest" even though nothing on the visible,
+  // narrowed axis corresponds to it.
+  const visible = model.steps.filter(h => stepValidTime(model, h) - AXIS_START <= axisRightMs);
+  if (!visible.length) return null;
+  return visible.reduce((best, h) =>
     Math.abs(stepValidTime(model, h) - targetTime) < Math.abs(stepValidTime(model, best) - targetTime) ? h : best
   );
 }
