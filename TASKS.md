@@ -585,10 +585,9 @@ user, not Claude Code — surface them, don't attempt.
         units convention). `ecmwf_ens` confirmed across all 50 real `pf`
         members (same "zero cf messages" pattern already known from its
         cloud fields - not a new finding, consistent behavior).
-        `aifs_ens` not independently re-tested (same model family/client as
-        aifs_single + same ensemble behavior as ecmwf_ens) - very likely
-        identical, but genuinely unverified; confirm before building against
-        it, per constraint #6.
+        `aifs_ens` independently confirmed too (closed the gap right after
+        first writing this note) - `t2m`/`tp` present across all 50 members,
+        same shape pattern as its own cloud fields.
       - **icon_eu/icon_global (DWD opendata)**: confirmed live, HTTP 200 on
         the real bucket for both `T_2M` and `TOT_PREC` at the exact same
         URL convention (`{param_lower}/..._{PARAM}.grib2.bz2`) the cloud
