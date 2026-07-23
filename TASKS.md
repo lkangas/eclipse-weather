@@ -614,10 +614,10 @@ user, not Claude Code — surface them, don't attempt.
       sibling sections - not attempted here, this task was research only,
       same "confirm findings, then a separate scoping decision" gate T01-T09
       themselves went through before code was built against them).
-- [ ] **T39** Tool 3 scope decided, 2026-07-23 (revised same day, twice) -
-      not started. Original vision (way back when the 3 tools were first
-      described): "eclipse valid-time weather, models stacked, slider over
-      run-inits" - a multi-model view at a fixed valid time.
+- [x] **T39** Tool 3, 2026-07-23 (design revised same day, twice; wired to
+      real data the same day). Original vision (way back when the 3 tools
+      were first described): "eclipse valid-time weather, models stacked,
+      slider over run-inits" - a multi-model view at a fixed valid time.
       **First revision** (same day): user observed that once the eclipse
       date falls inside Tool 2's window for a given model, Tool 3 "reduces
       to" Tool 2 with the time cursor parked on the eclipse valid time and
@@ -647,8 +647,46 @@ user, not Claude Code — surface them, don't attempt.
         for real cross-model comparison at a glance) vs. "show just the
         clicked row" (one larger image, like Tool 1/2's existing single
         mapArea panel).
-      Not yet built - same "mock prototype first, confirm the interaction,
-      then wire real data" sequence as T34/T36 before this goes further.
+      **Mock prototype reviewed, 2 real bugs found and fixed same day**: the
+      draggable cursor defaults to exactly "now", so the green now-line
+      (originally a 1px line, same z-index scheme as Tool 1/2) was
+      completely hidden underneath the opaque cursor line at load - fixed
+      by making it a wider (5px) translucent band at a lower z-index, so it
+      peeks out around the thinner cursor regardless of position. The
+      target-time label was also overflowing past the stack's right edge
+      when the marker sits near the axis end - fixed with a `.flip` class
+      that switches the label to the line's left side once it's within
+      90px of the edge.
+      **Wired to real data same day** (renamed `tool3_prototype.html` ->
+      `tool3_real.html`). New `scripts/generate_tool3_manifest.py`: per
+      model, per already-archived run_init (capped to the 4 most recent -
+      renderings aren't final, full backfill waits for the rendering
+      approach itself to settle, per explicit user direction), renders one
+      frame per field at the step nearest a fixed target valid time. Uses
+      the project's own `ECLIPSE_T` env-var convention (not a new
+      mechanism) - run as a one-off `docker exec` against the live
+      `eclipse-scheduler` container with `ECLIPSE_T` overridden, never
+      touching the container's own environment. Target picked from real
+      current archive reach (`2026-07-25T11:00Z` - close to arome_france's
+      own real 51h-reach boundary from its actual latest archived run,
+      which turned out to be one cycle older than a first estimate assumed
+      - a genuine, informative real-data finding, not a bug: publication
+      timing doesn't always match "should be available by now" math).
+      **Real result**: 9/10 models had all 4 recent runs covering the
+      target; arome_france (shortest reach) had only 1/4 - exactly the
+      realistic mixed-coverage picture the noCoverage tick styling exists
+      to show. Also surfaced that several OLDER runs have `has_data: all
+      false` despite `covers: true` for every field - the step is within
+      the run's nominal reach but wasn't actually fully fetched (real,
+      pre-existing archive gaps for those specific historical runs, not a
+      new bug - the existing has_data mechanism catches and displays this
+      honestly, exactly as designed).
+      Verified by directly executing the real page's own
+      `loadManifest()`/`init()` against the real generated manifest (10
+      models, real image paths, correct has_data flags, zero errors) -
+      live screenshot blocked by a Browser-pane restriction this session
+      (dynamically-inserted `<script>` tags don't execute here), not a
+      code issue.
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
