@@ -27,12 +27,18 @@ import shutil
 import tempfile
 import time
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from herbie import Herbie
 
-from src.fetchers.base import FetchResult, raw_output_dir, steps_for_run
+from src.fetchers.base import (
+    FetchResult,
+    full_range_steps,
+    raw_latest_output_dir,
+    raw_output_dir,
+    steps_for_run,
+)
 from src.fetchers.registry import register
 
 log = logging.getLogger(__name__)
@@ -203,14 +209,7 @@ def _download_one(
     raise last_exc
 
 
-@register("herbie")
-def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Fetch cloud-cover GRIB2 subsets for `model_name` at `run_init`.
-
-    Only gfs and gefs_extended are registered under the "herbie" fetch key
-    in config/models.yaml; both are handled by this one function per
-    src/fetchers/registry.py's contract.
-    """
+def _require_spec(model_name: str, model_config: dict) -> dict:
     if model_name not in _MODEL_SPECS:
         raise KeyError(
             f"herbie_fetcher does not know model '{model_name}'. "
@@ -228,23 +227,25 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
             "update _MODEL_SPECS (and re-verify the search regexes against a "
             "real idx file) before trusting this fetcher again."
         )
+    return spec
 
-    steps = steps_for_run(model_config, run_init)
-    result = FetchResult(model=model_name, run_init=run_init, steps=steps)
 
-    reachable = _unique_steps(steps)
-    if not reachable:
-        result.status = "not_yet_covering"
-        return result
-
-    out_dir = raw_output_dir(model_name, run_init)
+def _download_steps(
+    *, model_name: str, spec: dict, run_init: datetime, steps: list[int], out_dir: Path,
+    result: FetchResult,
+) -> None:
+    """Shared download loop: fetch every (step, product) combo in `steps`
+    into `out_dir`, idempotently, tolerating per-step/product failures.
+    Used by both fetch() (eclipse-cropped steps) and fetch_full_range()
+    (every step the run publishes) - the download mechanics don't care
+    which step list drove them."""
     naive_date = _naive_utc(run_init)
     member = spec["member"]
 
     errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix="herbie_staging_") as staging:
         staging_dir = Path(staging)
-        for step in reachable:
+        for step in steps:
             for f in spec["fetches"]:
                 dest_path = out_dir / _output_filename(model_name, member, step, f.suffix)
 
@@ -288,4 +289,57 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                 result.error,
             )
 
+
+@register("herbie")
+def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Fetch cloud-cover GRIB2 subsets for `model_name` at `run_init`.
+
+    Only gfs and gefs_extended are registered under the "herbie" fetch key
+    in config/models.yaml; both are handled by this one function per
+    src/fetchers/registry.py's contract.
+    """
+    spec = _require_spec(model_name, model_config)
+
+    steps = steps_for_run(model_config, run_init)
+    result = FetchResult(model=model_name, run_init=run_init, steps=steps)
+
+    reachable = _unique_steps(steps)
+    if not reachable:
+        result.status = "not_yet_covering"
+        return result
+
+    out_dir = raw_output_dir(model_name, run_init)
+    _download_steps(
+        model_name=model_name, spec=spec, run_init=run_init, steps=reachable,
+        out_dir=out_dir, result=result,
+    )
+    return result
+
+
+def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Tool 1's general-purpose entry point: fetch EVERY step this run
+    publishes (not just the eclipse-day archive hours `fetch()` targets),
+    into DATA_RAW_LATEST rather than DATA_RAW - see src/config.py for why
+    the two are kept separate. Same download mechanics as fetch(), just a
+    different step source and output root."""
+    spec = _require_spec(model_name, model_config)
+
+    reachable = full_range_steps(model_config, run_init)
+    # No eclipse valid-time targets here - each step's own natural valid
+    # time, zero misalignment, keeps FetchResult.steps meaningful anyway.
+    steps = {
+        (run_init + timedelta(hours=h)).isoformat(): (h, 0.0)
+        for h in reachable
+    }
+    result = FetchResult(model=model_name, run_init=run_init, steps=steps)
+
+    if not reachable:
+        result.status = "not_yet_covering"
+        return result
+
+    out_dir = raw_latest_output_dir(model_name, run_init)
+    _download_steps(
+        model_name=model_name, spec=spec, run_init=run_init, steps=reachable,
+        out_dir=out_dir, result=result,
+    )
     return result
