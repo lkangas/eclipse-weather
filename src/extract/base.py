@@ -9,7 +9,7 @@ from pathlib import Path
 
 import polars as pl
 
-from src.config import POINTS_PARQUET, load_sites
+from src.config import DATA_RAW, POINTS_PARQUET, load_sites
 
 VALID_PROVENANCE = {"native", "derived", "total_only"}
 
@@ -55,6 +55,29 @@ def append_points(rows: list[PointRow]) -> None:
         existing = pl.read_parquet(POINTS_PARQUET)
         df = pl.concat([existing, df], how="vertical_relaxed")
     df.write_parquet(POINTS_PARQUET)
+
+
+def _init_dir_name(run_init: datetime) -> str:
+    """Same YYYYMMDDHH convention as src/fetchers/base.py's format_init_dir -
+    reimplemented locally (not imported) since importing anything under
+    src.fetchers triggers its package __init__, which eagerly imports
+    herbie/cfgrib and crashes on a Windows box with no ecCodes install."""
+    return run_init.strftime("%Y%m%d%H")
+
+
+def already_extracted(model_name: str, run_init: datetime) -> bool:
+    """Idempotency check mirroring src.fetchers.base.already_fetched - has
+    this run already been written to points.parquet? Needed because
+    already_fetched() stays true forever once a run is on disk, so without
+    a separate marker, re-extracting on every scheduler tick would append
+    duplicate rows to points.parquet."""
+    return (DATA_RAW / model_name / _init_dir_name(run_init) / ".extracted").exists()
+
+
+def mark_extracted(model_name: str, run_init: datetime) -> None:
+    marker = DATA_RAW / model_name / _init_dir_name(run_init) / ".extracted"
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    marker.touch()
 
 
 def nearest_gridpoint(
