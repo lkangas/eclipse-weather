@@ -24,6 +24,7 @@ RUN uv sync --frozen --no-dev
 
 COPY config/ config/
 COPY src/ src/
+COPY scripts/ scripts/
 
 # data/raw and data/points.parquet must be a mounted volume in production —
 # a missed run is unrecoverable (CLAUDE.md hard constraint #1), so the
