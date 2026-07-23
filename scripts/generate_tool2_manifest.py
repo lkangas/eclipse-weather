@@ -32,7 +32,7 @@ from src.viz.tool1_renderer import OUTPUT_DIR, render_frame
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_tool2_manifest")
 
-FIELDS = ["total", "low", "mid", "high"]
+FIELDS = ["total", "low", "mid", "high", "prob_clear"]
 # Renderings aren't final yet (styling/polish still pending) - cap this
 # initial real-data pass to the most recent few runs per model so it stays
 # tractable. The real backfill across full run history happens once the

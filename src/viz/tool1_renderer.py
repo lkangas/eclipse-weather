@@ -92,6 +92,8 @@ def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple |
 def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     if field == "total":
         return None  # SP2 has no native total field (meteofrance_extractor.py's own note)
+    if field == "prob_clear":
+        return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arome_france", run_init):
         ds = _cloud_dataset(path)
@@ -111,6 +113,8 @@ def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tupl
     T31c's own _field_arpege for the same reasoning."""
     if field == "total":
         return None
+    if field == "prob_clear":
+        return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arpege_europe", run_init):
         ds = _cloud_dataset(path)
@@ -185,6 +189,36 @@ def _read_ecmwf_grid(path: Path, shortname: str, scale: float, bbox: dict) -> tu
     return _crop(da0.latitude.values, da0.longitude.values, mean_values * scale, bbox)
 
 
+_PROB_CLEAR_THRESHOLD_PCT = 20.0  # matches site_ranking.py's CLEAR_THRESHOLD_PCT_DEFAULT (T32) -
+                                   # keep these in sync. Not imported directly from site_ranking.py
+                                   # to avoid pulling its polars/matplotlib report machinery into
+                                   # the render path for one shared constant.
+
+
+def _read_ecmwf_grid_prob_clear(path: Path, shortname: str, scale: float, bbox: dict) -> tuple | None:
+    """Like _read_ecmwf_grid, but instead of the ensemble MEAN, computes the
+    fraction of members with cloud_low below _PROB_CLEAR_THRESHOLD_PCT at
+    each grid cell (as a percent 0-100, same scale/rendering convention as
+    every other field) - the map analogue of site_ranking.py's own pooled
+    P(cloud_low < 20%) point metric (T32), just per-pixel instead of
+    per-named-site. `scale` must be applied BEFORE thresholding (unlike the
+    plain mean, which commutes with a linear scale applied after averaging) -
+    comparing against a threshold is not a linear operation.
+
+    A deterministic single-member file degrades to a binary 0%/100% map per
+    cell - not a special case, same "no special-casing" philosophy already
+    used by _read_ecmwf_grid's own mean-of-one-member no-op."""
+    if not path.exists():
+        return None
+    members = _iter_members(path, shortname)
+    if not members:
+        return None
+    stacked = np.stack([da.values for _, da in members], axis=0) * scale
+    prob_pct = (stacked < _PROB_CLEAR_THRESHOLD_PCT).mean(axis=0) * 100.0
+    _, da0 = members[0]
+    return _crop(da0.latitude.values, da0.longitude.values, prob_pct, bbox)
+
+
 def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Native total (tcc) + derived L/M/H from pressure-level q/t, same
     provenance split as ecmwf_extractor.py's _extract_hres (two different
@@ -232,15 +266,24 @@ def _aifs_field(
 ) -> tuple | None:
     """Shared by aifs_single/aifs_ens - both write one cloud_f{step}.grib2
     with tcc/lcc/mcc/hcc all genuinely native (ecmwf_extractor.py's
-    _aifs_rows note), unlike hres's native-total/derived-levels split."""
+    _aifs_rows note), unlike hres's native-total/derived-levels split.
+
+    field="prob_clear" is the one exception to the total/low/mid/high set -
+    it's not a raw model field at all, it's P(cloud_low < threshold) computed
+    across members (see _read_ecmwf_grid_prob_clear). Reuses the "low" cloud
+    shortname (lcc) regardless of which AIFS product this is - aifs_single
+    degrades to a binary per-cell map, aifs_ens gives a real 0-100% spread."""
     model_config = get_model(model_name)
     path = DATA_RAW / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
     if field == "total":
         scale = _percent_scale(model_config["cloud"]["total"], "total")
         shortname = model_config["cloud"]["total"]["param"]
-    else:
+        return _read_ecmwf_grid(path, shortname, scale, bbox)
+    if field == "prob_clear":
         scale = _percent_scale(model_config["cloud"]["levels"], "levels")
-        shortname = _AIFS_SHORTNAME_BY_FIELD[field]
+        return _read_ecmwf_grid_prob_clear(path, _AIFS_SHORTNAME_BY_FIELD["low"], scale, bbox)
+    scale = _percent_scale(model_config["cloud"]["levels"], "levels")
+    shortname = _AIFS_SHORTNAME_BY_FIELD[field]
     return _read_ecmwf_grid(path, shortname, scale, bbox)
 
 
@@ -271,6 +314,8 @@ def _icon_path(model_name: str, run_init: datetime, step: int, param: str) -> Pa
 def _icon_eu_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Already regular lat/lon - direct read, no remap (unlike icon_global
     below)."""
+    if field == "prob_clear":
+        return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     path = _icon_path("icon_eu", run_init, step, param)
     if not path.exists():
@@ -286,6 +331,8 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     weights (already built/verified for the eclipse archiver's own
     DATA_RAW-rooted icon_global path) to remap+crop to Iberia in one call,
     same as cloud_field_comparison.py's _field_icon_global."""
+    if field == "prob_clear":
+        return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     src_path = _icon_path("icon_global", run_init, step, param)
     if not src_path.exists():
