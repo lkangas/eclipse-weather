@@ -1042,6 +1042,13 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
 
 ## Deferred / not now
 
+- **Mobile support for Tool 1/2/3's cursors + general mobile operation.**
+  The hit-zone-gated drag cursors (T34/T36/T39) were built and tuned for
+  mouse interaction only - dragging needs to work with touch events too,
+  and the tools more broadly need real mobile-usability attention (layout,
+  tap targets, hit-zone sizing at touch scale) rather than just being
+  usable-in-a-pinch on a phone browser. Explicitly deferred 2026-07-23 -
+  do not start until asked.
 - Met Office DataHub key **[human]** — only pursue if T06 shows the
   Open-Meteo path insufficient.
 - Deployment box + healthcheck account **[human]**.
