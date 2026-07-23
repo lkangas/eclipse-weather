@@ -11,21 +11,6 @@
     margin: 0;
     padding: 24px;
   }
-  h1 {
-    font-size: 13px;
-    font-weight: 600;
-    letter-spacing: 0.03em;
-    text-transform: uppercase;
-    color: #232320;
-    margin: 0 0 4px;
-  }
-  p.note {
-    font-size: 11.5px;
-    color: #7a776c;
-    margin: 0 0 18px;
-    max-width: 760px;
-    line-height: 1.5;
-  }
   .controls {
     display: flex;
     align-items: center;
@@ -76,12 +61,14 @@
     background: #fff;
     padding: 5px 14px 5px 0;
     user-select: none;
+    cursor: default;
   }
+  #stackWrap.hint-time { cursor: ew-resize; }
+  #stackWrap.hint-row { cursor: ns-resize; }
   .row {
     display: flex;
     align-items: center;
     height: 13px;
-    cursor: pointer;
   }
   .row:hover { background: #f6f4ef; }
   .row.selected { background: #f0e8d2; }
@@ -214,17 +201,6 @@
 </style>
 </head>
 <body>
-
-<h1>Tool 2 — one model, stacked historical runs (MOCK DATA — interaction prototype)</h1>
-<p class="note">
-  Pick a model; each row below is one archived run_init of that model, newest on top.
-  Unlike Tool 1 (rows = different models sharing a relative "+Nh since init" axis), here every
-  row belongs to the SAME model but has a DIFFERENT init time — so the shared axis is
-  absolute valid time, not hours-since-init. Drag the cursor to scrub through calendar time;
-  each row highlights its own nearest step to that valid time. Click a row to select which
-  run's frame is shown below. The green line marks "now". Mock data only — no real fetch/render
-  behind this yet, feedback wanted on the interaction before wiring it up.
-</p>
 
 <div class="controls">
   <div>
@@ -402,9 +378,8 @@ function loadModel(modelId) {
     track.className = "rowTrack";
     row.appendChild(track);
 
-    row.addEventListener("click", () => selectRun(idx));
     rowsEl.appendChild(row);
-    builtRows.push({ run, track });
+    builtRows.push({ run, row, track });
   });
 
   cursorTime = new Date(Math.min(Math.max(cursorTime.getTime(), AXIS_START.getTime()), AXIS_START.getTime() + axisRightMs));
@@ -518,19 +493,92 @@ function updateCursorUI() {
   mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
 }
 
-function hourFromClientX(clientX) {
+function timeFromClientX(clientX) {
   const rect = axisTrack.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
   return new Date(AXIS_START.getTime() + frac * axisRightMs);
 }
 
-let dragging = false;
-function startDrag(clientX) { dragging = true; cursorTime = hourFromClientX(clientX); updateCursorUI(); }
-function moveDrag(clientX) { if (dragging) { cursorTime = hourFromClientX(clientX); updateCursorUI(); } }
-function endDrag() { dragging = false; }
+// Two independent drag handles, each only grabbable near its OWN current
+// position: the vertical (time) cursor horizontally, the horizontal (row)
+// cursor vertically - the latter has no drawn line, the row highlight IS
+// its visual. Clicking away from both still jumps both immediately (today's
+// behavior); dragging only "sticks" to a handle grabbed within its hit zone.
+const CURSOR_HIT_PX = 8;   // horizontal tolerance around the vertical cursor line
+const ROW_HIT_PAD_PX = 6;  // vertical tolerance around the selected row's own band
 
-stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
-window.addEventListener("mousemove", e => moveDrag(e.clientX));
+function isNearCursorLine(clientX) {
+  const rect = cursorLine.getBoundingClientRect();
+  return Math.abs(clientX - (rect.left + rect.width / 2)) <= CURSOR_HIT_PX;
+}
+
+function isNearSelectedRow(clientY) {
+  if (selectedRunIdx === null || !builtRows[selectedRunIdx]) return false;
+  const r = builtRows[selectedRunIdx].row.getBoundingClientRect();
+  return clientY >= r.top - ROW_HIT_PAD_PX && clientY <= r.bottom + ROW_HIT_PAD_PX;
+}
+
+function rowIndexAtClientY(clientY) {
+  if (!builtRows.length) return null;
+  for (let i = 0; i < builtRows.length; i++) {
+    const r = builtRows[i].row.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom) return i;
+  }
+  if (clientY < builtRows[0].row.getBoundingClientRect().top) return 0;
+  if (clientY > builtRows[builtRows.length - 1].row.getBoundingClientRect().bottom) return builtRows.length - 1;
+  return null;
+}
+
+// Precedence: the vertical (time) cursor wins where both hit zones overlap.
+function hitZoneAt(clientX, clientY) {
+  if (isNearCursorLine(clientX)) return "time";
+  if (isNearSelectedRow(clientY)) return "row";
+  return null;
+}
+
+function applyHoverHint(clientX, clientY) {
+  const zone = hitZoneAt(clientX, clientY);
+  stackWrap.classList.toggle("hint-time", zone === "time");
+  stackWrap.classList.toggle("hint-row", zone === "row");
+}
+
+let dragMode = null; // "time" | "row" | null (a plain click, no continued drag-follow)
+
+function startDrag(clientX, clientY) {
+  dragMode = hitZoneAt(clientX, clientY);
+  if (dragMode === "time") {
+    cursorTime = timeFromClientX(clientX);
+    updateCursorUI();
+  } else if (dragMode === "row") {
+    const idx = rowIndexAtClientY(clientY);
+    if (idx !== null) selectRun(idx);
+  } else {
+    // Away from both handles: plain click still jumps both, same as before.
+    cursorTime = timeFromClientX(clientX);
+    const idx = rowIndexAtClientY(clientY);
+    if (idx !== null) selectRun(idx); else updateCursorUI();
+  }
+  applyHoverHint(clientX, clientY);
+}
+
+function moveDrag(clientX, clientY) {
+  if (dragMode === "time") {
+    cursorTime = timeFromClientX(clientX);
+    updateCursorUI();
+  } else if (dragMode === "row") {
+    const idx = rowIndexAtClientY(clientY);
+    if (idx !== null && idx !== selectedRunIdx) selectRun(idx);
+  }
+  applyHoverHint(clientX, clientY);
+}
+
+function endDrag() { dragMode = null; }
+
+stackWrap.addEventListener("mousedown", e => {
+  if (e.target.closest(".preloadBtn")) return;
+  startDrag(e.clientX, e.clientY);
+});
+window.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
 window.addEventListener("mouseup", endDrag);
 quantitySelect.addEventListener("change", updateCursorUI);
 modelSelect.addEventListener("change", () => loadModel(modelSelect.value));
