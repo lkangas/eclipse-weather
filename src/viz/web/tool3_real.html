@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Tool 3 — eclipse valid-time, all models, run-init slider (real data)</title>
+<style>
+  body {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    background: #f6f4ef;
+    color: #232320;
+    margin: 0;
+    padding: 24px;
+  }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    margin-bottom: 12px;
+    font-size: 11.5px;
+    border-top: 1px solid #232320;
+    border-bottom: 1px solid #d8d4c8;
+    padding: 6px 0;
+  }
+  .controls label {
+    color: #7a776c;
+    margin-right: 6px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 9.5px;
+  }
+  select {
+    background: #fff;
+    color: #232320;
+    border: 1px solid #232320;
+    border-radius: 0;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: 11.5px;
+  }
+  #extentInput { width: 150px; accent-color: #8b3a2f; vertical-align: middle; }
+  #extentReadout { font-variant-numeric: tabular-nums; color: #55534c; margin-left: 4px; white-space: nowrap; }
+  .viewToggle { display: flex; border: 1px solid #232320; }
+  .viewToggle button {
+    font-family: inherit;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    background: #fff;
+    color: #7a776c;
+    border: none;
+    padding: 5px 10px;
+    cursor: pointer;
+  }
+  .viewToggle button + button { border-left: 1px solid #232320; }
+  .viewToggle button.active { background: #232320; color: #f6f4ef; }
+  #cursorReadout {
+    margin-left: auto;
+    font-variant-numeric: tabular-nums;
+    color: #8b3a2f;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  #stackWrap {
+    position: relative;
+    border: 1px solid #232320;
+    background: #fff;
+    padding: 5px 14px 5px 0;
+    user-select: none;
+    cursor: ew-resize;
+  }
+  .row { display: flex; align-items: center; height: 15px; cursor: pointer; }
+  .row:hover { background: #f6f4ef; }
+  .row.clicked { background: #f0e8d2; }
+  .rowLabel {
+    width: 100px;
+    flex: none;
+    font-size: 9.5px;
+    color: #55534c;
+    padding-left: 10px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .row.clicked .rowLabel { color: #232320; font-weight: 700; }
+  .rowTrack { position: relative; flex: 1; height: 100%; }
+  .tick { position: absolute; top: 3px; width: 2px; height: 9px; background: #a19e92; }
+  .tick.noCoverage { background: #d8d4c8; }
+  .row.clicked .tick { background: #8a5a20; }
+  .tick.near { width: 3px; height: 15px; top: 0; background: #8b3a2f; }
+  .tick.near.noCoverage { background: #c99; }
+  #cursorLine {
+    position: absolute; top: 0; bottom: 0; width: 1px;
+    background: #8b3a2f; pointer-events: none; z-index: 5;
+  }
+  #cursorHandle {
+    position: absolute; top: -7px; width: 0; height: 0; margin-left: -5px;
+    border-left: 5px solid transparent; border-right: 5px solid transparent;
+    border-top: 7px solid #8b3a2f; z-index: 6;
+  }
+  #eclipseLine {
+    position: absolute; top: 0; bottom: 0; width: 1px;
+    background: #5a4a8b; pointer-events: none; z-index: 4;
+  }
+  #eclipseLine .tag {
+    position: absolute; top: -14px; left: 3px; font-size: 8.5px; color: #5a4a8b;
+    white-space: nowrap; text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  #eclipseLine.flip .tag { left: auto; right: 3px; }
+  /* Wider + lower z-index than the cursor/eclipse lines on purpose: if the
+     draggable cursor (1px, z-index 5) ever sits exactly on "now" (its own
+     default position), this wider translucent band still shows around it
+     instead of being fully occluded. */
+  #nowLine {
+    position: absolute; top: 0; bottom: 0; width: 5px; margin-left: -2px;
+    background: rgba(47, 111, 63, 0.4); pointer-events: none; z-index: 3;
+  }
+  #axisRow { display: flex; align-items: center; height: 14px; margin-top: 3px; border-top: 1px solid #232320; }
+  #axisRow .rowLabel { visibility: hidden; }
+  .axisTick { position: absolute; top: 3px; font-size: 9px; color: #7a776c; transform: translateX(-50%); white-space: nowrap; }
+  .legend { font-size: 9.5px; color: #7a776c; margin-top: 6px; }
+  .legend span { margin-right: 16px; }
+  .legend .sw { display: inline-block; width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
+
+  #mapArea {
+    margin-top: 18px; border: 1px solid #232320; background: #fff;
+    min-height: 260px; display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 6px; color: #7a776c; font-size: 12px; padding: 10px;
+  }
+  #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
+  #mapArea .placeholder-tag { font-size: 9.5px; color: #a8a498; text-transform: uppercase; letter-spacing: 0.09em; }
+
+  #gallery {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+  }
+  .galleryCell {
+    border: 1px solid #232320;
+    background: #fff;
+    min-height: 140px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 10px;
+    color: #7a776c;
+  }
+  .galleryCell .cellTitle { font-weight: 700; color: #232320; font-size: 10.5px; }
+  .galleryCell .cellImg { width: 100%; flex: 1; object-fit: contain; display: none; }
+  .galleryCell .cellBody {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    color: #a8a498;
+    font-size: 9.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    border: 1px dashed #d8d4c8;
+  }
+  .galleryCell.noCoverage .cellBody { color: #c99; border-color: #e6c9c9; }
+</style>
+</head>
+<body>
+
+<div class="controls">
+  <div>
+    <label for="quantitySelect">Quantity</label>
+    <select id="quantitySelect">
+      <option value="total">Total cloud</option>
+      <option value="low">Low cloud</option>
+      <option value="mid">Mid cloud</option>
+      <option value="high">High cloud</option>
+    </select>
+  </div>
+  <div>
+    <label for="extentInput">Extent</label>
+    <input type="range" id="extentInput" min="0" max="100" value="100">
+    <span id="extentReadout">—</span>
+  </div>
+  <div class="viewToggle">
+    <button id="viewGalleryBtn" class="active">All models</button>
+    <button id="viewSingleBtn">Clicked row</button>
+  </div>
+  <div id="cursorReadout">—</div>
+</div>
+
+<div id="stackWrap">
+  <div id="rows"></div>
+  <div id="axisRow"><div class="rowLabel"></div><div class="rowTrack" id="axisTrack"></div></div>
+  <div id="eclipseLine"><div class="tag">simulated eclipse T</div></div>
+  <div id="nowLine"></div>
+  <div id="cursorLine"><div id="cursorHandle"></div></div>
+</div>
+
+<div class="legend">
+  <span><span class="sw" style="background:#a19e92"></span>archived run</span>
+  <span><span class="sw" style="background:#d8d4c8"></span>run doesn't reach eclipse T yet</span>
+  <span><span class="sw" style="background:#8b3a2f"></span>nearest to cursor</span>
+  <span><span class="sw" style="background:#5a4a8b"></span>simulated eclipse T</span>
+  <span><span class="sw" style="background:#2f6f3f;opacity:.6"></span>now</span>
+</div>
+
+<div id="mapArea" style="display:none;">
+  <div class="placeholder-tag" id="mapAreaTag">click a row</div>
+  <img id="mapAreaImg" alt="" style="max-width:100%; display:none;">
+  <div class="big" id="mapAreaTitle"></div>
+  <div id="mapAreaSub">—</div>
+</div>
+
+<div id="gallery"></div>
+
+<script>
+// ---------------------------------------------------------------------------
+// Real data via tool3_manifest.json (scripts/generate_tool3_manifest.py).
+// TARGET_VALID_TIME is deliberately a SHORT future (not the real 2026-08-12
+// eclipse, which today's real archive can't reach yet for any model) so
+// real archived runs actually cover it - see TASKS.md for how this value
+// was picked (the tightest real per-model reach at generation time).
+// ---------------------------------------------------------------------------
+const NOW = new Date();
+let TARGET_VALID_TIME = new Date();
+let MODELS = []; // [{id, label, runs: [{runInit, covers, images, hasData}]}]
+
+// Known, permanent (not-a-bug) per-model field gaps - same facts already
+// documented in tool1_real.html, repeated here since Tool 3 renders the
+// same underlying fields.
+const KNOWN_FIELD_GAPS = {
+  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  ecmwf_ens: {
+    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+  },
+};
+
+async function loadManifest() {
+  const resp = await fetch("tool3_manifest.json");
+  if (!resp.ok) throw new Error("tool3_manifest.json fetch failed: HTTP " + resp.status);
+  const manifest = await resp.json();
+
+  TARGET_VALID_TIME = new Date(manifest.target_valid_time);
+  MODELS = manifest.models.map(m => ({
+    id: m.id,
+    label: m.label,
+    runs: m.runs.map(r => ({
+      runInit: new Date(r.run_init),
+      covers: r.covers,
+      images: r.images,
+      hasData: r.has_data,
+    })),
+  }));
+}
+// ---------------------------------------------------------------------------
+
+let AXIS_START, AXIS_END, axisRightMs;
+let cursorTime = new Date(NOW);
+let clickedRowIdx = null;
+let viewMode = "gallery"; // "gallery" | "single"
+
+const rowsEl = document.getElementById("rows");
+const axisTrack = document.getElementById("axisTrack");
+const stackWrap = document.getElementById("stackWrap");
+const cursorLine = document.getElementById("cursorLine");
+const cursorReadout = document.getElementById("cursorReadout");
+const eclipseLine = document.getElementById("eclipseLine");
+const nowLine = document.getElementById("nowLine");
+const quantitySelect = document.getElementById("quantitySelect");
+const extentInput = document.getElementById("extentInput");
+const extentReadout = document.getElementById("extentReadout");
+const viewGalleryBtn = document.getElementById("viewGalleryBtn");
+const viewSingleBtn = document.getElementById("viewSingleBtn");
+const mapArea = document.getElementById("mapArea");
+const mapAreaTag = document.getElementById("mapAreaTag");
+const mapAreaImg = document.getElementById("mapAreaImg");
+const mapAreaTitle = document.getElementById("mapAreaTitle");
+const mapAreaSub = document.getElementById("mapAreaSub");
+const galleryEl = document.getElementById("gallery");
+
+let builtRows = []; // [{model, row, track}]
+let galleryCells = []; // [{model, cell, titleEl, bodyEl}]
+
+function fmtTime(d) { return d.toISOString().slice(0, 16).replace("T", " ") + "Z"; }
+function fmtDuration(ms) {
+  const h = ms / 3600000;
+  return h < 48 ? h.toFixed(0) + "h" : (h / 24).toFixed(1) + "d";
+}
+function init() {
+  const allRunInits = MODELS.flatMap(m => m.runs.map(r => r.runInit.getTime()));
+  AXIS_START = new Date(Math.min(...allRunInits));
+  // extend a bit past the target marker so it's visible on the shared axis
+  AXIS_END = new Date(Math.max(TARGET_VALID_TIME.getTime() + 6 * 3600 * 1000, ...allRunInits));
+  const fullSpanMs = AXIS_END - AXIS_START;
+  axisRightMs = fullSpanMs;
+  extentInput.min = 0;
+  extentInput.max = fullSpanMs;
+  extentInput.step = 3600 * 1000;
+  extentInput.value = fullSpanMs;
+  extentReadout.textContent = fmtDuration(fullSpanMs);
+  cursorTime = new Date(Math.min(Math.max(NOW.getTime(), AXIS_START.getTime()), AXIS_START.getTime() + axisRightMs));
+
+  rowsEl.innerHTML = "";
+  builtRows = [];
+  MODELS.forEach((model, idx) => {
+    const row = document.createElement("div");
+    row.className = "row";
+    row.dataset.idx = idx;
+
+    const label = document.createElement("div");
+    label.className = "rowLabel";
+    label.textContent = model.label;
+    row.appendChild(label);
+
+    const track = document.createElement("div");
+    track.className = "rowTrack";
+    row.appendChild(track);
+
+    row.addEventListener("click", () => selectRowForSingleView(idx));
+    rowsEl.appendChild(row);
+    builtRows.push({ model, row, track });
+  });
+
+  galleryEl.innerHTML = "";
+  galleryCells = [];
+  MODELS.forEach(model => {
+    const cell = document.createElement("div");
+    cell.className = "galleryCell";
+    const titleEl = document.createElement("div");
+    titleEl.className = "cellTitle";
+    titleEl.textContent = model.label;
+    const imgEl = document.createElement("img");
+    imgEl.className = "cellImg";
+    imgEl.alt = "";
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "cellBody";
+    cell.appendChild(titleEl);
+    cell.appendChild(imgEl);
+    cell.appendChild(bodyEl);
+    galleryEl.appendChild(cell);
+    galleryCells.push({ model, cell, titleEl, imgEl, bodyEl });
+  });
+
+  layoutTicks();
+  if (MODELS.length) selectRowForSingleView(0);
+  updateUI();
+}
+
+function timeToPx(t, trackWidthPx) {
+  const frac = (t - AXIS_START) / axisRightMs;
+  return Math.round(Math.min(1, Math.max(0, frac)) * trackWidthPx);
+}
+
+function pickAxisIntervalMs(spanMs) {
+  const hourMs = 3600 * 1000;
+  const candidatesH = [1, 2, 3, 6, 12, 24, 48, 96, 168, 336];
+  for (const c of candidatesH) {
+    if (spanMs / (c * hourMs) <= 8) return c * hourMs;
+  }
+  return candidatesH[candidatesH.length - 1] * hourMs;
+}
+
+function layoutTicks() {
+  const trackWidthPx = axisTrack.getBoundingClientRect().width;
+  builtRows.forEach(({ model, track }) => {
+    track.innerHTML = "";
+    model.runs.forEach(run => {
+      if (run.runInit - AXIS_START > axisRightMs) return;
+      const tick = document.createElement("div");
+      tick.className = "tick" + (run.covers ? "" : " noCoverage");
+      tick.style.left = timeToPx(run.runInit, trackWidthPx) + "px";
+      tick.dataset.runMs = run.runInit.getTime();
+      track.appendChild(tick);
+    });
+  });
+
+  axisTrack.innerHTML = "";
+  const intervalMs = pickAxisIntervalMs(axisRightMs);
+  for (let ms = 0; ms <= axisRightMs; ms += intervalMs) {
+    const t = new Date(AXIS_START.getTime() + ms);
+    const el = document.createElement("div");
+    el.className = "axisTick";
+    el.style.left = timeToPx(t, trackWidthPx) + "px";
+    el.textContent = t.toISOString().slice(5, 16).replace("T", " ");
+    axisTrack.appendChild(el);
+  }
+
+  const trackRect = axisTrack.getBoundingClientRect();
+  const wrapRect = stackWrap.getBoundingClientRect();
+  const trackOffsetPx = trackRect.left - wrapRect.left;
+
+  const placeMarker = (el, t) => {
+    if (t >= AXIS_START && t - AXIS_START <= axisRightMs) {
+      el.style.display = "block";
+      el.style.left = Math.round(trackOffsetPx + timeToPx(t, trackRect.width)) + "px";
+    } else {
+      el.style.display = "none";
+    }
+  };
+  placeMarker(nowLine, NOW);
+  placeMarker(eclipseLine, TARGET_VALID_TIME);
+  // Flip the "target valid time" label to the left side of its line once
+  // it's close enough to the track's right edge that the label would
+  // otherwise overflow past the stack.
+  const eclipsePx = timeToPx(TARGET_VALID_TIME, trackRect.width);
+  eclipseLine.classList.toggle("flip", trackRect.width - eclipsePx < 90);
+}
+
+function nearestRun(model, targetTime) {
+  if (!model.runs.length) return null;
+  return model.runs.reduce((best, r) =>
+    Math.abs(r.runInit - targetTime) < Math.abs(best.runInit - targetTime) ? r : best
+  );
+}
+
+function selectRowForSingleView(idx) {
+  clickedRowIdx = idx;
+  document.querySelectorAll(".row").forEach(r => {
+    r.classList.toggle("clicked", parseInt(r.dataset.idx, 10) === idx);
+  });
+  updateUI();
+}
+
+function describeRunAtEclipse(model, run) {
+  const field = quantitySelect.value;
+  const title = model.label + " · run " + fmtTime(run.runInit);
+
+  if (!run.covers) {
+    return {
+      covers: false, hasImage: false, imageUrl: null, title,
+      sub: "run doesn't reach the target valid time yet (needs +" +
+        Math.round((TARGET_VALID_TIME - run.runInit) / 3600000) + "h)",
+    };
+  }
+
+  // has_data[field] === false means an image URL exists (a "(no data)"
+  // placeholder is always rendered) but this field has no real underlying
+  // data for this model - null (no has_data info) falls back to "assume
+  // real" so this doesn't break against a manifest that predates the flag.
+  const fieldHasData = run.hasData ? run.hasData[field] !== false : true;
+  const url = run.images && fieldHasData ? run.images[field] : null;
+  const knownReason = (KNOWN_FIELD_GAPS[model.id] || {})[field];
+
+  return {
+    covers: true,
+    hasImage: !!url,
+    imageUrl: url,
+    title,
+    sub: url
+      ? "valid " + fmtTime(TARGET_VALID_TIME) + "  ·  field: " + field
+      : (knownReason || "no rendered frame for this field/run"),
+  };
+}
+
+function updateUI() {
+  const trackRect = axisTrack.getBoundingClientRect();
+  const wrapRect = stackWrap.getBoundingClientRect();
+  const trackOffsetPx = trackRect.left - wrapRect.left;
+  cursorLine.style.left = Math.round(trackOffsetPx + timeToPx(cursorTime, trackRect.width)) + "px";
+  cursorReadout.textContent = "cursor " + fmtTime(cursorTime);
+
+  builtRows.forEach(({ model, track }) => {
+    const nearest = nearestRun(model, cursorTime);
+    track.querySelectorAll(".tick").forEach(tickEl => {
+      tickEl.classList.toggle("near", parseFloat(tickEl.dataset.runMs) === nearest.runInit.getTime());
+    });
+  });
+
+  if (viewMode === "gallery") {
+    galleryCells.forEach(({ model, cell, imgEl, bodyEl }) => {
+      const run = nearestRun(model, cursorTime);
+      const info = describeRunAtEclipse(model, run);
+      cell.classList.toggle("noCoverage", !info.covers);
+      if (info.hasImage) {
+        imgEl.src = info.imageUrl;
+        imgEl.style.display = "block";
+        bodyEl.style.display = "none";
+      } else {
+        imgEl.style.display = "none";
+        bodyEl.style.display = "flex";
+        bodyEl.textContent = info.covers ? info.sub : "not yet covering";
+      }
+    });
+    return;
+  }
+
+  // single view
+  if (clickedRowIdx === null || !builtRows[clickedRowIdx]) {
+    mapAreaTag.textContent = "click a row";
+    mapAreaImg.style.display = "none";
+    mapAreaTitle.textContent = "";
+    mapAreaSub.textContent = "—";
+    return;
+  }
+  const { model } = builtRows[clickedRowIdx];
+  const run = nearestRun(model, cursorTime);
+  const info = describeRunAtEclipse(model, run);
+  if (info.hasImage) {
+    mapAreaTag.textContent = "real rendered frame";
+    mapAreaImg.src = info.imageUrl;
+    mapAreaImg.style.display = "block";
+  } else {
+    mapAreaTag.textContent = info.covers ? "not available" : "not yet covering";
+    mapAreaImg.style.display = "none";
+  }
+  mapAreaTitle.textContent = info.title;
+  mapAreaSub.textContent = info.sub;
+}
+
+function timeFromClientX(clientX) {
+  const rect = axisTrack.getBoundingClientRect();
+  const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  return new Date(AXIS_START.getTime() + frac * axisRightMs);
+}
+
+let dragging = false;
+function startDrag(clientX) { dragging = true; cursorTime = timeFromClientX(clientX); updateUI(); }
+function moveDrag(clientX) { if (dragging) { cursorTime = timeFromClientX(clientX); updateUI(); } }
+function endDrag() { dragging = false; }
+
+stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
+window.addEventListener("mousemove", e => moveDrag(e.clientX));
+window.addEventListener("mouseup", endDrag);
+quantitySelect.addEventListener("change", updateUI);
+
+function setViewMode(mode) {
+  viewMode = mode;
+  viewGalleryBtn.classList.toggle("active", mode === "gallery");
+  viewSingleBtn.classList.toggle("active", mode === "single");
+  galleryEl.style.display = mode === "gallery" ? "grid" : "none";
+  mapArea.style.display = mode === "single" ? "flex" : "none";
+  updateUI();
+}
+viewGalleryBtn.addEventListener("click", () => setViewMode("gallery"));
+viewSingleBtn.addEventListener("click", () => setViewMode("single"));
+
+extentInput.addEventListener("input", () => {
+  axisRightMs = parseInt(extentInput.value, 10);
+  extentReadout.textContent = fmtDuration(axisRightMs);
+  cursorTime = new Date(Math.min(cursorTime.getTime(), AXIS_START.getTime() + axisRightMs));
+  layoutTicks();
+  updateUI();
+});
+
+let resizePending = false;
+window.addEventListener("resize", () => {
+  if (resizePending) return;
+  resizePending = true;
+  requestAnimationFrame(() => { layoutTicks(); updateUI(); resizePending = false; });
+});
+
+loadManifest()
+  .then(init)
+  .catch(err => {
+    document.body.innerHTML = "<pre style='color:#8b3a2f'>failed to load tool3_manifest.json: " + err + "</pre>";
+    console.error(err);
+  });
+</script>
+</body>
+</html>
