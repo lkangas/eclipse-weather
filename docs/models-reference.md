@@ -166,10 +166,12 @@ two structurally different views, deliberately handled differently:
   mean** across all members, substituted in wherever a single
   representative field would otherwise go — this applies uniformly to
   whichever quantity (total/low/mid/high) is currently selected, it is not
-  a separate dropdown entry. A "probability of clear" quantity (P(cloud_low
-  below some threshold) per grid cell) is planned as a genuinely new map
-  quantity, extending `site_ranking.py`'s existing pooled-sample logic to
-  the full spatial field — not yet built.
+  a separate dropdown entry. A genuinely new quantity, **`prob_clear`**
+  (P(cloud_low < 20%) per grid cell, same threshold as `site_ranking.py`'s
+  own pooled point metric), is built and live in all 3 tools' dropdowns —
+  only `aifs_ens` has real per-member native low-cloud data to compute it
+  from; every other model shows an honest "needs an ensemble with native
+  low cloud" gap message rather than a broken image.
 - **Point/ensemble-graph views** (`run_evolution.py`, `site_ranking.py`):
   full per-member spread is kept — p10–90 band + median for run-evolution
   trajectories, pooled Bernoulli samples across all contributing
