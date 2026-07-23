@@ -210,9 +210,17 @@ user, not Claude Code — surface them, don't attempt.
       backfill full multi-model run history via Open-Meteo Previous-Runs API
       (needs T08's provenance flags). Gives a complete run-slider dataset
       immediately.
-- [ ] **T15** Live-forward sim mode. Set `ECLIPSE_T` ≈ now+4d; run the real
-      archiver end-to-end against it. This is the actual fetch/parse path
-      test that T16 bypasses — do it before Jul 27, not after.
+- [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
+      T18:30:00Z` against a real live archiver (`festive_davinci` container,
+      `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
+      continuously for 4.5h+ across many scheduler ticks with zero crashes:
+      75,754 real rows, all 12 registered models represented, multiple
+      distinct `run_init`s accumulated per model, extraction firing cleanly
+      after each fetch. Only errors seen are benign upstream 404s (DWD
+      hasn't published every icon_global step yet at request time) — handled
+      as designed (logged, skipped, loop continues). This is the real
+      fetch/parse path test T16 bypasses; it passed. Container is still
+      running — leave it, it's free ongoing validation.
 - [x] **T30** Availability Gantt, done 2026-07-23 (`src/viz/availability_gantt.py`).
       Deliberately simple/matplotlib per the user's explicit direction. Bar per
       model from `first_covering`, ticks per subsequent cycle that reaches T,
