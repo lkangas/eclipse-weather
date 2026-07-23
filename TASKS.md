@@ -1042,29 +1042,81 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
 
 ## Deferred / not now
 
-- **Mobile support for Tool 1/2/3's cursors + general mobile operation.**
-  The hit-zone-gated drag cursors (T34/T36/T39) were built and tuned for
-  mouse interaction only - dragging needs to work with touch events too,
-  and the tools more broadly need real mobile-usability attention (layout,
-  tap targets, hit-zone sizing at touch scale) rather than just being
-  usable-in-a-pinch on a phone browser. Explicitly deferred 2026-07-23 -
-  do not start until asked.
 - Met Office DataHub key **[human]** — only pursue if T06 shows the
   Open-Meteo path insufficient.
 - Deployment box + healthcheck account **[human]**.
 - Final go/no-go site choice **[human]** — the tool informs it, doesn't make it.
-- **Placename-picker tool for the extraction site list** — blocks rollout
-  step 4 above (see that note). A map showing every real placename inside
-  the umbra path, plus a threshold slider to quickly pick "how small a
-  place" gets included (population/significance cutoff) — lets the user
-  land on a comprehensive extraction list fast, rather than curating it by
-  hand. Likely data source: Natural Earth's populated-places cultural
-  layer (has a population/significance rank field built for exactly this
-  kind of size-threshold filtering) clipped to `config/totality_path.json`
-  — same source family and bbox-clip pattern already verified working for
-  `src/viz/basemap.py`'s coastline/roads, not a new data source to vet from
-  scratch. Explicitly deferred by the user 2026-07-23 ("we will get back to
-  populating the list later") — do not start building this until asked.
-  Distinct from the existing 7-candidate `sites.yaml` list (that's curated
-  human-facing viewing-site recommendations with WNW-strip sampling; this
-  is comprehensive data-extraction coverage, a much larger set).
+- ~~Mobile support for Tool 1/2/3's cursors~~ — done, see **T42** below.
+- ~~Placename-picker tool for the extraction site list~~ — done, see **T41**
+  below. Still blocks rollout step 4 in a different sense now: T41's real
+  finding is that Natural Earth alone likely isn't sufficient for a truly
+  comprehensive list (only 16 places found) - a follow-up data-source
+  decision, not further tool-building, is what's actually still open here.
+
+## Post-real-data build, 2026-07-23/24
+
+- [x] **T40** Probability-of-clear map quantity. New `prob_clear` field:
+      per-grid-cell P(cloud_low < 20%) across an ensemble's members, the
+      map analogue of `site_ranking.py`'s (T32) own pooled point metric,
+      same threshold. `src/viz/tool1_renderer.py` gained
+      `_read_ecmwf_grid_prob_clear()` (scale applied BEFORE thresholding,
+      unlike the plain ensemble mean, which commutes with a post-average
+      scale) and wired it into `_aifs_field`. Only `aifs_ens` has genuine
+      per-member native low-cloud data to compute a real probability from
+      (`aifs_single` also renders - degrades to a binary 0%/100% per-cell
+      map, a single deterministic run, not a special case); every other
+      model returns `has_data: false` through the same mechanism already
+      used for other known field gaps - verified against all 10 gridded
+      models directly (zero crashes, only aifs_single/aifs_ens produce
+      real output). Sanity-checked against real archived data: correlation
+      between `prob_clear` and mean low-cloud is **-0.94** - exactly the
+      expected relationship, not just "didn't crash." Wired into all 3
+      tools' quantity dropdowns + `KNOWN_FIELD_GAPS` messaging, verified
+      end-to-end in-browser for both a qualifying model (aifs_ens: real
+      108KB rendered frame) and a non-qualifying one (gfs: honest gap
+      message, not a broken image).
+- [x] **T41** Placename-picker tool
+      (`scripts/generate_placename_data.py` + `src/viz/web/
+      placename_picker.html`, served as `placename_picker_index.html`).
+      Real Natural Earth fields verified by inspection, not guessed:
+      `NAME`/`NAMEASCII` (label), `POP_MAX` (population), `SCALERANK`
+      (0-10 editorial significance rank), `RANK_MAX`, `ADM0NAME`. Clipped
+      to the totality band (`northLimit`+reversed `southLimit` from
+      `config/totality_path.json`, same polygon-from-two-bounding-lines
+      construction, via `gpd.clip()` reusing `basemap.py`'s own private
+      download/cache/clip helpers directly rather than duplicating them).
+      Two live sliders (population, significance), plain-SVG band/
+      centerline overlay + absolutely-positioned dots (no mapping
+      library, matches Tool 1/2/3's own no-framework convention).
+      **Real, load-bearing finding**: only 16 real places fall inside the
+      totality band from this source, all in Spain, Bilbao down to
+      Guadalajara - Natural Earth's populated-places layer is a globally
+      curated significance-filtered ~7,300-place set, not an exhaustive
+      gazetteer, so no actual villages show up at any threshold. This
+      tool does its job (fast browsing/decision support), but this data
+      source alone probably won't be enough for the eventual comprehensive
+      extraction-list effort (rollout step 4's blocker) - a follow-up data
+      -source question, not more tool-building.
+- [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
+      `touchstart`/`touchmove`/`touchend` handling alongside the existing
+      mouse events (same underlying drag functions, no duplicated logic),
+      page scroll blocked only while an actual drag is in progress (not
+      globally), a `<meta name="viewport">` tag (missing from all three),
+      and touch-friendly tap targets for the smallest controls. Built via
+      3 parallel agents, one per file, given an identical spec - kept
+      genuinely consistent (same numeric constants, same approach) rather
+      than 3 independent interpretations. **Real, honestly-reported
+      finding**: only Tool 2 actually has a hit-zone/tolerance concept
+      (its two-handle time-cursor-vs-row-selection design, `CURSOR_HIT_PX`
+      /`ROW_HIT_PAD_PX`) - it got real touch-specific tolerances
+      (20px/16px vs the existing 8px/6px mouse values, gated by a new
+      `isTouch` flag). Tool 1 and Tool 3 have no hit-zone concept at all
+      (click/tap anywhere jumps the cursor directly, confirmed by reading
+      both files rather than assumed) - correctly left alone rather than
+      inventing tolerance constants that don't apply to their actual
+      interaction model. Verified for real: a dispatched `TouchEvent` 12px
+      from Tool 2's cursor line correctly grabs the time cursor (within
+      its 20px touch tolerance) while an identical `MouseEvent` at the
+      same distance correctly falls back to row-selection (outside its
+      8px mouse tolerance) - the full event-wiring chain, not just the
+      underlying logic.
