@@ -45,6 +45,8 @@ resolve it.
 from __future__ import annotations
 
 import json
+import logging
+import time
 from datetime import UTC, datetime
 
 import httpx
@@ -59,9 +61,63 @@ from src.fetchers.base import (
 )
 from src.fetchers.registry import register
 
+logger = logging.getLogger(__name__)
+
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 HOURLY_VARS = ["cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high"]
 REQUEST_TIMEOUT_S = 30.0
+
+# CLAUDE.md fetch politeness: exponential backoff, honor Open-Meteo's
+# non-commercial rate limits. Live-confirmed necessary during T16's real
+# full-scale run (2026-07-23): a sustained sequential run of ~324 single-runs-
+# api calls with zero delay between them produced 48 transient failures
+# (connection resets/timeouts - manually retrying the exact same calls
+# seconds later succeeded every time, so these were not permanent "this run
+# isn't available" 400s), none of which were literal HTTP 429s but all of the
+# same "back off and retry" character. get_with_retry() below is shared by
+# fetch_single_run() for this reason.
+MAX_RETRIES = 4
+RETRY_BACKOFF_BASE_S = 1.5
+
+
+def _get_with_retry(url: str, params: dict) -> httpx.Response:
+    """httpx.get with exponential backoff on transient failures (connection
+    errors/timeouts, and HTTP 429) - see MAX_RETRIES's docstring above for why
+    this exists. Non-retryable responses (e.g. a real HTTP 400/200) are
+    returned as-is on the first attempt; callers still do their own status
+    handling on the returned Response."""
+    last_exc: httpx.HTTPError | None = None
+    for attempt in range(MAX_RETRIES):
+        try:
+            resp = httpx.get(url, params=params, timeout=REQUEST_TIMEOUT_S)
+        except httpx.HTTPError as exc:
+            last_exc = exc
+            if attempt < MAX_RETRIES - 1:
+                wait_s = RETRY_BACKOFF_BASE_S * (2**attempt)
+                logger.warning(
+                    "single-runs-api request failed (%s), retrying in %.1fs (attempt %d/%d)",
+                    exc,
+                    wait_s,
+                    attempt + 1,
+                    MAX_RETRIES,
+                )
+                time.sleep(wait_s)
+                continue
+            raise
+        if resp.status_code == 429 and attempt < MAX_RETRIES - 1:
+            wait_s = RETRY_BACKOFF_BASE_S * (2**attempt)
+            logger.warning(
+                "single-runs-api HTTP 429, retrying in %.1fs (attempt %d/%d)",
+                wait_s,
+                attempt + 1,
+                MAX_RETRIES,
+            )
+            time.sleep(wait_s)
+            continue
+        return resp
+    if last_exc is not None:
+        raise last_exc
+    return resp  # last 429 response after exhausting retries - let the caller handle it
 
 
 def _site_coords() -> tuple[list[float], list[float]]:
@@ -235,31 +291,162 @@ def fetch_previous_runs(model_name: str, model_config: dict, run_init: datetime)
     )
 
 
-def fetch_single_run(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """STUB for T16 (time-shift sim backfill). NOT implemented here.
+SINGLE_RUN_URL = "https://single-runs-api.open-meteo.com/v1/forecast"
 
-    Would call single-runs-api.open-meteo.com (models.yaml's
-    models.open_meteo.api.single_runs) with a `run=<ISO8601 no seconds>`
-    query param (e.g. `run=2026-07-20T00:00`) once per historical run_init,
-    looping over every cycle in the desired backfill window, to reconstruct
-    true native per-run cloud_cover_low/mid/high history.
 
-    T08 confirmed this host DOES carry real L/M/H per run (unlike
-    previous_runs above); retention is ~April 2026 onward (~3.5 months as of
-    2026-07-22 — see models.yaml's single_runs.retention), which comfortably
-    covers a 16-day ECLIPSE_T time-shift window but not deep historical
-    backtests. This is the real backfill path for T16 — not built in this
-    pass; the caller would need to enumerate historical run_inits (e.g. via
-    `base.cycle_run_inits` over a wider lookback) and call this endpoint once
-    per run.
+def fetch_single_run(model_label: str, open_meteo_model_id: str, run_init: datetime) -> FetchResult:
+    """T16 backfill: one historical run via single-runs-api.open-meteo.com
+    (`run=<ISO8601 no seconds>`), for whichever eclipse-day archive valid
+    times ECLIPSE_T currently resolves to (T16's sim mode works by
+    overriding ECLIPSE_T to a past date - see CLAUDE.md's "Simulated-eclipse
+    testing" section - so this fetches the SAME target date every call, only
+    `run_init` changes, building up the run-evolution slider one historical
+    run at a time).
+
+    Unlike fetch() above, this is NOT registered under @register() and does
+    NOT take (model_name, model_config) tied to this project's own models.yaml
+    registry - single-runs-api backfills models Open-Meteo aggregates that
+    mostly don't correspond 1:1 to this project's own native fetchers (see
+    models.yaml's models.open_meteo.cloud_provenance table for the six
+    candidates and scripts/backfill_open_meteo.py for the orchestration and
+    model-label scheme, incl. why two labels are "om_"-prefixed to avoid
+    colliding with this registry's own icon_global/icon_eu model names).
+
+    model_label: the points.parquet `model` value to write (e.g. "gfs_global",
+        "om_icon_eu", "ukmo_global" - see backfill_open_meteo.py's mapping).
+    open_meteo_model_id: the exact `models=` value Open-Meteo expects
+        (e.g. "gfs_global", "dwd_icon_eu" - NOT always the same string as
+        model_label; confirm per-id via T08's findings before adding a new one).
+
+    BUG FOUND + FIXED while running T16 for real (2026-07-23): single-runs-api
+    is NOT the same param surface as the live /v1/forecast host `fetch()` uses
+    above - passing `start_date`/`end_date` (as this function originally did,
+    copy-pasted from `fetch()`) gets a hard HTTP 400 every time: `{"reason":
+    "Parameter 'start_date' must not be set","error":true}`, live-confirmed
+    against the real endpoint, not a docs guess. The real mechanism is
+    `forecast_days` (an integer day-count *from `run` forward*, not a
+    calendar-date window) - so this now computes just enough days to reach
+    ECLIPSE_T's own date, +1 day margin (confirmed necessary: a 06Z run only
+    reaches 05:00 on day run+N with forecast_days=N, one hour short of an
+    18:30Z target - live-tested). Also confirmed live: requesting more
+    forecast_days than a run's real forecast horizon is NOT an error - it's
+    HTTP 200 with silently-null values past the real horizon - so this
+    function now also checks the actual returned values at the wanted valid
+    times and downgrades to status="not_yet_covering" if they're all null,
+    instead of reporting "ok" for a file that extract() would turn into
+    all-None PointRows.
     """
-    raise NotImplementedError(
-        "T16 backfill via single-runs-api.open-meteo.com not implemented in this pass. "
-        "See models.yaml models.open_meteo.api.single_runs (param: run=<ISO8601 no "
-        "seconds>). T08 confirmed this host carries true native per-run "
-        "cloud_cover_low/mid/high, retained from ~April 2026 onward. Loop over historical "
-        "run_inits (e.g. base.cycle_run_inits with a wide lookback) and call this endpoint "
-        "once per run to build the T16 time-shift backfill dataset."
+    lats, lons = _site_coords()
+    valid_times = target_valid_times(eclipse_config()["archive_valid_hours_utc"])
+    target_date = max(vt.date() for vt in valid_times)
+    forecast_days = max((target_date - run_init.date()).days + 1, 1)
+
+    params = {
+        "latitude": ",".join(str(v) for v in lats),
+        "longitude": ",".join(str(v) for v in lons),
+        "hourly": ",".join(HOURLY_VARS),
+        "models": open_meteo_model_id,
+        "run": run_init.strftime("%Y-%m-%dT%H:%M"),
+        "timezone": "UTC",
+        "forecast_days": forecast_days,
+    }
+    # No steps_for_run() here (deliberately) - single-runs-api is forecast-days-
+    # from-run-init based, not forecast-hour-offset based, and these backfill
+    # labels have no models.yaml cycles/steps entry to compute against. steps
+    # stays empty; FetchResult.status/files_written are what callers should check.
+    steps: dict = {}
+
+    try:
+        resp = _get_with_retry(SINGLE_RUN_URL, params)
+    except httpx.HTTPError as exc:
+        return FetchResult(
+            model=model_label, run_init=run_init, steps=steps, status="error", error=str(exc)
+        )
+
+    if resp.status_code != 200:
+        try:
+            body = resp.json()
+        except (json.JSONDecodeError, ValueError):
+            body = {}
+        reason = body.get("reason", "") if isinstance(body, dict) else ""
+        # Seen for: run predates this model's single-runs retention window,
+        # OR run_init's own forecast horizon doesn't reach start_date/end_date.
+        # Both are the expected "this run can't inform this target date" case.
+        if resp.status_code == 400:
+            return FetchResult(
+                model=model_label,
+                run_init=run_init,
+                steps=steps,
+                status="not_yet_covering",
+                error=reason or f"HTTP 400: {resp.text[:200]}",
+            )
+        return FetchResult(
+            model=model_label,
+            run_init=run_init,
+            steps=steps,
+            status="error",
+            error=f"HTTP {resp.status_code}: {reason or resp.text[:200]}",
+        )
+
+    try:
+        payload = resp.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        return FetchResult(
+            model=model_label, run_init=run_init, steps=steps, status="error", error=str(exc)
+        )
+
+    if isinstance(payload, dict) and payload.get("error"):
+        return FetchResult(
+            model=model_label,
+            run_init=run_init,
+            steps=steps,
+            status="error",
+            error=payload.get("reason", "Open-Meteo returned an error object"),
+        )
+    if not isinstance(payload, list) or not payload:
+        return FetchResult(
+            model=model_label,
+            run_init=run_init,
+            steps=steps,
+            status="error",
+            error=f"Expected a non-empty list from Open-Meteo, got: {type(payload)}",
+        )
+
+    # HTTP 200 does not mean this run actually reaches ECLIPSE_T - single-runs-api
+    # silently returns null for hours past the run's real forecast horizon rather
+    # than erroring (live-confirmed, see docstring). Check the wanted valid times
+    # actually have a real value at at least one site before calling this "ok".
+    wanted_keys = {vt.strftime("%Y-%m-%dT%H:%M") for vt in valid_times}
+    has_real_data = False
+    for site_payload in payload:
+        hourly = site_payload.get("hourly", {}) if isinstance(site_payload, dict) else {}
+        times = hourly.get("time", [])
+        cloud_total = hourly.get("cloud_cover", [])
+        for idx, t in enumerate(times):
+            if t in wanted_keys and idx < len(cloud_total) and cloud_total[idx] is not None:
+                has_real_data = True
+                break
+        if has_real_data:
+            break
+    if not has_real_data:
+        return FetchResult(
+            model=model_label,
+            run_init=run_init,
+            steps=steps,
+            status="not_yet_covering",
+            error=(
+                f"run_init {run_init.isoformat()} returned HTTP 200 but every wanted "
+                f"valid time is null (its real forecast horizon likely doesn't reach "
+                f"{target_date.isoformat()})"
+            ),
+        )
+
+    out_dir = raw_output_dir(model_label, run_init)
+    out_path = out_dir / "forecast.json"
+    out_path.write_text(resp.text, encoding="utf-8")
+
+    return FetchResult(
+        model=model_label, run_init=run_init, steps=steps, files_written=[out_path], status="ok"
     )
 
 

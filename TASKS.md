@@ -236,10 +236,88 @@ user, not Claude Code — surface them, don't attempt.
 
 ## Phase 1 — Jul 25–26 (T-18…-17d): prove the UI before real data exists
 
-- [ ] **T16** Time-shift sim mode. Set `ECLIPSE_T` to a past 18:30 UTC;
-      backfill full multi-model run history via Open-Meteo Previous-Runs API
-      (needs T08's provenance flags). Gives a complete run-slider dataset
-      immediately.
+- [x] **T16** Time-shift sim mode, run for real 2026-07-23 (`scripts/
+      backfill_open_meteo.py`, uncommitted `fetch_single_run` from earlier in
+      the session made real and correct). T08 already found Previous-Runs API
+      doesn't carry L/M/H, so this uses single-runs-api.open-meteo.com instead
+      (per that task's own note) for 6 models: gfs_global, ecmwf_ifs025,
+      om_icon_global, om_icon_eu, meteofrance_arpege_europe, ukmo_global.
+      `ECLIPSE_T=2026-07-26T18:30:00Z` chosen deliberately close to the real
+      run date (2026-07-23) rather than the real Aug 12 eclipse — a fixed
+      future target only ~3 days out means even the oldest run_inits in a
+      14-day backfill window only need a ~17-day lead at worst, and the most
+      recent ones need almost none, maximizing how many of the 14-day×4-cycle
+      window's real historical runs can actually reach it (the alternative,
+      confirmed by T31(c)'s verification note, is picking a target so far out
+      nothing reaches it at all).
+      **Two real bugs found + fixed in the uncommitted `fetch_single_run`,
+      neither previously run at scale:** (1) it copied `fetch()`'s
+      `start_date`/`end_date` params, but single-runs-api rejects those
+      outright (`HTTP 400 "Parameter 'start_date' must not be set"`, live-
+      confirmed) — the real mechanism is `forecast_days` (a day-count *from
+      `run` forward*), now computed from ECLIPSE_T's date with a +1-day margin
+      (also live-verified necessary: without it a 06Z run's window falls one
+      hour short of an 18:30Z target). (2) requesting more `forecast_days`
+      than a run's real horizon is NOT an error — HTTP 200 with silently-null
+      values past the true horizon — so `fetch_single_run` now checks the
+      actual values at the wanted valid times and reports `not_yet_covering`
+      instead of `ok` when they're all null, rather than writing a file
+      `extract()` would turn into useless all-None rows.
+      **A third real bug found in `scripts/backfill_open_meteo.py` itself**
+      (not the uncommitted fetcher): its idempotency check reused `src.
+      extract.base`'s `already_extracted()`/`.extracted` marker, which is
+      keyed only by `(model, run_init)` — no target-date awareness. Since
+      `ukmo_global`'s backfill label shares its raw-data directory with the
+      live archiver's own primary Open-Meteo path for the same model name,
+      and earlier testing (T31(c)) had already extracted 4 of these same
+      run_inits against a *different* target date (2026-07-25), the naive
+      marker check silently skipped real 2026-07-26 backfill work for them.
+      Fixed by checking actual `points.parquet` contents for the current
+      target date instead of trusting the marker file.
+      **A fourth issue, not a logic bug but a real politeness gap:** a
+      sustained ~324-request sequential run with zero delay produced 48
+      transient connection failures (not literal HTTP 429s, but the same
+      "back off and retry" character — manual retries of the identical calls
+      succeeded immediately). Added exponential-backoff retry in
+      `open_meteo_fetcher.py`'s new `_get_with_retry()` (covers connection
+      errors/timeouts and 429) plus a flat 0.3s pacing gap between real HTTP
+      calls in the backfill script — re-running with both fixes produced zero
+      errors.
+      **Also found blocking the very first dry run, unrelated to
+      `fetch_single_run`:** `scripts/backfill_open_meteo.py`'s own imports
+      (`from src.extract.base import ...`, `from src.extract.open_meteo_
+      extractor import ...`) transitively ran `src/extract/__init__.py` and
+      `src/fetchers/__init__.py`, which unconditionally import every GRIB-
+      touching module — hard-crashing with `RuntimeError: Cannot find the
+      ecCodes library` on this plain-Windows dev box (no Docker/WSL needed
+      for anything else in this pipeline). Fixed both `__init__.py` files to
+      import each submodule independently and log+skip ones that fail for a
+      missing native dependency, instead of one crash taking down the whole
+      package — no behavior change where ecCodes is present (Docker); only
+      unlocks the GRIB-free modules (`open_meteo_fetcher`/`open_meteo_
+      extractor`) importing standalone where it isn't, matching what open_
+      meteo_extractor.py's own docstring already claimed should be possible.
+      **Real numbers** (verified by loading `data/points.parquet` directly,
+      not just trusting exit code 0 — 40,012 total rows now, up from 37,849
+      pre-existing; zero duplicates across 3 backfill re-runs, confirmed by
+      exact row-count arithmetic): gfs_global 1050 rows/50 run_inits,
+      ecmwf_ifs025 567/27, om_icon_global 231/11, om_icon_eu 126/6,
+      meteofrance_arpege_europe 63/3, ukmo_global 126/6 (zero nulls — the
+      other 5 models each have exactly 7 null rows, all the same single
+      run/valid-hour combination across all 7 sites: a run landing right at
+      its forecast horizon boundary, 15h/18h real, 21h not yet reached — a
+      real edge case, not a bug). Provenance matches `_PROVENANCE_BY_MODEL`
+      exactly for all 6 (5× native, ecmwf_ifs025 derived); ukmo_global's
+      `provenance_via_open_meteo: verify` caveat fired its warning as
+      designed and is left open per T08/T12's existing framing, not
+      re-litigated here. Every model landed multiple distinct run_inits
+      (3–50) — the actual point of this task, a real run-evolution slider,
+      not just one data point per model. Short-horizon models (arpege_europe
+      ~4d, icon_eu ~5d, ukmo_global's 06/18Z 67h cap) correctly show fewer
+      surviving run_inits than gfs_global/ecmwf_ifs025 (~16d/~15d horizons) —
+      live-confirmed physical reality, not a bug: only 00Z/12Z cycles survive
+      for ukmo_global, exactly matching T06's documented 06Z/18Z 67h-cap
+      finding.
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked
