@@ -154,6 +154,13 @@ user, not Claude Code — surface them, don't attempt.
       (fetcher's idempotency check skips existing files) — purged and
       re-fetched; derive path now confirmed producing real rows off the
       actual archive, not just a manual test file.
+      **Scheduler wiring done 2026-07-23**: `src/scheduler/run.py` now calls
+      extract → `append_points` after every successful fetch, plus picks up
+      any already-fetched-but-never-extracted run (idempotent via a
+      `.extracted` sentinel file, mirroring `already_fetched()`'s pattern —
+      without it, re-extraction on every 5-minute tick would duplicate rows).
+      Verified end-to-end in Docker across 9 live models: 7238 real rows in
+      `points.parquet`, zero true duplicates.
       **Not done**: WNW-strip sampling (T24, next); AROME's real cadence is
       hourly through 102h per real data, though `models.yaml`'s `steps:` only
       asks for 3-hourly beyond 48h (harmless, just leaves resolution unused).
@@ -176,13 +183,21 @@ user, not Claude Code — surface them, don't attempt.
       registry, pings a healthcheck URL every loop iteration (deadman's-switch
       style, so a crashed/stuck scheduler shows up as a missed ping, not
       silence — healthchecks.io URL itself is a `HEALTHCHECK_URL` env var, not
-      yet set to a real one). Smoke-tested against real `models.yaml` (dry run,
-      no fetchers registered yet — correctly identified `gefs_extended` as due
-      and attempted it). `Dockerfile`/`docker-compose.yml` are **unverified** —
-      no Docker runtime available locally yet to build/test against.
-- [ ] **T24** `sites.yaml` consumption: implement WNW-strip sampling
-      (bearing/length/interval from `wnw_strip:` block) alongside the point
-      extraction at each site.
+      yet set to a real one). `Dockerfile`/`docker-compose.yml` fully verified
+      2026-07-22 (Docker installed in WSL Ubuntu): builds cleanly, cfgrib/
+      rasterio/eccodes/cdo all work inside the container, and the full
+      scheduler entrypoint runs correctly end-to-end against real data.
+- [x] **T24** `sites.yaml` consumption, done 2026-07-23: `src/extract/base.py`
+      adds `wnw_strip_points()` (great-circle destination formula) and
+      `all_sample_points()` (each site + its 4 strip points at 25/25/75/100km,
+      named e.g. `Luarca_wnw50km` — fits `PointRow`'s existing `site: str`
+      field, no schema change needed). Wired into the 5 grid-based extractors
+      (grib_regular, ecmwf, icon, meteofrance, aemet) — verified against real
+      archived icon_eu data: 105 rows = 7 sites × 5 points × 3 valid times.
+      **Deliberately not done for `ukmo_global`**: Open-Meteo is a point API,
+      not a spatial grid, so strip sampling there needs `open_meteo_fetcher.py`
+      to request the extra coordinates too, not just extraction — a follow-up
+      if UKMO's WNW sightline signal is wanted.
 - [ ] **T25** Reserve hosting per the deployment decision made 2026-07-22
       (box + hostname intentionally not named in this repo — see private ops
       notes). Own isolated directory/port; DNS + ingress live in a separate

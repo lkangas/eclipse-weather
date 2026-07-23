@@ -3,6 +3,7 @@ schema (matches CLAUDE.md's data/points.parquet schema exactly), appending
 rows to that file, and small helpers every format-specific extractor needs.
 """
 
+import math
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,8 @@ from pathlib import Path
 import polars as pl
 
 from src.config import DATA_RAW, POINTS_PARQUET, load_sites
+
+EARTH_RADIUS_KM = 6371.0088
 
 VALID_PROVENANCE = {"native", "derived", "total_only"}
 
@@ -37,6 +40,58 @@ class PointRow:
 
 def sites() -> list[dict]:
     return load_sites()["sites"]
+
+
+def _destination_point(
+    lat: float, lon: float, bearing_deg: float, distance_km: float
+) -> tuple[float, float]:
+    """Great-circle destination point (standard forward-geodesic formula on a
+    spherical Earth - plenty accurate for a 100km strip at this project's
+    Iberia-bbox scale, no need for an ellipsoidal geodesy library)."""
+    lat1, lon1, bearing = (math.radians(v) for v in (lat, lon, bearing_deg))
+    ang_dist = distance_km / EARTH_RADIUS_KM
+    lat2 = math.asin(
+        math.sin(lat1) * math.cos(ang_dist)
+        + math.cos(lat1) * math.sin(ang_dist) * math.cos(bearing)
+    )
+    lon2 = lon1 + math.atan2(
+        math.sin(bearing) * math.sin(ang_dist) * math.cos(lat1),
+        math.cos(ang_dist) - math.sin(lat1) * math.sin(lat2),
+    )
+    return math.degrees(lat2), (math.degrees(lon2) + 540) % 360 - 180  # normalize to -180..180
+
+
+def wnw_strip_points(site: dict) -> list[dict]:
+    """The WNW-sightline strip for one site (config/sites.yaml's top-level
+    wnw_strip: bearing/length/interval) - one point every sample_every_km out
+    to length_km, EXCLUDING the 0km point (that's the site itself, already
+    covered by sites()). Each point gets a distinct name (e.g. 'Luarca_wnw25km')
+    so it fits PointRow's existing `site: str` field with no schema change."""
+    strip = load_sites()["wnw_strip"]
+    bearing, length_km, step_km = strip["bearing_deg"], strip["length_km"], strip["sample_every_km"]
+    points = []
+    dist = step_km
+    while dist <= length_km:
+        lat, lon = _destination_point(site["lat"], site["lon"], bearing, dist)
+        points.append({"name": f"{site['name']}_wnw{dist:g}km", "lat": lat, "lon": lon})
+        dist += step_km
+    return points
+
+
+def all_sample_points() -> list[dict]:
+    """Every point extractors should sample: each named site PLUS its WNW
+    sightline strip (T24) - the sightline toward the low WNW sun matters as
+    much as the overhead pixel, per CLAUDE.md's domain notes. Extractors that
+    read a full spatial grid (GRIB2/GeoTIFF) should use this instead of
+    sites() for their per-point extraction loop. NOT used by
+    open_meteo_extractor.py/open_meteo_fetcher.py (ukmo_global) - Open-Meteo
+    is a point API, so strip sampling there needs the FETCHER to request the
+    extra coordinates too, not just extraction; not done in this pass, see
+    TASKS.md T24."""
+    points = list(sites())
+    for site in sites():
+        points.extend(wnw_strip_points(site))
+    return points
 
 
 def file_fetched_at(path: Path) -> datetime:

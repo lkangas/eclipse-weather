@@ -74,7 +74,7 @@ import numpy as np
 import xarray as xr
 
 from src.config import DATA_RAW
-from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
+from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import format_init_dir, steps_for_run
 
@@ -156,7 +156,7 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
         )
         return []
 
-    site_list = sites()
+    site_list = all_sample_points()
     rows: list[PointRow] = []
 
     for valid_iso, step_info in covering.items():
