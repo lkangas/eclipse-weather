@@ -372,6 +372,48 @@ user, not Claude Code — surface them, don't attempt.
       against them: correct per-model run_init labels, correct real image
       swap on model/field/cursor changes, correct extent auto-detected from
       the real max step (384h).
+      **Extended to all 10 gridded models same day**: gefs_extended,
+      arpege_europe (reused the already-generic fetch_full_range() -
+      _MODEL_SPECS/spec["groups"] already covered them, only needed new
+      tool1_renderer.py readers), plus ecmwf_hres/ecmwf_ens/aifs_single/
+      aifs_ens (new fetch_full_range() in ecmwf_opendata_fetcher.py) and
+      icon_eu/icon_global (new fetch_full_range() in dwd_bz2_fetcher.py,
+      icon_global reusing the existing cdo remap weights). Deliberately
+      still excludes ukmo_global/gem_global/jma_gsm/cma_grapes_global
+      (Open-Meteo point API, no spatial grid) and aemet_harmonie (rendered
+      color-ramp image) - same reasoning as T31(c)'s own _MODEL_READERS.
+      **Added real cartography**: coastline + major/secondary roads
+      (`src/viz/basemap.py`, new `geopandas` dependency) plus the totality
+      band+centerline, all drawn stroke-only on top of the pcolormesh (not
+      filled, unlike the sibling eclipse-dashboard project's own basemap
+      styling - that project has nothing under its coastline layer, this
+      one has real cloud data a filled coastline would hide). Natural Earth
+      categories/resolution (1:50m land, 1:10m roads filtered to Major/
+      Secondary Highway) matched to what that sibling project's own
+      tools/build-data/basemap.mjs's/roads.mjs's research already
+      established, not re-derived from scratch. Live-verified source URLs,
+      both still live 2026-07-23.
+      **Two more real bugs found verifying the expanded batch**: (1)
+      full_range_steps() assumes step 0 is always published (true for most
+      models, false for arome_france/arpege_europe's group-file layout, and
+      it turned out GFS's own step 0 had also failed a transient fetch) -
+      fixed by excluding any step where no field has real data, rather than
+      showing a permanent "(no data)" tick. (2) the manifest only recorded
+      an image URL per field, which always exists (render_frame writes a
+      placeholder PNG even for a permanently-absent field like arome_
+      france/arpege_europe's "total" or classic ecmwf_ens's entire low/mid/
+      high split - T01's earlier finding, confirmed still true here) - so
+      the widget couldn't tell a real map from a placeholder without
+      inspecting pixels. Added a per-field has_data flag to the manifest
+      schema (computed cheaply by calling the reader directly, not by
+      re-rendering) and specific, honest UI messaging for both known
+      permanent gaps instead of a generic "no data".
+      **Added a per-model preload button** (warms the browser image cache
+      across all of that model's steps x 4 fields before scrubbing) so
+      dragging the time cursor doesn't stutter waiting on network fetches.
+      **Not yet done**: contourf/smoothed rendering for coarse-resolution
+      models (explicitly deferred by the user, "future improvement... but
+      not now").
 - [x] **T15** Live-forward sim mode, done 2026-07-23. `ECLIPSE_T=2026-07-27
       T18:30:00Z` against a real live archiver (`festive_davinci` container,
       `/tmp/t15-soak-data`, started 2026-07-23 04:51 UTC) — soaked

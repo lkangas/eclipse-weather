@@ -55,12 +55,18 @@ Request/response mechanics (ecmwf.opendata.Client):
 
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from ecmwf.opendata import Client
 
-from src.fetchers.base import FetchResult, raw_output_dir, steps_for_run
+from src.fetchers.base import (
+    FetchResult,
+    full_range_steps,
+    raw_latest_output_dir,
+    raw_output_dir,
+    steps_for_run,
+)
 from src.fetchers.registry import register
 
 log = logging.getLogger(__name__)
@@ -160,22 +166,15 @@ _REQUEST_BUILDERS = {
 }
 
 
-@register("ecmwf-opendata")
-def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Fetch every eclipse-archive-relevant step of one run_init via the
-    ecmwf-opendata client, for whichever of the four ecmwf-opendata models
-    `model_name` names. One GRIB2 file is written per (step, field-group)
-    under raw_output_dir(model_name, run_init) - see the per-model
-    _*_requests() builders above for exactly which field groups/filenames.
-    """
-    steps_map = steps_for_run(model_config, run_init)
-    covering_steps = {vt: s[0] for vt, s in steps_map.items() if s is not None}
-
-    if not covering_steps:
-        return FetchResult(
-            model=model_name, run_init=run_init, steps=steps_map, status="not_yet_covering"
-        )
-
+def _download_steps(
+    *, model_name: str, model_config: dict, run_init: datetime, steps: list[int], out_dir: Path,
+    steps_map: dict, client: Client,
+) -> FetchResult:
+    """Shared download loop: fetch every (step, request) combo `builder`
+    produces for `steps` into `out_dir`, idempotently. Used by both fetch()
+    (eclipse-cropped steps) and fetch_full_range() (every step the run
+    publishes) - the retrieve() mechanics don't care which step list drove
+    them, only the request builder + output dir + step source differ."""
     builder = _REQUEST_BUILDERS.get(model_name)
     if builder is None:
         raise ValueError(
@@ -183,13 +182,10 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
             f"(known: {sorted(_REQUEST_BUILDERS)})"
         )
 
-    out_dir = raw_output_dir(model_name, run_init)
-    client = Client()
-
     files_written: list[Path] = []
     errors: list[str] = []
 
-    for step in sorted(set(covering_steps.values())):
+    for step in steps:
         for req, target in builder(model_config, run_init, step, out_dir):
             if target.exists() and target.stat().st_size > 0:
                 files_written.append(target)  # already fetched - politeness/idempotency
@@ -213,4 +209,56 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
         files_written=files_written,
         status=status,
         error=error_msg,
+    )
+
+
+@register("ecmwf-opendata")
+def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Fetch every eclipse-archive-relevant step of one run_init via the
+    ecmwf-opendata client, for whichever of the four ecmwf-opendata models
+    `model_name` names. One GRIB2 file is written per (step, field-group)
+    under raw_output_dir(model_name, run_init) - see the per-model
+    _*_requests() builders above for exactly which field groups/filenames.
+    """
+    steps_map = steps_for_run(model_config, run_init)
+    covering_steps = {vt: s[0] for vt, s in steps_map.items() if s is not None}
+
+    if not covering_steps:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps_map, status="not_yet_covering"
+        )
+
+    out_dir = raw_output_dir(model_name, run_init)
+    return _download_steps(
+        model_name=model_name, model_config=model_config, run_init=run_init,
+        steps=sorted(set(covering_steps.values())), out_dir=out_dir, steps_map=steps_map,
+        client=Client(),
+    )
+
+
+def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Tool 1's general-purpose entry point: fetch EVERY step this run
+    publishes (not just the eclipse-day archive hours `fetch()` targets),
+    into DATA_RAW_LATEST rather than DATA_RAW - see src/config.py for why
+    the two are kept separate. Same request builders/download mechanics as
+    fetch(), just a different step source and output root (mirrors
+    herbie_fetcher.py's/meteofrance_fetcher.py's own fetch_full_range())."""
+    reachable = full_range_steps(model_config, run_init)
+    # No eclipse valid-time targets here - each step's own natural valid
+    # time, zero misalignment, keeps FetchResult.steps meaningful anyway
+    # (same convention as herbie_fetcher.fetch_full_range()).
+    steps_map = {
+        (run_init + timedelta(hours=h)).isoformat(): (h, 0.0)
+        for h in reachable
+    }
+
+    if not reachable:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps_map, status="not_yet_covering"
+        )
+
+    out_dir = raw_latest_output_dir(model_name, run_init)
+    return _download_steps(
+        model_name=model_name, model_config=model_config, run_init=run_init,
+        steps=reachable, out_dir=out_dir, steps_map=steps_map, client=Client(),
     )

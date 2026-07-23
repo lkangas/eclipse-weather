@@ -84,7 +84,7 @@
   .row:hover { background: #f6f4ef; }
   .row.selected { background: #f0e8d2; }
   .rowLabel {
-    width: 130px;
+    width: 108px;
     flex: none;
     font-size: 9px;
     color: #55534c;
@@ -94,6 +94,18 @@
     text-overflow: ellipsis;
   }
   .row.selected .rowLabel { color: #232320; font-weight: 700; }
+  .preloadBtn {
+    width: 22px;
+    flex: none;
+    font-size: 8px;
+    text-align: center;
+    color: #a8a498;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+  }
+  .preloadBtn:hover { color: #232320; }
+  .preloadBtn.loading { color: #8b3a2f; }
+  .preloadBtn.done { color: #2f6f3f; }
   .rowTrack {
     position: relative;
     flex: 1;
@@ -257,6 +269,10 @@ async function loadManifest() {
     runInit: new Date(m.run_init),
     steps: m.steps.map(s => s.h),
     imagesByStep: Object.fromEntries(m.steps.map(s => [s.h, s.images])),
+    // has_data is a per-field manifest addition (patch_manifest_has_data.py) -
+    // older manifests won't have it; default to "assume real" rather than
+    // hide everything if this widget ever runs against a stale manifest.
+    hasDataByStep: Object.fromEntries(m.steps.map(s => [s.h, s.has_data || null])),
   }));
 
   const allSteps = MODELS.flatMap(m => m.steps);
@@ -275,6 +291,53 @@ function pickAxisInterval(extentH) {
   return candidates[candidates.length - 1];
 }
 
+const IMAGE_FIELDS = ["total", "low", "mid", "high"];
+// Known, permanent (not-a-bug) per-model field gaps, confirmed against real
+// data - see tool1_renderer.py's corresponding reader docstrings for each:
+//   - arome_france/arpege_europe: Meteo-France's SP2 package has no native
+//     total-cloud field, only low/mid/high.
+//   - ecmwf_ens: classic ECMWF ENS via ecmwf-opendata has no native
+//     low/mid/high at all (T01 research) - only AIFS ens has that split.
+const KNOWN_FIELD_GAPS = {
+  arome_france: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  arpege_europe: { total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High" },
+  ecmwf_ens: {
+    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+  },
+};
+const preloadedModels = new Set();
+
+function preloadModel(model, btnEl) {
+  if (preloadedModels.has(model.id)) return;
+  const urls = [];
+  model.steps.forEach(h => {
+    const images = model.imagesByStep[h] || {};
+    IMAGE_FIELDS.forEach(f => { if (images[f]) urls.push(images[f]); });
+  });
+  if (!urls.length) return;
+
+  btnEl.classList.add("loading");
+  btnEl.classList.remove("done");
+  let loaded = 0;
+  btnEl.textContent = "0%";
+  urls.forEach(url => {
+    const img = new Image();
+    img.onload = img.onerror = () => {
+      loaded++;
+      btnEl.textContent = Math.round((loaded / urls.length) * 100) + "%";
+      if (loaded === urls.length) {
+        preloadedModels.add(model.id);
+        btnEl.classList.remove("loading");
+        btnEl.classList.add("done");
+        btnEl.textContent = "✓";
+      }
+    };
+    img.src = url;
+  });
+}
+
 function buildRows() {
   rowsEl.innerHTML = "";
   builtRows = [];
@@ -287,6 +350,16 @@ function buildRows() {
     label.className = "rowLabel";
     label.textContent = model.label;
     row.appendChild(label);
+
+    const preloadBtn = document.createElement("div");
+    preloadBtn.className = "preloadBtn";
+    preloadBtn.textContent = "⤓";
+    preloadBtn.title = "Preload all frames for " + model.label + " (smoother scrubbing)";
+    preloadBtn.addEventListener("click", e => {
+      e.stopPropagation(); // don't also trigger the row's own select-on-click
+      preloadModel(model, preloadBtn);
+    });
+    row.appendChild(preloadBtn);
 
     const track = document.createElement("div");
     track.className = "rowTrack";
@@ -366,7 +439,13 @@ function updateCursorUI() {
   const step = nearestStep(model, cursorH);
   const field = quantitySelect.value;
   const images = step === null ? null : model.imagesByStep[step];
-  const url = images ? images[field] : null;
+  const hasDataFlags = step === null ? null : model.hasDataByStep[step];
+  // hasDataFlags[field] === false means this field has a URL (always
+  // written, even as a "(no data)" placeholder) but no real underlying
+  // data - null (no has_data info, e.g. a stale manifest) falls back to
+  // "assume real" so this widget doesn't break against an older manifest.
+  const fieldHasData = hasDataFlags ? hasDataFlags[field] !== false : true;
+  const url = images && fieldHasData ? images[field] : null;
 
   if (url) {
     mapAreaTag.textContent = "real rendered frame";
@@ -378,11 +457,12 @@ function updateCursorUI() {
     mapAreaTag.textContent = "not available";
     mapAreaImg.style.display = "none";
     mapAreaTitle.textContent = model.label;
+    const knownReason = (KNOWN_FIELD_GAPS[model.id] || {})[field];
     mapAreaSub.textContent = step === null
       ? "no step available"
       : (field === "combined_rain" || field === "surface_temp"
           ? "quantity not implemented yet"
-          : "no rendered frame for this field/step");
+          : (knownReason || "no rendered frame for this field/step"));
   }
 }
 

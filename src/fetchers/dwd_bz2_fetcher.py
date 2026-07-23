@@ -26,12 +26,18 @@ from __future__ import annotations
 import bz2
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
 
-from src.fetchers.base import FetchResult, raw_output_dir, steps_for_run
+from src.fetchers.base import (
+    FetchResult,
+    full_range_steps,
+    raw_latest_output_dir,
+    raw_output_dir,
+    steps_for_run,
+)
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -99,37 +105,28 @@ def _decompress(dest_bz2: Path, dest_grib2: Path) -> None:
             dst.write(chunk)
 
 
-@register("http_bz2")
-def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
-    """Fetch DWD ICON cloud fields (icon_global raw icosahedral / icon_eu
-    regular-lat-lon) for every eclipse-day archive valid time this run_init
-    covers. See module docstring for scope (no cdo remap here - T21's job)."""
-    steps = steps_for_run(model_config, run_init)
-    result = FetchResult(model=model_name, run_init=run_init, steps=steps)
-
-    covering = result.covering_steps()
-    if not covering:
-        result.status = "not_yet_covering"
-        return result
-
+def _download_all_params(
+    *, model_name: str, model_config: dict, run_init: datetime, steps: list[int], out_dir: Path,
+) -> tuple[list[Path], list[str]]:
+    """Shared download loop: fetch every (step, param) combo into `out_dir`,
+    idempotently. Used by both fetch() (eclipse-cropped steps) and
+    fetch_full_range() (every step the run publishes) - the download
+    mechanics don't care which step list drove them."""
     url_template = model_config["source"]["url_template"]
     params = _cloud_params(model_config)
     if not params:
-        result.status = "error"
-        result.error = f"{model_name}: no cloud params found in model_config['cloud']"
-        return result
+        raise ValueError(f"{model_name}: no cloud params found in model_config['cloud']")
 
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
-    out_dir = raw_output_dir(model_name, run_init)
 
-    unique_steps = sorted(set(covering.values()))
+    files_written: list[Path] = []
     errors: list[str] = []
 
     with httpx.Client(
         timeout=_TIMEOUT, follow_redirects=True, headers={"User-Agent": _USER_AGENT}
     ) as client:
-        for step in unique_steps:
+        for step in steps:
             fff = f"{step:03d}"
             for param in params:
                 url = _build_url(url_template, hh=hh, yyyymmddhh=yyyymmddhh, fff=fff, param=param)
@@ -137,7 +134,7 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                 dest_grib2 = out_dir / grib2_name
 
                 if dest_grib2.exists() and dest_grib2.stat().st_size > 0:
-                    result.files_written.append(dest_grib2)  # idempotent re-run
+                    files_written.append(dest_grib2)  # idempotent re-run
                     continue
 
                 dest_bz2 = out_dir / (grib2_name + ".bz2")
@@ -166,10 +163,19 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                 finally:
                     dest_bz2.unlink(missing_ok=True)
 
-                result.files_written.append(dest_grib2)
+                files_written.append(dest_grib2)
                 time.sleep(_POLITE_DELAY_S)
 
-    if not result.files_written:
+    return files_written, errors
+
+
+def _result_from_download(
+    model_name: str, run_init: datetime, steps_map: dict, files_written: list[Path],
+    errors: list[str],
+) -> FetchResult:
+    result = FetchResult(model=model_name, run_init=run_init, steps=steps_map)
+    result.files_written = files_written
+    if not files_written:
         result.status = "error"
         result.error = "; ".join(errors) if errors else "no files written, no errors recorded"
     elif errors:
@@ -177,5 +183,62 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
         result.error = "partial failures: " + "; ".join(errors)
     else:
         result.status = "ok"
-
     return result
+
+
+@register("http_bz2")
+def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Fetch DWD ICON cloud fields (icon_global raw icosahedral / icon_eu
+    regular-lat-lon) for every eclipse-day archive valid time this run_init
+    covers. See module docstring for scope (no cdo remap here - T21's job)."""
+    steps = steps_for_run(model_config, run_init)
+    covering = {vt: s[0] for vt, s in steps.items() if s is not None}
+    if not covering:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps, status="not_yet_covering"
+        )
+
+    out_dir = raw_output_dir(model_name, run_init)
+    try:
+        files_written, errors = _download_all_params(
+            model_name=model_name, model_config=model_config, run_init=run_init,
+            steps=sorted(set(covering.values())), out_dir=out_dir,
+        )
+    except ValueError as e:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps, status="error", error=str(e)
+        )
+
+    return _result_from_download(model_name, run_init, steps, files_written, errors)
+
+
+def fetch_full_range(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
+    """Tool 1's general-purpose entry point: fetch EVERY step this run
+    publishes (not just the eclipse-day archive hours `fetch()` targets),
+    into DATA_RAW_LATEST rather than DATA_RAW - see src/config.py for why
+    the two are kept separate. Same download mechanics as fetch(), just a
+    different step source and output root (mirrors herbie_fetcher.py's/
+    meteofrance_fetcher.py's/ecmwf_opendata_fetcher.py's own
+    fetch_full_range())."""
+    reachable = full_range_steps(model_config, run_init)
+    steps_map = {
+        (run_init + timedelta(hours=h)).isoformat(): (h, 0.0)
+        for h in reachable
+    }
+    if not reachable:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps_map, status="not_yet_covering"
+        )
+
+    out_dir = raw_latest_output_dir(model_name, run_init)
+    try:
+        files_written, errors = _download_all_params(
+            model_name=model_name, model_config=model_config, run_init=run_init,
+            steps=reachable, out_dir=out_dir,
+        )
+    except ValueError as e:
+        return FetchResult(
+            model=model_name, run_init=run_init, steps=steps_map, status="error", error=str(e)
+        )
+
+    return _result_from_download(model_name, run_init, steps_map, files_written, errors)
