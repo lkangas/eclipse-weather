@@ -114,6 +114,31 @@ _DEFAULT_ADMIN_RANK = 6  # PPLX and every other minor/locality variant not liste
 # filter from an earlier check was still active on top of it).
 _MAX_ADMIN_RANK_INCLUDED = 3
 
+# Final population floor, explicit user direction 2026-07-24 ("the final
+# numbers are rank<=3 and population>=34000") - narrows the 3,135
+# admin_rank<=3 set down further to just the real, substantial towns/
+# cities in that set.
+_MIN_POPULATION_INCLUDED = 34000
+
+# Manual curation on top of the two numeric cutoffs above, same explicit
+# 2026-07-24 direction - real, named exceptions the numeric filters alone
+# don't capture cleanly:
+#   - Mallorca: every other in-band place on the island besides Palma
+#     itself is redundant for this tool's purpose (island vs. the
+#     mainland totality corridor) - keep Palma only.
+#   - Burriana: explicitly dropped.
+#   - Metro-area clustering: Paterna/Reus/San Sebastian de los Reyes/
+#     Barakaldo each sit in a tight cluster of separately-incorporated
+#     but immediately-adjacent municipalities (a common Spanish pattern -
+#     independent towns that are functionally one built-up area) - keep
+#     only the single largest-population place in each real cluster, not
+#     necessarily the named one itself. Cluster membership below was
+#     determined from the REAL admin_rank<=3/pop>=34000 data (haversine
+#     distance, live-checked 2026-07-24), not assumed from the names alone.
+_MALLORCA_BBOX = {"lat_min": 39.2, "lat_max": 39.95, "lon_min": 2.28, "lon_max": 3.48}
+_MALLORCA_KEEP = "Palma"
+_EXCLUDED_NAMES = {"Burriana"}
+
 
 def _download_and_extract_geonames() -> Path:
     dest_dir = _CACHE_DIR / "ES"
@@ -153,6 +178,36 @@ def _band_polygon(path_data: dict) -> Polygon:
     return poly
 
 
+# Explicit user direction 2026-07-24: keep only the single largest-
+# population place in each real metro cluster around Paterna/Reus/San
+# Sebastian de los Reyes/Barakaldo, since the named place isn't always the
+# biggest. Real cluster membership determined by live haversine-distance
+# check against the actual admin_rank<=3/pop>=34000 output (15km radius,
+# 2026-07-24) rather than assumed from the names - each cluster's real
+# members and populations:
+#   Valencia (824340) cluster: Paterna (64023, 6.1km), Torrent (78543,
+#     7.6km), Mislata (46131, 3.6km), Burjassot (38433, 2.5km) - Valencia
+#     dwarfs all four, keep Valencia only.
+#   Tarragona (141542) cluster: Reus (103477, 12.3km) - Tarragona is
+#     larger, keep Tarragona only.
+#   Alcobendas (116037) cluster: San Sebastian de los Reyes (75912,
+#     1.5km), Tres Cantos (41896, 8.5km) - Alcobendas is larger, keep
+#     Alcobendas only.
+#   Bilbao (347342) cluster: Barakaldo (100435, 6.3km), Santurtzi (46978,
+#     5.1km), Portugalete (45826, 3.8km), Basauri (42657, 10.4km) - Bilbao
+#     dwarfs all four, keep Bilbao only.
+_METRO_CLUSTER_DROP_NAMES = {
+    "Paterna", "Torrent", "Mislata", "Burjassot",  # -> Valencia
+    "Reus",  # -> Tarragona
+    "San Sebastián de los Reyes", "Tres Cantos",  # -> Alcobendas
+    "Barakaldo", "Santurtzi", "Portugalete", "Basauri",  # -> Bilbao
+}
+
+
+def _dedupe_metro_clusters(places: list[dict]) -> list[dict]:
+    return [p for p in places if p["name"] not in _METRO_CLUSTER_DROP_NAMES]
+
+
 def _load_geonames_places(band: Polygon) -> list[dict]:
     dest_dir = _download_and_extract_geonames()
     txt_path = dest_dir / "ES.txt"
@@ -174,8 +229,19 @@ def _load_geonames_places(band: Polygon) -> list[dict]:
             if admin_rank > _MAX_ADMIN_RANK_INCLUDED:
                 continue
             population = int(parts[14]) if parts[14] else 0
+            if population < _MIN_POPULATION_INCLUDED:
+                continue
+            name = parts[1]
+            if name in _EXCLUDED_NAMES:
+                continue
+            if (
+                _MALLORCA_BBOX["lat_min"] <= lat <= _MALLORCA_BBOX["lat_max"]
+                and _MALLORCA_BBOX["lon_min"] <= lon <= _MALLORCA_BBOX["lon_max"]
+                and name != _MALLORCA_KEEP
+            ):
+                continue
             places.append({
-                "name": parts[1],
+                "name": name,
                 "name_ascii": parts[2],
                 "lat": lat,
                 "lon": lon,
@@ -187,7 +253,7 @@ def _load_geonames_places(band: Polygon) -> list[dict]:
         "GeoNames ES.txt: %d in-band places kept, %d excluded (historical/abandoned/destroyed)",
         len(places), excluded_count,
     )
-    return places
+    return _dedupe_metro_clusters(places)
 
 
 def main() -> None:
