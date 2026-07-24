@@ -60,6 +60,9 @@
     background: #fff;
     padding: 5px 14px 5px 0;
     user-select: none;
+    cursor: ew-resize; /* clicking/dragging ANYWHERE in here scrubs the time
+      cursor (see script - no proximity gating at all), so the whole area
+      should read as horizontally-draggable, not just near the drawn line. */
     touch-action: none; /* this element owns the drag-to-scrub gesture -
       stop the browser's own pan/zoom gestures inside it so touchmove
       dragging (see script) isn't fought over with native scrolling. Scoped
@@ -69,7 +72,11 @@
     display: flex;
     align-items: center;
     height: 11px;
-    cursor: pointer;
+    cursor: ew-resize; /* a row click both jumps the time cursor AND selects
+      that model in one action - ew-resize (inherited from #stackWrap would
+      be overridden by this element's own default otherwise) signals the
+      less-discoverable of the two, hover highlighting already covers
+      "this row is clickable" via .row:hover below. */
   }
   .row:hover { background: #f6f4ef; }
   .row.selected { background: #f0e8d2; }
@@ -156,6 +163,11 @@
     z-index: 5;
   }
   #cursorHandle {
+    /* No cursor: ew-resize here - it would never actually apply. This
+      element inherits pointer-events:none from its parent #cursorLine (it's
+      purely decorative, see the script's own note on why), so the browser
+      never resolves hover/cursor-shape against it - #stackWrap/.row above
+      are what the mouse actually sees. */
     position: absolute;
     top: -7px;
     width: 0;
@@ -164,7 +176,6 @@
     border-left: 5px solid transparent;
     border-right: 5px solid transparent;
     border-top: 7px solid #8b3a2f;
-    cursor: ew-resize;
     z-index: 6;
   }
   #axisRow {
