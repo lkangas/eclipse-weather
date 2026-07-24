@@ -1030,15 +1030,18 @@ use the standing local HTTP server instead:
 Then open, from any real browser (WSL2 forwards localhost to Windows
 automatically):
 
-    http://localhost:8734/index.html          # Tool 1
-    http://localhost:8734/tool2_index.html    # Tool 2
-    http://localhost:8734/tool3_index.html    # Tool 3
+    http://localhost:8734/index.html                    # Tool 1
+    http://localhost:8734/tool2_index.html              # Tool 2
+    http://localhost:8734/tool3_index.html              # Tool 3
+    http://localhost:8734/placename_picker_index.html   # Placename picker (T41)
 
-All three served copies live in that one directory alongside their real
-manifests (`manifest.json`, `tool2_manifest.json`, `tool3_manifest.json`)
-and rendered PNGs - never edit these directly, they're synced copies of
-the real source files in `src/viz/web/` (`tool1_real.html`,
-`tool2_real.html`, `tool3_real.html`) after each edit.
+All four served copies live in that one directory alongside their real
+manifests (`manifest.json`, `tool2_manifest.json`, `tool3_manifest.json`,
+`placenames.json`) and rendered PNGs - never edit these directly, they're
+synced copies of the real source files in `src/viz/web/` (`tool1_real.html`,
+`tool2_real.html`, `tool3_real.html`, `placename_picker.html`) after each
+edit. `placenames.json`'s own tracked source is `config/placenames.json`
+(a frozen, manually curated list, not generated - see T41).
 
 ## Deferred / not now
 
@@ -1187,6 +1190,22 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
       everyone). Final count after this pass: **29 places**, confirmed via
       a second connected-components pass that zero clusters remain at the
       same 20km radius.
+      **Frozen, same day** (explicit user direction: "you can use this
+      list as a fixed list and remove any tools etc used to create it").
+      The 29-place list moved from a generated artifact
+      (`E:\data\eclipse-weather\...\placenames.json`, gitignored, outside
+      the repo, with no tracked copy) to a real, git-tracked source file -
+      `config/placenames.json`, the same status as `config/sites.yaml`/
+      `config/totality_path.json` (curated data, not regeneratable cache),
+      with a `status` field documenting it's frozen and pointing back
+      here for the full methodology. `scripts/generate_placename_data.py`
+      itself has been deleted - the real curation logic (feature-code
+      filters, admin_rank derivation, the cluster-dedup analysis, the
+      Madrid exception) lives in git history if this ever needs
+      re-running or extending, not as a live pipeline going forward.
+      `placename_picker.html`'s own served copy still needs the usual
+      manual re-sync after any future edit to the source (same convention
+      as Tool 1/2/3), it just no longer has a generator step before that.
 - [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
       `touchstart`/`touchmove`/`touchend` handling alongside the existing
       mouse events (same underlying drag functions, no duplicated logic),

@@ -133,14 +133,19 @@
   <span><span class="sw" style="background:#8b3a2f; border-radius:50%"></span>place (hover for name + numbers)</span>
 </div>
 <div id="sourceNote">
-  GeoNames ES.zip (per-country populated-place dump, CC-BY-4.0), clipped to config/totality_path.json's
-  north/south limit band (see scripts/generate_placename_data.py). Decision-support prototype only —
+  Frozen, manually curated list (2026-07-24) - config/placenames.json, no longer regenerated.
+  See TASKS.md's T41 entry for the full curation methodology. Decision-support prototype only —
   does not write sites.yaml.
 </div>
 
 <script>
 // ---------------------------------------------------------------------------
-// Real data via placenames.json (scripts/generate_placename_data.py).
+// Real data via placenames.json - a FROZEN, manually curated list
+// (config/placenames.json is the tracked source; this served copy is a
+// manual sync of it, same convention as Tool 1/2/3's own served copies).
+// The generator that originally produced it (scripts/generate_placename_
+// data.py) has been removed since this list won't be regenerated - see
+// git history and TASKS.md's T41 entry for the full methodology.
 // No time dimension here (unlike Tool 1/2/3) - purely a lat/lon + threshold
 // browsing tool, so none of the run-init/cursor machinery those tools use
 // is needed. Projection is plain equirectangular (lon->x, lat->y linear)
