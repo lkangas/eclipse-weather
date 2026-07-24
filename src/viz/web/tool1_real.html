@@ -369,6 +369,10 @@ const preloadedModels = new Set();
 
 function preloadModel(model, btnEl) {
   if (preloadedModels.has(model.id)) return;
+  if (btnEl.classList.contains("loading")) return; // already in flight - a second
+    // click here used to start an overlapping preload pass with its own
+    // independent `loaded` counter, racing the first and making the shown
+    // percentage jump around between the two.
   const urls = [];
   model.steps.forEach(h => {
     const images = model.imagesByStep[h] || {};

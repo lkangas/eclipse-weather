@@ -363,6 +363,10 @@ const preloadedRuns = new Set(); // run.runInit.getTime() values already preload
 function preloadRun(run, btnEl) {
   const key = run.runInit.getTime();
   if (preloadedRuns.has(key)) return;
+  if (btnEl.classList.contains("loading")) return; // already in flight - a second
+    // click here used to start an overlapping preload pass with its own
+    // independent `loaded` counter, racing the first and making the shown
+    // percentage jump around between the two.
   const urls = [];
   run.steps.forEach(h => {
     const images = run.imagesByStep[h] || {};
