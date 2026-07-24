@@ -1123,6 +1123,18 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
       instead - confirmed it fully contains every real place with room to
       spare (real lat range 39.5-43.5N, lon -8.4 to 2.7E) rather than
       derived ad hoc.
+      **Further narrowed same day**: even 15,871 was too many to be a
+      useful STARTING list (explicit user direction: "filter the whole
+      placename list, not just default slider value"). Filtered at the
+      generator/source level, not just the UI default, to admin_rank<=3
+      (capital through third-order administrative seats only) - real
+      count, live-verified, **3,135** places (8 PPLA + 14 PPLA2 + 3113
+      PPLA3). Caught and corrected a real mistake in my own earlier
+      verification: I'd first reported this cutoff as "265," which was
+      actually the intersection of admin_rank<=3 AND a leftover
+      population>=5000 filter from an unrelated prior test I forgot to
+      reset - the user's own visual read of the map (clearly denser than
+      265 dots) caught it before it shipped.
 - [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
       `touchstart`/`touchmove`/`touchend` handling alongside the existing
       mouse events (same underlying drag functions, no duplicated logic),

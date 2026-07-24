@@ -101,6 +101,19 @@ _ADMIN_RANK_BY_FEATURE_CODE = {
 }
 _DEFAULT_ADMIN_RANK = 6  # PPLX and every other minor/locality variant not listed above
 
+# Real, current places (15,871 of them, see docstring) is still too many to
+# ship/render as a useful starting list - filtered at the SOURCE to genuine
+# administrative seats (capital through third-order, admin_rank<=3) rather
+# than shipping everything and relying on the UI's slider default alone
+# (explicit user direction 2026-07-24: "filter the whole placename list,
+# not just default slider value"). Ordinary villages (admin_rank 5-6, the
+# overwhelming majority - 12,460 plain PPL + 276 minor/locality variants)
+# are dropped entirely, not just hidden. Real in-band count at this cutoff,
+# live-verified 2026-07-24: 3,135 (8 PPLA + 14 PPLA2 + 3113 PPLA3) - not
+# the 265 first reported, which was a stale test artifact (a population
+# filter from an earlier check was still active on top of it).
+_MAX_ADMIN_RANK_INCLUDED = 3
+
 
 def _download_and_extract_geonames() -> Path:
     dest_dir = _CACHE_DIR / "ES"
@@ -157,6 +170,9 @@ def _load_geonames_places(band: Polygon) -> list[dict]:
             if feature_code in _EXCLUDED_FEATURE_CODES:
                 excluded_count += 1
                 continue
+            admin_rank = _ADMIN_RANK_BY_FEATURE_CODE.get(feature_code, _DEFAULT_ADMIN_RANK)
+            if admin_rank > _MAX_ADMIN_RANK_INCLUDED:
+                continue
             population = int(parts[14]) if parts[14] else 0
             places.append({
                 "name": parts[1],
@@ -165,7 +181,7 @@ def _load_geonames_places(band: Polygon) -> list[dict]:
                 "lon": lon,
                 "population": population,
                 "feature_code": feature_code,
-                "admin_rank": _ADMIN_RANK_BY_FEATURE_CODE.get(feature_code, _DEFAULT_ADMIN_RANK),
+                "admin_rank": admin_rank,
             })
     log.info(
         "GeoNames ES.txt: %d in-band places kept, %d excluded (historical/abandoned/destroyed)",
