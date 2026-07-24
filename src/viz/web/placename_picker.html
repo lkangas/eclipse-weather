@@ -274,10 +274,6 @@ function setupSliders() {
   popInput.min = 0;
   popInput.max = maxPop;
   popInput.step = Math.max(1, Math.round(maxPop / 500) || 1);
-  // 0, showing every real in-band place at once - "much more to start"
-  // was the whole point of this rewrite (T41's original Natural Earth
-  // source only ever had 16 places total). Narrowing down is what the
-  // sliders are for, not a smaller default.
   popInput.value = 0;
 
   const ranks = DATA.places.map(p => p.admin_rank);
