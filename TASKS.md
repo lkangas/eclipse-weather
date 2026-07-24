@@ -1135,6 +1135,36 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
       population>=5000 filter from an unrelated prior test I forgot to
       reset - the user's own visual read of the map (clearly denser than
       265 dots) caught it before it shipped.
+      **Final numeric + manual curation, same day** (explicit user
+      direction): settled on admin_rank<=3 AND population>=34000 as the
+      baseline (also capped the min-population slider's own max at 60000
+      - a few huge outliers like Valencia/Zaragoza were dwarfing the
+      range that matters for browsing). On top of that, three real,
+      named exceptions the numeric cutoffs alone don't handle:
+      (1) Mallorca - every in-band place there except Palma dropped (the
+      island isn't the mainland corridor this tool is really about);
+      (2) Burriana - dropped outright per explicit direction (turned out
+      to already be below the numeric cutoffs, so this exclusion is
+      currently a no-op safeguard, not load-bearing);
+      (3) metro-area clustering - Paterna/Reus/San Sebastian de los
+      Reyes/Barakaldo each sit within ~1.5-12km of a real, larger city
+      (Valencia/Tarragona/Alcobendas/Bilbao respectively) that was
+      independently confirmed via live haversine-distance checks against
+      the real filtered data, not assumed from the names - kept only the
+      single largest place in each of those 4 clusters, dropping 11
+      names total (Paterna/Torrent/Mislata/Burjassot -> Valencia;
+      Reus -> Tarragona; San Sebastian de los Reyes/Tres Cantos ->
+      Alcobendas; Barakaldo/Santurtzi/Portugalete/Basauri -> Bilbao).
+      Final real count: **38 places**, verified end-to-end in-browser.
+      Also fixed a real dot-positioning bug found along the way: `.place`
+      (the flex row holding both a dot and its label) was what got
+      `transform:translate(-50%,-50%)`'d onto the true geographic
+      position, so a dot visibly shifted whenever its label toggled
+      visible (any filter narrow enough to drop below the 60-place
+      label-density threshold - exactly what a high min-population
+      filter does). Restructured so the dot centers itself independently
+      of whether its label is showing - verified a place's dot center is
+      now pixel-identical either way, not just visually similar.
 - [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
       `touchstart`/`touchmove`/`touchend` handling alongside the existing
       mouse events (same underlying drag functions, no duplicated logic),
