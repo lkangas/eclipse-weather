@@ -1048,10 +1048,12 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
 - Final go/no-go site choice **[human]** — the tool informs it, doesn't make it.
 - ~~Mobile support for Tool 1/2/3's cursors~~ — done, see **T42** below.
 - ~~Placename-picker tool for the extraction site list~~ — done, see **T41**
-  below. Still blocks rollout step 4 in a different sense now: T41's real
-  finding is that Natural Earth alone likely isn't sufficient for a truly
-  comprehensive list (only 16 places found) - a follow-up data-source
-  decision, not further tool-building, is what's actually still open here.
+  below - rewritten 2026-07-24 onto GeoNames after Natural Earth's real
+  16-place count proved insufficient, now 15,871 real places). Rollout
+  step 4's actual extraction-site-list decision is still a separate,
+  not-yet-started effort (which of these 15,871 to actually add to
+  `sites.yaml`'s extraction set) - this tool now has enough real data to
+  make that decision from, it just hasn't been made yet.
 
 ## Post-real-data build, 2026-07-23/24
 
@@ -1092,11 +1094,35 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
       totality band from this source, all in Spain, Bilbao down to
       Guadalajara - Natural Earth's populated-places layer is a globally
       curated significance-filtered ~7,300-place set, not an exhaustive
-      gazetteer, so no actual villages show up at any threshold. This
-      tool does its job (fast browsing/decision support), but this data
-      source alone probably won't be enough for the eventual comprehensive
-      extraction-list effort (rollout step 4's blocker) - a follow-up data
-      -source question, not more tool-building.
+      gazetteer, so no actual villages show up at any threshold.
+      **Rewritten 2026-07-24** on exactly this basis, per direct user
+      follow-up ("needs much more placenames to start"): swapped to
+      GeoNames' per-country dump (`download.geonames.org/export/dump/
+      ES.zip`, CC-BY-4.0, live-verified) - Spain's full dump has 30,895
+      populated-place entries nationwide; **15,871** genuinely fall inside
+      the real totality band polygon (three orders of magnitude more than
+      Natural Earth's 16), after excluding 162 places GeoNames' own
+      feature codes mark as no-longer-real (abandoned/destroyed/
+      historical - PPLQ/PPLW/PPLH/PPLCH). No GeoNames equivalent of
+      Natural Earth's SCALERANK exists, so `admin_rank` (0=capital/
+      provincial seat down to 5=ordinary village, 6=minor/locality
+      variant) is a new ordinal built from GeoNames' own documented
+      feature-code administrative-seniority semantics - same "lower is
+      bigger" slider convention kept from before, not reinvented.
+      Performance-verified at the new scale (2ms/filter-pass average
+      across all 15,871 DOM elements, real dispatched slider-drag
+      simulation) - no virtualization/canvas rewrite needed.
+      **Also fixed the same day**: the map's displayed extent used the
+      totality band polygon's own raw bounding box, which reaches ~51.6N
+      over open Atlantic at its NW corner (this window's path continues
+      northeast past Spain) - made the map far taller than any real place
+      needed (user: "limit the northern extent... does not have to be
+      square"). Now uses the project's own established Iberia bbox
+      (`config/models.yaml`'s `eclipse.bbox`, 36-44N/10W-5E - the same one
+      every Tool 1/2/3 map already renders against) as the display extent
+      instead - confirmed it fully contains every real place with room to
+      spare (real lat range 39.5-43.5N, lon -8.4 to 2.7E) rather than
+      derived ad hoc.
 - [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
       `touchstart`/`touchmove`/`touchend` handling alongside the existing
       mouse events (same underlying drag functions, no duplicated logic),
