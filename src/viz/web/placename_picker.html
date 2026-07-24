@@ -268,9 +268,14 @@ function repositionDots() {
   });
 }
 
+const POP_SLIDER_MAX = 60000; // capped - a handful of large provincial-seat
+  // outliers (hundreds of thousands) were dwarfing the range that actually
+  // matters for browsing; places above this still show at max threshold,
+  // they just can't be individually isolated from each other via this slider.
+
 function setupSliders() {
   const pops = DATA.places.map(p => p.population);
-  const maxPop = Math.max(0, ...pops);
+  const maxPop = Math.min(POP_SLIDER_MAX, Math.max(0, ...pops));
   popInput.min = 0;
   popInput.max = maxPop;
   popInput.step = Math.max(1, Math.round(maxPop / 500) || 1);
