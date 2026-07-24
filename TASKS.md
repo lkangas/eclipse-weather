@@ -1165,6 +1165,28 @@ the real source files in `src/viz/web/` (`tool1_real.html`,
       filter does). Restructured so the dot centers itself independently
       of whether its label is showing - verified a place's dot center is
       now pixel-identical either way, not just visually similar.
+      **One more round of manual curation, same day**: 38 still had two
+      real metro clusters too dense (the 4-named-cluster pass above
+      missed anything not explicitly named). Ran a systematic connected-
+      components pass over the real data (all pairs, 20km edge radius) to
+      find the rest rather than waiting for more one-off reports - found
+      the Guadalajara cluster the user flagged (6 members: Alcala de
+      Henares/Torrejon de Ardoz/Alcobendas/Guadalajara/Colmenar Viejo/
+      Azuqueca de Henares) AND the A Coruna/Oleiros cluster they flagged
+      (A Coruna + Ferrol/Naron/Oleiros) AND one neither had named yet
+      (Oviedo/Mieres) - fixed all three the same way rather than only the
+      two actually reported. The Guadalajara cluster was a genuine special
+      case: none of its 6 members is what that cluster is really "about" -
+      Madrid itself (pop 3,255,944) was missing from the source data
+      entirely because its real GeoNames coordinate sits just OUTSIDE the
+      totality band polygon (live-verified: `band.contains()` is False
+      for it - a correct clip result, Madrid genuinely sits just south of
+      the corridor). Per explicit direction ("replace that with Madrid"),
+      Madrid is now manually injected (real GeoNames row, hand-copied and
+      documented as a deliberate exception, not a loosened clip for
+      everyone). Final count after this pass: **29 places**, confirmed via
+      a second connected-components pass that zero clusters remain at the
+      same 20km radius.
 - [x] **T42** Mobile/touch support for Tool 1/2/3. Added real
       `touchstart`/`touchmove`/`touchend` handling alongside the existing
       mouse events (same underlying drag functions, no duplicated logic),

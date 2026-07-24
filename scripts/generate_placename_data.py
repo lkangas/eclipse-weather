@@ -196,16 +196,63 @@ def _band_polygon(path_data: dict) -> Polygon:
 #   Bilbao (347342) cluster: Barakaldo (100435, 6.3km), Santurtzi (46978,
 #     5.1km), Portugalete (45826, 3.8km), Basauri (42657, 10.4km) - Bilbao
 #     dwarfs all four, keep Bilbao only.
+#
+# Second pass, same day: the above handled 4 explicitly-named clusters, but
+# a full connected-components pass (all pairs, 20km edge radius) over the
+# real post-dedup data found the rest, including two the user hadn't named
+# (Oviedo/Mieres) - applied the same rule to those too rather than leaving
+# a known-identical problem for a later report:
+#   A Coruña (250438) cluster: Oleiros (35559, 7.7km direct), Ferrol
+#     (66799, 18.2km direct), Narón (37712, 22.0km from A Coruña directly
+#     but 3.9km from Ferrol - same connected component via that link, not
+#     a direct A Coruña neighbor) - A Coruña dwarfs all three, keep A
+#     Coruña only.
+#   Oviedo (220027) cluster: Mieres (44070, ~15km) - Oviedo is larger,
+#     keep Oviedo only.
+#   Madrid cluster (SPECIAL CASE): Alcalá de Henares (193751), Torrejón de
+#     Ardoz (118162), Alcobendas (116037), Guadalajara (93470), Colmenar
+#     Viejo (43700), Azuqueca de Henares (34685) - a real 6-satellite-town
+#     cluster around Madrid itself, EXCEPT Madrid (pop 3,255,944 - the
+#     actual national capital) isn't even in the source data, because its
+#     own real GeoNames coordinate (40.4165N, -3.70256E) sits just OUTSIDE
+#     the totality band polygon (live-verified 2026-07-24,
+#     `band.contains()` is False for it) - the polygon clip is correct,
+#     Madrid is genuinely just south of the corridor, but its satellite
+#     towns north/east of it are inside. Per explicit user direction
+#     ("replace that with madrid"), Madrid is manually injected below
+#     (see MADRID_MANUAL_INSERT) rather than picking whichever satellite
+#     happens to be biggest among just those 6 - none of them is what this
+#     cluster is actually "about".
 _METRO_CLUSTER_DROP_NAMES = {
     "Paterna", "Torrent", "Mislata", "Burjassot",  # -> Valencia
     "Reus",  # -> Tarragona
     "San Sebastián de los Reyes", "Tres Cantos",  # -> Alcobendas
     "Barakaldo", "Santurtzi", "Portugalete", "Basauri",  # -> Bilbao
+    "Ferrol", "Narón", "Oleiros",  # -> A Coruña
+    "Mieres",  # -> Oviedo
+    "Alcalá de Henares", "Torrejón de Ardoz", "Alcobendas", "Guadalajara",
+    "Colmenar Viejo", "Azuqueca de Henares",  # -> Madrid (manually inserted)
+}
+
+# Madrid's real GeoNames row (geonameid 3117735), copied by hand since it's
+# the one place this generator needs despite failing its own polygon-clip
+# check - see the cluster note above for why this is a deliberate,
+# documented exception rather than loosening the real clip for everyone.
+MADRID_MANUAL_INSERT = {
+    "name": "Madrid",
+    "name_ascii": "Madrid",
+    "lat": 40.4165,
+    "lon": -3.70256,
+    "population": 3255944,
+    "feature_code": "PPLC",
+    "admin_rank": 0,
 }
 
 
 def _dedupe_metro_clusters(places: list[dict]) -> list[dict]:
-    return [p for p in places if p["name"] not in _METRO_CLUSTER_DROP_NAMES]
+    kept = [p for p in places if p["name"] not in _METRO_CLUSTER_DROP_NAMES]
+    kept.append(MADRID_MANUAL_INSERT)
+    return kept
 
 
 def _load_geonames_places(band: Polygon) -> list[dict]:
