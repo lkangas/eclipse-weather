@@ -107,8 +107,8 @@
     <span class="readout" id="popReadout">—</span>
   </div>
   <div>
-    <label for="sigInput">Max significance rank (0=biggest, 10=smallest)</label>
-    <input type="range" id="sigInput" min="0" max="10" value="10">
+    <label for="sigInput">Max admin rank (0=capital/provincial seat, higher=ordinary village)</label>
+    <input type="range" id="sigInput" min="0" max="6" value="6">
     <span class="readout" id="sigReadout">—</span>
   </div>
   <div id="countReadout">—</div>
@@ -125,8 +125,9 @@
   <span><span class="sw" style="background:#8b3a2f; border-radius:50%"></span>place (hover for name + numbers)</span>
 </div>
 <div id="sourceNote">
-  Natural Earth ne_10m_populated_places, clipped to config/totality_path.json's north/south limit band
-  (see scripts/generate_placename_data.py). Decision-support prototype only — does not write sites.yaml.
+  GeoNames ES.zip (per-country populated-place dump, CC-BY-4.0), clipped to config/totality_path.json's
+  north/south limit band (see scripts/generate_placename_data.py). Decision-support prototype only —
+  does not write sites.yaml.
 </div>
 
 <script>
@@ -137,10 +138,11 @@
 // is needed. Projection is plain equirectangular (lon->x, lat->y linear)
 // with a light cos(mean latitude) correction on the x-axis only, matching
 // the same aspect-ratio-compensation idea this project's matplotlib maps
-// already use (tool1_renderer.py/basemap.py's ax.set_aspect(1.3) - tuned
-// there for the ~40N Iberia bbox; recomputed here from THIS map's own real
-// extent since the totality band reaches much further north, ~51.6N at
-// its NW corner over open Atlantic).
+// already use (tool1_renderer.py/basemap.py's ax.set_aspect(1.3)).
+// EXTENT is the project's own established Iberia bbox (see the generator's
+// own note on why - the totality band polygon's raw bounds reach ~51.6N
+// over open Atlantic, far north of any real place, which made this map far
+// taller than the actual content needed), not derived from the data itself.
 // ---------------------------------------------------------------------------
 let DATA = null;
 let EXTENT = null; // padded {lonMin, lonMax, latMin, latMax}
@@ -242,9 +244,8 @@ function buildDots() {
     el.className = "place";
     el.style.left = x + "px";
     el.style.top = y + "px";
-    el.title = p.name + " (" + p.admin0 + ")  pop " +
-      (p.pop_max != null ? fmtPop(p.pop_max) : "unknown") +
-      "  scalerank " + p.scalerank + "  rank_max " + p.rank_max;
+    el.title = p.name + "  pop " + (p.population > 0 ? fmtPop(p.population) : "unknown") +
+      "  " + p.feature_code + "  admin_rank " + p.admin_rank;
 
     const dotEl = document.createElement("div");
     dotEl.className = "dot";
@@ -268,19 +269,19 @@ function repositionDots() {
 }
 
 function setupSliders() {
-  const pops = DATA.places.map(p => p.pop_max || 0);
+  const pops = DATA.places.map(p => p.population);
   const maxPop = Math.max(0, ...pops);
   popInput.min = 0;
   popInput.max = maxPop;
   popInput.step = Math.max(1, Math.round(maxPop / 500) || 1);
+  // 0, showing every real in-band place at once - "much more to start"
+  // was the whole point of this rewrite (T41's original Natural Earth
+  // source only ever had 16 places total). Narrowing down is what the
+  // sliders are for, not a smaller default.
   popInput.value = 0;
 
-  const ranks = DATA.places.map(p => p.scalerank);
-  // Keep the slider's own max at least 10 (Natural Earth's documented
-  // 0-10 SCALERANK domain, per TASKS.md's own field description) even if
-  // this particular clip's real places don't reach the low-significance
-  // end - a re-run over a bigger totality band could.
-  const maxRank = Math.max(10, ...ranks);
+  const ranks = DATA.places.map(p => p.admin_rank);
+  const maxRank = Math.max(0, ...ranks);
   sigInput.min = 0;
   sigInput.max = maxRank;
   sigInput.step = 1;
@@ -295,8 +296,8 @@ function updateFilter() {
 
   let visibleCount = 0;
   PLACES.forEach(({ p, el }) => {
-    const popOk = (p.pop_max || 0) >= popThreshold;
-    const sigOk = p.scalerank <= sigThreshold;
+    const popOk = p.population >= popThreshold;
+    const sigOk = p.admin_rank <= sigThreshold;
     const show = popOk && sigOk;
     el.classList.toggle("hidden", !show);
     if (show) visibleCount++;
