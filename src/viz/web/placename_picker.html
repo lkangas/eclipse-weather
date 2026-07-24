@@ -52,23 +52,31 @@
   #mapSvg { position: absolute; top: 0; left: 0; pointer-events: none; }
 
   .place {
+    /* Anchor only - deliberately NO transform/sizing here. .dot below
+       centers itself on this exact point independently, so it can't shift
+       depending on whether .dotLabel happens to be visible (it used to -
+       .place itself was the flex row + translate(-50%,-50%), so the dot
+       moved whenever the label's width changed the combined box). */
     position: absolute;
-    transform: translate(-50%, -50%);
-    display: flex;
-    align-items: center;
-    gap: 4px;
     z-index: 2;
   }
   .place.hidden { display: none; }
   .dot {
+    position: absolute;
+    left: 0;
+    top: 0;
+    transform: translate(-50%, -50%);
     width: 6px;
     height: 6px;
     border-radius: 50%;
     background: #8b3a2f;
     border: 1px solid #5a1f16;
-    flex: none;
   }
   .dotLabel {
+    position: absolute;
+    left: 6px;
+    top: 50%;
+    transform: translateY(-50%);
     font-size: 9.5px;
     color: #232320;
     white-space: nowrap;
