@@ -70,7 +70,12 @@
     cursor: ew-resize;
     touch-action: none;
   }
-  .row { display: flex; align-items: center; height: 15px; cursor: pointer; }
+  /* ew-resize, not pointer: a row click both jumps the shared time cursor
+     AND selects that model in single-row view (see script - no proximity
+     gating), and rows cover almost the entire #stackWrap area, so their own
+     cursor was masking #stackWrap's ew-resize above for nearly every pixel.
+     .row:hover below already covers "this row is clickable". */
+  .row { display: flex; align-items: center; height: 15px; cursor: ew-resize; }
   .row:hover { background: #f6f4ef; }
   .row.clicked { background: #f0e8d2; }
   .rowLabel {
