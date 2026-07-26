@@ -12,7 +12,7 @@ rows are hidden - see review_grid.json's "models" list, gamma rows only):
     same gamma=0.4 stretch as the rest of that row's cells, for visual
     consistency within the row.
 
-  hml_composite: same 8 models, a false-color composite showing all three
+  hml_composite: same models, a false-color composite showing all three
     layers AT ONCE instead of collapsing them into one amount - each
     layer gets its own color (R=High, G=Mid, B=Low), alpha-composited over
     a white "clear sky" background in High->Mid->Low order (low cloud,
@@ -21,6 +21,13 @@ rows are hidden - see review_grid.json's "models" list, gamma rows only):
     channel's alpha gets the same gamma=0.4 stretch as everything else in
     the row before compositing, for the same "don't wash out low values"
     reason as the rest of this session's colormap work.
+
+Also applied to the AIFS ENS Prob row (aifs_ens_prob_gamma040) - it has
+its own Low/Mid/High cells too (P(quantity>=threshold) per layer, from
+render_prob_by_quantity_experiment.py, NOT the same computation path as
+the real models' cloud fractions), so it was originally missed by this
+script entirely; the same combine/composite treatment applies just as
+well to three probability layers as to three cloud-fraction layers.
 
 (total_diff, a combined-vs-native comparison column, was tried and then
 removed per explicit user direction - the combined_total column above is
@@ -40,6 +47,7 @@ import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
+from scripts.render_prob_by_quantity_experiment import _compute_prob as _compute_aifs_ens_prob
 from src.config import eclipse_config
 from src.viz.basemap import draw_basemap
 from src.viz.tool1_renderer import (
@@ -74,6 +82,18 @@ def _read_lmh(model_id: str, run_init: datetime, step: int, bbox: dict):
     return lats, lons, lval, mval, hval
 
 
+def _read_lmh_aifs_ens_prob(run_init: datetime, step: int, bbox: dict):
+    low = _compute_aifs_ens_prob(run_init, step, "low", bbox)
+    mid = _compute_aifs_ens_prob(run_init, step, "mid", bbox)
+    high = _compute_aifs_ens_prob(run_init, step, "high", bbox)
+    if low is None or mid is None or high is None:
+        return None
+    lats, lons, lval = low
+    _, _, mval = mid
+    _, _, hval = high
+    return lats, lons, lval, mval, hval
+
+
 def _new_fig(bbox: dict):
     fig_width, fig_height, axes_top = _figure_layout(bbox)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
@@ -95,11 +115,10 @@ def _finish(fig, ax, bbox: dict, axes_top: float, title: str, out_path):
     plt.close(fig)
 
 
-def render_combined_total(model_id: str, run_init: datetime, step: int, bbox: dict):
-    result = _read_lmh(model_id, run_init, step, bbox)
-    if result is None:
-        return None
-    lats, lons, lval, mval, hval = result
+def render_combined_total(
+    lval, mval, hval, lats, lons, run_init: datetime, step: int, bbox: dict,
+    label: str, quantity_label: str, out_dir,
+):
     combined = (1 - (1 - lval / 100) * (1 - mval / 100) * (1 - hval / 100)) * 100
 
     norm = mcolors.PowerNorm(gamma=GAMMA, vmin=0, vmax=100)
@@ -109,23 +128,20 @@ def render_combined_total(model_id: str, run_init: datetime, step: int, bbox: di
     ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "r-", linewidth=0.8, alpha=0.6, zorder=7)
     ax.plot(_TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "r--", linewidth=1, alpha=0.8, zorder=7)
 
-    label = _MODEL_LABELS.get(model_id, model_id)
     valid = run_init + timedelta(hours=step)
     title = (
-        f"{label} Combined Total (H+M+L, gamma={GAMMA:.1f}) - init {_fmt_dm_z(run_init)} - "
+        f"{label} {quantity_label} (gamma={GAMMA:.1f}) - init {_fmt_dm_z(run_init)} - "
         f"valid {_fmt_dm_z(valid)} (+{step}h)"
     )
-    out_path = OUTPUT_DIR / f"{model_id}_cmap_gamma040" / "combined_total" / f"{run_init:%Y%m%d%H}_{step:03d}.png"
+    out_path = out_dir / "combined_total" / f"{run_init:%Y%m%d%H}_{step:03d}.png"
     _finish(fig, ax, bbox, axes_top, title, out_path)
     return str(out_path.relative_to(OUTPUT_DIR))
 
 
-def render_hml_composite(model_id: str, run_init: datetime, step: int, bbox: dict):
-    result = _read_lmh(model_id, run_init, step, bbox)
-    if result is None:
-        return None
-    lats, lons, lval, mval, hval = result
-
+def render_hml_composite(
+    lval, mval, hval, lats, lons, run_init: datetime, step: int, bbox: dict,
+    label: str, quantity_label: str, out_dir,
+):
     # Same gamma stretch as everything else in the row, applied per-channel
     # before compositing, so a thin/faint layer still shows up as a tint
     # instead of vanishing into the white background.
@@ -134,8 +150,8 @@ def render_hml_composite(model_id: str, run_init: datetime, step: int, bbox: dic
     b_alpha = np.clip(lval / 100, 0, 1) ** GAMMA
 
     canvas = np.ones(r_alpha.shape + (3,))
-    # High cloud composited first (as if farthest away), then mid, then low
-    # last/on top - low cloud is closest to the ground and the most
+    # High composited first (as if farthest away), then mid, then low
+    # last/on top - low cloud (or P(low) for the prob row) is the most
     # decisive layer for whether the eclipse is actually visible, so it
     # should visually win where layers overlap.
     for alpha, color in (
@@ -145,10 +161,11 @@ def render_hml_composite(model_id: str, run_init: datetime, step: int, bbox: dic
     ):
         canvas = canvas * (1 - alpha[..., None]) + color * alpha[..., None]
 
+    lats_plot = lats
     # imshow needs ascending lat order with origin="lower" to place north
     # at the top - flip if the source grid is north-to-south descending.
-    if lats[0] > lats[-1]:
-        lats = lats[::-1]
+    if lats_plot[0] > lats_plot[-1]:
+        lats_plot = lats_plot[::-1]
         canvas = canvas[::-1, :, :]
 
     fig, ax, axes_top = _new_fig(bbox)
@@ -163,15 +180,34 @@ def render_hml_composite(model_id: str, run_init: datetime, step: int, bbox: dic
     ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "k-", linewidth=0.8, alpha=0.5, zorder=7)
     ax.plot(_TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "k--", linewidth=1, alpha=0.7, zorder=7)
 
-    label = _MODEL_LABELS.get(model_id, model_id)
     valid = run_init + timedelta(hours=step)
     title = (
-        f"{label} H/M/L composite (R=High,G=Mid,B=Low) - init {_fmt_dm_z(run_init)} - "
+        f"{label} {quantity_label} - init {_fmt_dm_z(run_init)} - "
         f"valid {_fmt_dm_z(valid)} (+{step}h)"
     )
-    out_path = OUTPUT_DIR / f"{model_id}_cmap_gamma040" / "hml_composite" / f"{run_init:%Y%m%d%H}_{step:03d}.png"
+    out_path = out_dir / "hml_composite" / f"{run_init:%Y%m%d%H}_{step:03d}.png"
     _finish(fig, ax, bbox, axes_top, title, out_path)
     return str(out_path.relative_to(OUTPUT_DIR))
+
+
+def _process_row(gamma_row, run_init, step, bbox, lmh, label, combined_label, composite_label, out_dir):
+    if lmh is None:
+        gamma_row["cells"]["combined_total"] = None
+        gamma_row["cells"]["hml_composite"] = None
+        return
+    lats, lons, lval, mval, hval = lmh
+
+    combined_path = render_combined_total(
+        lval, mval, hval, lats, lons, run_init, step, bbox, label, combined_label, out_dir
+    )
+    gamma_row["cells"]["combined_total"] = {"image": combined_path, "h": step, "valid": gamma_row["cells"]["low"]["valid"]}
+    print(out_dir.name, "combined_total ->", combined_path)
+
+    composite_path = render_hml_composite(
+        lval, mval, hval, lats, lons, run_init, step, bbox, label, composite_label, out_dir
+    )
+    gamma_row["cells"]["hml_composite"] = {"image": composite_path, "h": step, "valid": gamma_row["cells"]["low"]["valid"]}
+    print(out_dir.name, "hml_composite ->", composite_path)
 
 
 def main() -> None:
@@ -191,22 +227,30 @@ def main() -> None:
     for model_id in MODELS_WITH_LMH:
         gamma_row_id = f"{model_id}_cmap_gamma040"
         gamma_row = by_id[gamma_row_id]
-        base_row = by_id.get(model_id, gamma_row)  # base row may no longer exist in models[]
-        low_cell = gamma_row["cells"]["low"]
         run_init = datetime.fromisoformat(gamma_row["run_init"].replace("Z", "+00:00"))
-        step = low_cell["h"]
-
-        combined_path = render_combined_total(model_id, run_init, step, bbox)
-        gamma_row["cells"]["combined_total"] = (
-            {"image": combined_path, "h": step, "valid": low_cell["valid"]} if combined_path else None
+        step = gamma_row["cells"]["low"]["h"]
+        lmh = _read_lmh(model_id, run_init, step, bbox)
+        label = _MODEL_LABELS.get(model_id, model_id)
+        _process_row(
+            gamma_row, run_init, step, bbox, lmh, label,
+            "Combined Total (H+M+L)", "H/M/L composite (R=High,G=Mid,B=Low)",
+            OUTPUT_DIR / gamma_row_id,
         )
-        print(gamma_row_id, "combined_total ->", combined_path)
 
-        composite_path = render_hml_composite(model_id, run_init, step, bbox)
-        gamma_row["cells"]["hml_composite"] = (
-            {"image": composite_path, "h": step, "valid": low_cell["valid"]} if composite_path else None
+    # AIFS ENS Prob row - same treatment, different data source (three
+    # P(quantity>=threshold) layers instead of three cloud-fraction layers).
+    prob_row_id = "aifs_ens_prob_gamma040"
+    if prob_row_id in by_id:
+        prob_row = by_id[prob_row_id]
+        run_init = datetime.fromisoformat(prob_row["run_init"].replace("Z", "+00:00"))
+        step = prob_row["cells"]["low"]["h"]
+        lmh = _read_lmh_aifs_ens_prob(run_init, step, bbox)
+        _process_row(
+            prob_row, run_init, step, bbox, lmh, "AIFS ENS Prob",
+            "Combined P(any>=thr)",
+            "P composite (R=Hi,G=Mid,B=Lo)",
+            OUTPUT_DIR / prob_row_id,
         )
-        print(gamma_row_id, "hml_composite ->", composite_path)
 
     for m in grid["models"]:
         m["cells"].pop("total_diff", None)
