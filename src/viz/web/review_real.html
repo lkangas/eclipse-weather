@@ -34,7 +34,7 @@
   }
   h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
   .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; }
-  table { border-collapse: collapse; width: 100%; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
   th, td {
     border: 1px solid var(--border);
     padding: 0.4rem;
@@ -50,6 +50,7 @@
     letter-spacing: 0.03em;
     color: var(--muted);
     z-index: 1;
+    overflow-wrap: anywhere;
   }
   tbody th {
     text-align: left;
@@ -59,7 +60,7 @@
     position: sticky;
     left: 0;
   }
-  td.cell { background: var(--cell-bg); text-align: center; }
+  td.cell { background: var(--cell-bg); text-align: center; width: 220px; max-width: 220px; }
   td.empty { background: var(--empty-bg); color: var(--muted); font-size: 0.75rem; }
   td.cell img {
     width: 100%;
@@ -86,8 +87,8 @@ const FIELD_LABELS = {
   low: "Low",
   mid: "Mid",
   high: "High",
-  combined_total: "Combined Total (H+M+L)",
-  hml_composite: "H/M/L Composite (R=High/G=Mid/B=Low)",
+  combined_total: "Comb",
+  hml_composite: "Comb Color",
 };
 
 function buildCell(cell, cacheBust, altText) {
@@ -125,6 +126,22 @@ async function main() {
     `Tool 1 frames generated ${data.generated_at} — one representative step per model/field (closest to +24h with real data). Click an image to open full size.`;
 
   const table = document.getElementById("grid");
+
+  // table-layout: fixed needs every column's width nailed down up front via
+  // <col> - otherwise auto-layout dumps leftover width (table is 100% wide)
+  // into whichever column it feels like, which is what caused the "Comb
+  // Color" column to balloon to several times the others' width earlier.
+  const colgroup = document.createElement("colgroup");
+  const labelCol = document.createElement("col");
+  labelCol.style.width = "170px";
+  colgroup.appendChild(labelCol);
+  for (const field of data.fields) {
+    const col = document.createElement("col");
+    col.style.width = "230px";
+    colgroup.appendChild(col);
+  }
+  table.appendChild(colgroup);
+
   const thead = document.createElement("thead");
   const headRow = document.createElement("tr");
   headRow.appendChild(document.createElement("th"));
