@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import cfgrib
@@ -34,7 +34,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from src.config import DATA_RAW, DATA_ROOT, eclipse_config, get_model
-from src.derive.humidity_to_cloud import derive_cloud_fractions
 from src.extract.ecmwf_extractor import _iter_members, _percent_scale
 from src.extract.grib_regular_extractor import _gefs_levels_datasets, _gfs_layer_datasets
 from src.extract.icon_extractor import (
@@ -92,7 +91,7 @@ def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple |
 def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     if field == "total":
         return None  # SP2 has no native total field (meteofrance_extractor.py's own note)
-    if field == "prob_clear":
+    if field == "prob_cloud":
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arome_france", run_init):
@@ -113,7 +112,7 @@ def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tupl
     T31c's own _field_arpege for the same reasoning."""
     if field == "total":
         return None
-    if field == "prob_clear":
+    if field == "prob_cloud":
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arpege_europe", run_init):
@@ -189,61 +188,66 @@ def _read_ecmwf_grid(path: Path, shortname: str, scale: float, bbox: dict) -> tu
     return _crop(da0.latitude.values, da0.longitude.values, mean_values * scale, bbox)
 
 
-_PROB_CLEAR_THRESHOLD_PCT = 20.0  # matches site_ranking.py's CLEAR_THRESHOLD_PCT_DEFAULT (T32) -
-                                   # keep these in sync. Not imported directly from site_ranking.py
-                                   # to avoid pulling its polars/matplotlib report machinery into
-                                   # the render path for one shared constant.
+_PROB_CLOUD_THRESHOLD_PCT = 10.0  # locked in after comparing 0-30% via the
+                                   # threshold-sweep review tool (now removed - its job was
+                                   # done once this value was picked). Deliberately DIFFERENT
+                                   # from site_ranking.py's own CLEAR_THRESHOLD_PCT_DEFAULT
+                                   # (20.0, T32) - the two are intentionally separate metrics,
+                                   # not kept in sync: site_ranking.py's report answers "which
+                                   # site is most likely clear" (P(cloud_low < 20%), the useful
+                                   # framing for ranking viewing sites), while this map shows
+                                   # the complementary P(cloud_low >= 10%) - cloud probability,
+                                   # not clear probability, at its own separately-tuned
+                                   # threshold, per user direction. Not imported directly from
+                                   # site_ranking.py to avoid pulling its polars/matplotlib
+                                   # report machinery into the render path for one constant.
 
 
-def _read_ecmwf_grid_prob_clear(path: Path, shortname: str, scale: float, bbox: dict) -> tuple | None:
+def _read_ecmwf_grid_prob_cloud(path: Path, shortname: str, scale: float, bbox: dict) -> tuple | None:
     """Like _read_ecmwf_grid, but instead of the ensemble MEAN, computes the
-    fraction of members with cloud_low below _PROB_CLEAR_THRESHOLD_PCT at
-    each grid cell (as a percent 0-100, same scale/rendering convention as
-    every other field) - the map analogue of site_ranking.py's own pooled
-    P(cloud_low < 20%) point metric (T32), just per-pixel instead of
-    per-named-site. `scale` must be applied BEFORE thresholding (unlike the
-    plain mean, which commutes with a linear scale applied after averaging) -
-    comparing against a threshold is not a linear operation.
+    fraction of members with cloud_low AT OR ABOVE _PROB_CLOUD_THRESHOLD_PCT
+    at each grid cell (as a percent 0-100, same scale/rendering convention as
+    every other field) - cloud probability, the complement-in-spirit of
+    site_ranking.py's own pooled P(cloud_low < 20%) clear-probability point
+    metric (T32) but at its own separately-tuned 10% threshold, just
+    per-pixel instead of per-named-site. `scale` must be
+    applied BEFORE thresholding (unlike the plain mean, which commutes with a
+    linear scale applied after averaging) - comparing against a threshold is
+    not a linear operation.
 
-    A deterministic single-member file degrades to a binary 0%/100% map per
-    cell - not a special case, same "no special-casing" philosophy already
-    used by _read_ecmwf_grid's own mean-of-one-member no-op."""
+    Ensemble-only: a deterministic single-member file would degrade to a
+    meaningless binary 0%/100% map per cell, so callers must not invoke this
+    for deterministic models (see _aifs_field's own ensemble-kind check)."""
     if not path.exists():
         return None
     members = _iter_members(path, shortname)
     if not members:
         return None
     stacked = np.stack([da.values for _, da in members], axis=0) * scale
-    prob_pct = (stacked < _PROB_CLEAR_THRESHOLD_PCT).mean(axis=0) * 100.0
+    prob_pct = (stacked >= _PROB_CLOUD_THRESHOLD_PCT).mean(axis=0) * 100.0
     _, da0 = members[0]
     return _crop(da0.latitude.values, da0.longitude.values, prob_pct, bbox)
 
 
 def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
-    """Native total (tcc) + derived L/M/H from pressure-level q/t, same
-    provenance split as ecmwf_extractor.py's _extract_hres (two different
-    source files, not two different rows here - Tool 1 renders one field at
-    a time so there's no PointRow-style provenance-per-row concern)."""
+    """Native total (tcc) only. HRES has no native low/mid/high split, and
+    Tool 1 deliberately does NOT render the humidity-derived L/M/H estimate
+    src/derive/humidity_to_cloud.py can produce for it (see
+    ecmwf_extractor.py/cloud_field_comparison.py for where that derivation is
+    still used) - a real check against HRES's own native total (random-
+    overlap combination of the derived bands vs native tcc) showed only
+    ~0.35 correlation, mean |diff| ~14pp, max ~97pp - the RHc thresholds
+    were tuned on a single GFS calibration sample (T22), never validated
+    against HRES itself, and are not trustworthy enough to show here.
+    Same "total only" shape as _ecmwf_ens_field below."""
     model_config = get_model("ecmwf_hres")
     out_dir = DATA_RAW / "ecmwf_hres" / format_init_dir(run_init)
 
-    if field == "total":
-        scale = _percent_scale(model_config["cloud"]["total"], "total")
-        shortname = model_config["cloud"]["total"]["param"]
-        return _read_ecmwf_grid(out_dir / f"tcc_f{step:03d}.grib2", shortname, scale, bbox)
-
-    path = out_dir / f"pl_f{step:03d}.grib2"
-    if not path.exists():
+    if field != "total":
         return None
-    try:
-        derived = derive_cloud_fractions(path)
-    except Exception:
-        log.exception("tool1_renderer: ecmwf_hres derive_cloud_fractions failed for %s", path)
-        return None
-    var = f"cloud_{field}"
-    if var not in derived:
-        return None
-    return _crop(derived.latitude.values, derived.longitude.values, derived[var].values, bbox)
+    scale = _percent_scale(model_config["cloud"]["total"], "total")
+    shortname = model_config["cloud"]["total"]["param"]
+    return _read_ecmwf_grid(out_dir / f"tcc_f{step:03d}.grib2", shortname, scale, bbox)
 
 
 def _ecmwf_ens_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
@@ -268,20 +272,23 @@ def _aifs_field(
     with tcc/lcc/mcc/hcc all genuinely native (ecmwf_extractor.py's
     _aifs_rows note), unlike hres's native-total/derived-levels split.
 
-    field="prob_clear" is the one exception to the total/low/mid/high set -
-    it's not a raw model field at all, it's P(cloud_low < threshold) computed
-    across members (see _read_ecmwf_grid_prob_clear). Reuses the "low" cloud
-    shortname (lcc) regardless of which AIFS product this is - aifs_single
-    degrades to a binary per-cell map, aifs_ens gives a real 0-100% spread."""
+    field="prob_cloud" is the one exception to the total/low/mid/high set -
+    it's not a raw model field at all, it's P(cloud_low >= threshold) computed
+    across members (see _read_ecmwf_grid_prob_cloud). Ensemble-only: a
+    deterministic model (aifs_single) has no member spread to compute a P()
+    from, so it's a meaningless binary 0%/100% map per cell, not a real
+    probability - skip it there rather than render something misleading."""
     model_config = get_model(model_name)
     path = DATA_RAW / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
     if field == "total":
         scale = _percent_scale(model_config["cloud"]["total"], "total")
         shortname = model_config["cloud"]["total"]["param"]
         return _read_ecmwf_grid(path, shortname, scale, bbox)
-    if field == "prob_clear":
+    if field == "prob_cloud":
+        if "ensemble" not in model_config["kind"]:
+            return None  # deterministic, single member - no ensemble spread to compute a P() from
         scale = _percent_scale(model_config["cloud"]["levels"], "levels")
-        return _read_ecmwf_grid_prob_clear(path, _AIFS_SHORTNAME_BY_FIELD["low"], scale, bbox)
+        return _read_ecmwf_grid_prob_cloud(path, _AIFS_SHORTNAME_BY_FIELD["low"], scale, bbox)
     scale = _percent_scale(model_config["cloud"]["levels"], "levels")
     shortname = _AIFS_SHORTNAME_BY_FIELD[field]
     return _read_ecmwf_grid(path, shortname, scale, bbox)
@@ -314,7 +321,7 @@ def _icon_path(model_name: str, run_init: datetime, step: int, param: str) -> Pa
 def _icon_eu_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Already regular lat/lon - direct read, no remap (unlike icon_global
     below)."""
-    if field == "prob_clear":
+    if field == "prob_cloud":
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     path = _icon_path("icon_eu", run_init, step, param)
@@ -331,7 +338,7 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     weights (already built/verified for the eclipse archiver's own
     DATA_RAW-rooted icon_global path) to remap+crop to Iberia in one call,
     same as cloud_field_comparison.py's _field_icon_global."""
-    if field == "prob_clear":
+    if field == "prob_cloud":
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     src_path = _icon_path("icon_global", run_init, step, param)
@@ -360,6 +367,59 @@ _MODEL_READERS = {
     "icon_eu": _icon_eu_field,
     "icon_global": _icon_global_field,
 }
+
+
+# Display labels for the title text - same small per-model mapping already
+# duplicated across scripts/generate_tool{1,2,3}_manifest.py; kept local
+# here too rather than importing a script module into src/.
+_MODEL_LABELS = {
+    "gfs": "GFS",
+    "gefs_extended": "GEFS Extended",
+    "arome_france": "AROME France",
+    "arpege_europe": "ARPEGE Europe",
+    "ecmwf_hres": "ECMWF HRES",
+    "ecmwf_ens": "ECMWF ENS",
+    "aifs_single": "AIFS Single",
+    "aifs_ens": "AIFS ENS",
+    "icon_eu": "ICON EU",
+    "icon_global": "ICON Global",
+}
+
+# "temp" reserved for future surface-temperature frames (deferred - none of
+# the fetchers pull it yet, see models.yaml's surface_temp entries/T37).
+_FIELD_LABELS = {
+    "total": "Total",
+    "low": "Low",
+    "mid": "Mid",
+    "high": "High",
+    "prob_cloud": "Prob",
+    "temp": "Temp",
+}
+
+
+def _fmt_dm_z(dt: datetime) -> str:
+    """'10.8. 00Z' style - day.month. (no year, no leading zeros) + hour Z."""
+    return f"{dt.day}.{dt.month}. {dt:%H}Z"
+
+
+_MAP_ASPECT = 1.3  # must match the ax.set_aspect() call below
+_FIG_WIDTH_IN = 6.0
+_TITLE_HEIGHT_IN = 0.35  # just enough for one line of 10pt title text
+
+
+def _figure_layout(bbox: dict) -> tuple[float, float, float]:
+    """Figure (width, height) sized so the map fills it edge-to-edge (no
+    margins) with only a thin strip reserved on top for the title, plus the
+    axes-box top fraction to pass to subplots_adjust(). Height is derived
+    from the bbox's lon/lat span and _MAP_ASPECT so the map area itself is
+    never letterboxed - if we instead used a fixed figsize and relied on
+    set_aspect's default 'box' adjustment, matplotlib would shrink the axes
+    box to fit the aspect and leave white bars, exactly what this avoids."""
+    lon_span = bbox["lon_max"] - bbox["lon_min"]
+    lat_span = bbox["lat_max"] - bbox["lat_min"]
+    map_height_in = _FIG_WIDTH_IN * (lat_span * _MAP_ASPECT) / lon_span
+    fig_height_in = map_height_in + _TITLE_HEIGHT_IN
+    return _FIG_WIDTH_IN, fig_height_in, map_height_in / fig_height_in
 
 
 def render_frame(
@@ -398,7 +458,8 @@ def render_frame(
         # expensive matplotlib construction/savefig below.
         return output_path, result is not None
 
-    fig, ax = plt.subplots(figsize=(6, 5))
+    fig_width, fig_height, axes_top = _figure_layout(bbox)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     if result is None:
         ax.text(
             0.5, 0.5, f"{model_name}\n(no data)",
@@ -406,11 +467,10 @@ def render_frame(
         )
     else:
         lats, lons, values = result
-        mesh = ax.pcolormesh(
+        ax.pcolormesh(
             lons, lats, values, cmap="Blues", vmin=0, vmax=100,
             shading="auto", rasterized=True,
         )
-        fig.colorbar(mesh, ax=ax, shrink=0.8, label=f"cloud_{field} (%)")
         # Coastline/roads/eclipse-path drawn stroke-only, on top of the
         # cloud fill - see basemap.py's docstring for why (no fill: the
         # pcolormesh above already covers the whole bbox, land included).
@@ -423,8 +483,19 @@ def render_frame(
     ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
     ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
     ax.set_aspect(1.3)
-    ax.set_title(f"{model_name}  run {run_init:%Y-%m-%d %HZ}  +{step}h  ({field})", fontsize=10)
-    fig.tight_layout()
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    label = _MODEL_LABELS.get(model_name, model_name)
+    field_label = _FIELD_LABELS.get(field, field)
+    valid = run_init + timedelta(hours=step)
+    ax.set_title(
+        f"{label} {field_label} - init {_fmt_dm_z(run_init)} - valid {_fmt_dm_z(valid)} (+{step}h)",
+        fontsize=10,
+    )
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(output_path, dpi=100)

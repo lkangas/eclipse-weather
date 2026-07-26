@@ -13,25 +13,33 @@ Provenance / row-shape design (CLAUDE.md Hard Constraint #3 + PointRow's
 one-`provenance`-string-per-row schema)
 ---------------------------------------------------------------------------
 ecmwf_hres has a native TOTAL cloud field (tcc, models.yaml-confirmed) but
-NO native low/mid/high split -- that split only exists via
-src/derive/humidity_to_cloud.py's q+t -> RH -> cloud-fraction derivation
-running on the model's pressure-level humidity. PointRow carries exactly
-ONE provenance string per row, not one per field, so a row that mixed a
-native cloud_total with a derived cloud_low/mid/high would mis-describe 3
-of its 4 numeric fields. Rather than bend the schema, ecmwf_hres emits TWO
-PointRows per (site, valid time):
+NO native low/mid/high split. A humidity-derived L/M/H estimate was
+implemented and wired in here (via src/derive/humidity_to_cloud.py's q+t ->
+RH -> cloud-fraction pipeline on the model's pressure-level file), but is
+deliberately NOT used: checked against ecmwf_hres's own native total (the
+one real field this model has to validate against), the derived bands
+combined via random overlap correlate only ~0.35 with native total (mean
+|diff| ~14pp, max ~97pp) - the RHc thresholds were tuned on a single GFS
+calibration sample (T22) and were never actually validated against HRES
+itself. Per explicit user direction, ecmwf_hres now emits exactly ONE
+PointRow per (site, valid time), same shape as ecmwf_ens:
 
-  1. provenance="native": cloud_total populated (tcc, scaled to percent),
-     cloud_low/mid/high left None.
-  2. provenance="derived": cloud_low/mid/high populated (from
-     derive_cloud_fractions on the matching pl_f*.grib2), cloud_total left
-     None.
+  provenance="native": cloud_total populated (tcc, scaled to percent),
+  cloud_low/mid/high left None.
 
-Both rows share model/run_init/member(-1)/site/valid/fetched_at (fetched_at
-differs between the two only in that it's read off each row's own source
-file's mtime). A downstream consumer that wants "the derived total" can
-combine the derived row's L/M/H itself; this module never fabricates a
-derived total or a native L/M/H split that doesn't exist in the raw data.
+pl_f*.grib2 (q/t/z on 6 pressure levels) is still fetched - Tool 3's
+cloud_field_comparison.py still uses derive_cloud_fractions on it - but
+nothing in this extractor reads it anymore.
+
+(Historical: this row's docstring previously described a SECOND
+provenance="derived" row per (site, valid time) built from
+_hres_derived_rows(), now removed. The "Known real-data gap" note further
+below about a stale-pl-file idempotency bug is accordingly moot for this
+extractor's own output, though it may still matter to cloud_field_comparison.py's
+still-live use of the same derivation.)
+
+This module never fabricates a derived total or a native L/M/H split that
+doesn't exist in the raw data.
 
 ecmwf_ens / aifs_single / aifs_ens have no derive step -- every field in
 their row(s) is genuinely native, so they get exactly one row per (site,
@@ -103,7 +111,6 @@ import cfgrib
 import numpy as np
 import xarray as xr
 
-from src.derive.humidity_to_cloud import derive_cloud_fractions
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
 from src.fetchers.base import raw_output_dir, steps_for_run
@@ -228,91 +235,11 @@ def _native_total_only_rows(
     return rows
 
 
-def _hres_derived_rows(
-    model_name: str,
-    run_init: datetime,
-    pl_path: Path,
-    valid_times: list[datetime],
-    site_list: list[dict],
-) -> list[PointRow]:
-    """provenance="derived" rows carrying cloud_low/mid/high (cloud_total left
-    None) from src/derive/humidity_to_cloud.py's q,t -> RH -> cloud-fraction
-    pipeline, run on the matching pl_f*.grib2. See module docstring's "Known
-    real-data gap" note: a missing 't' (or any other derive failure) is
-    caught here and logged, not raised -- callers still get the native-total
-    row for this step, just no derived row."""
-    if not pl_path.exists():
-        log.warning(
-            "%s %s: pressure-level file missing, skipping derived L/M/H: %s",
-            model_name,
-            run_init.isoformat(),
-            pl_path,
-        )
-        return []
-    try:
-        bands = derive_cloud_fractions(pl_path)
-    except (KeyError, ValueError) as e:
-        log.warning(
-            "%s %s: derive_cloud_fractions failed on %s (%s) -- writing native-total row "
-            "only, no derived L/M/H for this step. See ecmwf_extractor's module docstring "
-            "'Known real-data gap' note if this is a missing-'t' KeyError.",
-            model_name,
-            run_init.isoformat(),
-            pl_path,
-            e,
-        )
-        return []
-
-    fetched_at = file_fetched_at(pl_path)
-    rows: list[PointRow] = []
-    for site in site_list:
-        point = nearest_gridpoint(bands, site["lat"], site["lon"])
-        low = float(point.cloud_low.values)
-        mid = float(point.cloud_mid.values)
-        high = float(point.cloud_high.values)
-        low = None if np.isnan(low) else low
-        mid = None if np.isnan(mid) else mid
-        high = None if np.isnan(high) else high
-        for valid in valid_times:
-            rows.append(
-                PointRow(
-                    model=model_name,
-                    run_init=run_init,
-                    member=-1,
-                    site=site["name"],
-                    valid=valid,
-                    cloud_low=low,
-                    cloud_mid=mid,
-                    cloud_high=high,
-                    cloud_total=None,
-                    provenance="derived",
-                    fetched_at=fetched_at,
-                )
-            )
-    return rows
-
-
-def _extract_hres(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
-    out_dir = raw_output_dir(model_name, run_init)
-    by_step = _valid_times_by_step(model_config, run_init)
-    total_shortname = model_config["cloud"]["total"]["param"]
-    scale = _percent_scale(model_config["cloud"]["total"], "total")
-    site_list = all_sample_points()
-
-    rows: list[PointRow] = []
-    for step, valid_times in by_step.items():
-        tcc_path = out_dir / f"tcc_f{step:03d}.grib2"
-        rows.extend(
-            _native_total_only_rows(
-                model_name, run_init, tcc_path, total_shortname, scale, valid_times, site_list
-            )
-        )
-        pl_path = out_dir / f"pl_f{step:03d}.grib2"
-        rows.extend(_hres_derived_rows(model_name, run_init, pl_path, valid_times, site_list))
-    return rows
-
-
-def _extract_ens(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
+def _extract_total_only(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
+    """Shared by ecmwf_hres and ecmwf_ens - both have a native total cloud
+    field and nothing else worth writing here (ecmwf_hres's humidity-derived
+    L/M/H is deliberately not used, see module docstring; ecmwf_ens simply
+    has no native L/M/H at all)."""
     out_dir = raw_output_dir(model_name, run_init)
     by_step = _valid_times_by_step(model_config, run_init)
     total_shortname = model_config["cloud"]["total"]["param"]
@@ -432,8 +359,8 @@ def _extract_aifs(model_name: str, model_config: dict, run_init: datetime) -> li
 
 
 _MODEL_BUILDERS = {
-    "ecmwf_hres": _extract_hres,
-    "ecmwf_ens": _extract_ens,
+    "ecmwf_hres": _extract_total_only,
+    "ecmwf_ens": _extract_total_only,
     "aifs_single": _extract_aifs,
     "aifs_ens": _extract_aifs,
 }

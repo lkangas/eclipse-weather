@@ -1229,3 +1229,61 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
       same distance correctly falls back to row-selection (outside its
       8px mouse tolerance) - the full event-wiring chain, not just the
       underlying logic.
+
+- [ ] **T44** *(backlog)* Eclipse line-of-sight / terrain-visibility calc
+      using pressure-level data, for whichever models have it. Surveyed
+      2026-07-26 in two passes.
+
+      **Pass 1 (q/t/z, for terrain masking / geometry):** of the 10 gridded
+      models, only `ecmwf_hres` currently fetches pressure-level
+      (isobaricInhPa) data at all - `pl_f{step}.grib2`, q/t/z on 6 levels
+      (1000/925/850/700/500/300 hPa), written by `ecmwf_opendata_fetcher.py`.
+      z (geopotential) is the field that actually matters for terrain
+      masking: a fixed pressure level isn't a fixed altitude, and over
+      Iberia's Meseta/Pyrenees the 1000/925 hPa levels can sit below
+      ground - z tells you where that level really is at a given point.
+
+      **Pass 2 (native cloud fraction ON pressure levels, no derivation
+      needed) - real live-verified findings, better than pass 1 assumed:**
+
+      | Provider | Cloud fraction on pressure levels? | Field | Levels | Access path |
+      |---|---|---|---|---|
+      | GFS | **Yes** | `TCDC` | 21 (50-1000mb, every 50mb) | Already reachable - same S3/idx path as GFS's existing cloud-layer fetch |
+      | ARPEGE (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP3`, same no-auth OVH mirror as the already-known SP2 path |
+      | AROME (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP2`, same access/auth situation as SP2 |
+      | ECMWF open-data (hres/ens/aifs) | **No** | - | - | `pl` index lists `d,gh,q,r,t,u,v,vo,w,z` only; live `param="cc"` retrieve fails outright |
+      | ICON-EU / ICON Global | **No** | - | - | `clc/` exists but is model-level only, no pressure-level variant published |
+
+      Evidence: GFS confirmed via live `.idx` for 4 real cycles. AROME/ARPEGE
+      `IP1`-`IP5` "isobaric package" dirs were undocumented before this pass -
+      earlier T05 research only ruled out SP1/SP2/HP1 - found in the same
+      no-auth OVH mirror already used for SP2, live-decoded with eccodes to
+      confirm the real field. ECMWF: a live retrieve attempt with
+      `param="cc", levtype="pl"` failed outright (suggested `tcc` instead) -
+      not part of the open-data subset at all (may exist in the full paid
+      MARS archive, out of scope). ICON: confirmed DWD does publish
+      pressure-level products for *other* fields (e.g. `t`) - just never a
+      pressure-level `clc` variant; would need model-level -> isobaric
+      interpolation (using p/fi), not a native product.
+
+      So: GFS and AROME/ARPEGE can get real per-level cloud fraction with no
+      derivation at all (new fetcher work, but no accuracy risk); ecmwf_hres
+      has the geometry (z) but would still need derived cloud fraction if
+      cloud-along-the-sightline is wanted there specifically; ICON and
+      ECMWF's own open-data feed (hres/ens/aifs) have neither.
+      Related, cautionary context: a humidity-derived low/mid/high cloud
+      estimate (RH from q/t via Murphy & Koop 2005, cloud fraction via
+      Sundqvist et al. 1989 RH-threshold, RHc=0.80/0.75/0.55 per band) was
+      built and wired into ecmwf_hres's rendering/extraction (T22), but
+      checked for real against ecmwf_hres's own native total cloud on
+      2026-07-26 and found to correlate only ~0.35 (mean |diff| ~14pp, max
+      ~97pp) - the RHc thresholds were tuned on a single GFS calibration
+      sample and never validated against HRES itself. Removed from
+      production per explicit user direction (see `src/derive/
+      humidity_to_cloud.py`, still present as a module - `cloud_field_
+      comparison.py`/Tool 3 and the calibration script still use it, just
+      no longer `tool1_renderer.py` or `ecmwf_extractor.py`). If this task
+      ends up needing cloud fraction along the sightline rather than just
+      geometric obstruction, don't reuse those RHc constants without a
+      real HRES-specific calibration pass first.
+      underlying logic.

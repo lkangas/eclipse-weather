@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rendering review — one frame per model x field</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --cell-bg: #f9fafb;
+    --empty-bg: #f3f4f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171c;
+      --fg: #e6e6e6;
+      --muted: #9aa1ac;
+      --border: #2a2d35;
+      --cell-bg: #1c1f26;
+      --empty-bg: #202329;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.5rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.25rem; margin: 0 0 0.25rem; }
+  .sub { color: var(--muted); font-size: 0.85rem; margin-bottom: 1.25rem; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td {
+    border: 1px solid var(--border);
+    padding: 0.4rem;
+    vertical-align: top;
+  }
+  thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    text-align: center;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    color: var(--muted);
+    z-index: 1;
+  }
+  tbody th {
+    text-align: left;
+    white-space: nowrap;
+    font-size: 0.9rem;
+    background: var(--bg);
+    position: sticky;
+    left: 0;
+  }
+  td.cell { background: var(--cell-bg); text-align: center; }
+  td.empty { background: var(--empty-bg); color: var(--muted); font-size: 0.75rem; }
+  td.cell img {
+    width: 100%;
+    max-width: 220px;
+    height: auto;
+    border-radius: 4px;
+    display: block;
+    margin: 0 auto;
+  }
+  .cap { font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; }
+  .empty-inner { padding: 2.5rem 0.5rem; }
+  a.imglink { display: block; }
+</style>
+</head>
+<body>
+<h1>Rendering review — one frame per model &times; field</h1>
+<div class="sub" id="sub">loading…</div>
+<div style="overflow-x:auto">
+<table id="grid"></table>
+</div>
+
+<script>
+const FIELD_LABELS = {
+  total: "Total",
+  low: "Low",
+  mid: "Mid",
+  high: "High",
+};
+
+function buildCell(cell, cacheBust, altText) {
+  const td = document.createElement("td");
+  if (cell) {
+    td.className = "cell";
+    const a = document.createElement("a");
+    a.className = "imglink";
+    a.href = `${cell.image}?cb=${cacheBust}`;
+    a.target = "_blank";
+    const img = document.createElement("img");
+    img.src = `${cell.image}?cb=${cacheBust}`;
+    img.loading = "lazy";
+    img.alt = altText;
+    a.appendChild(img);
+    td.appendChild(a);
+    const cap = document.createElement("div");
+    cap.className = "cap";
+    cap.textContent = `+${cell.h}h (valid ${cell.valid.replace("T", " ").replace("Z", "Z")})`;
+    td.appendChild(cap);
+  } else {
+    td.className = "empty";
+    const inner = document.createElement("div");
+    inner.className = "empty-inner";
+    inner.textContent = "no native data";
+    td.appendChild(inner);
+  }
+  return td;
+}
+
+async function main() {
+  // Cache-bust every image on every load - this page is for actively
+  // iterating on rendering style, so always showing what's really on disk
+  // right now matters more than saving a repeat image fetch.
+  const cacheBust = Date.now();
+  const resp = await fetch(`review_grid.json?cb=${cacheBust}`);
+  const data = await resp.json();
+  document.getElementById("sub").textContent =
+    `Tool 1 frames generated ${data.generated_at} — one representative step per model/field (closest to +24h with real data). Click an image to open full size.`;
+
+  const table = document.getElementById("grid");
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.appendChild(document.createElement("th"));
+  for (const field of data.fields) {
+    const th = document.createElement("th");
+    th.textContent = FIELD_LABELS[field] || field;
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const model of data.models) {
+    const row = document.createElement("tr");
+    const rowHead = document.createElement("th");
+    rowHead.textContent = model.label;
+    row.appendChild(rowHead);
+
+    for (const field of data.fields) {
+      const cell = model.cells[field];
+      row.appendChild(buildCell(cell, cacheBust, `${model.label} ${field} +${cell ? cell.h : ""}h`));
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+}
+
+main();
+</script>
+</body>
+</html>
