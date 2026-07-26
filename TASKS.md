@@ -1230,87 +1230,54 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
       8px mouse tolerance) - the full event-wiring chain, not just the
       underlying logic.
 
-- [ ] **T44** *(backlog)* Eclipse line-of-sight / terrain-visibility calc
-      using pressure-level data, for whichever models have it. Surveyed
-      2026-07-26 in two passes.
+- [ ] **T44** *(backlog)* Eclipse line-of-sight / terrain-visibility calc.
+      Needs two things per model: precalculated cloud fraction on pressure
+      levels (skip deriving it), and q/t/z (humidity/temperature/geopotential
+      - z is what locates a pressure level's real altitude, needed for
+      terrain masking over the Meseta/Pyrenees). All live-verified 2026-07-26
+      against each model's own real feed, not assumed from any other model.
 
-      **Pass 1 (q/t/z, for terrain masking / geometry):** of the 10 gridded
-      models, only `ecmwf_hres` currently fetches pressure-level
-      (isobaricInhPa) data at all - `pl_f{step}.grib2`, q/t/z on 6 levels
-      (1000/925/850/700/500/300 hPa), written by `ecmwf_opendata_fetcher.py`.
-      z (geopotential) is the field that actually matters for terrain
-      masking: a fixed pressure level isn't a fixed altitude, and over
-      Iberia's Meseta/Pyrenees the 1000/925 hPa levels can sit below
-      ground - z tells you where that level really is at a given point.
-
-      **Pass 2 (native cloud fraction ON pressure levels, no derivation
-      needed) - real live-verified findings, better than pass 1 assumed:**
-
-| Provider | Cloud fraction on pressure levels? | Field | Levels | Access path |
+| Model | Precalc. cloud cover? | Cloud levels (hPa/mb) | q,t,z? | q/t/z levels (hPa/mb) |
 |---|---|---|---|---|
-| GFS | **Yes** | `TCDC` | 21 (50-1000mb, every 50mb) | Already reachable - same S3/idx path as GFS's existing cloud-layer fetch |
-| ARPEGE (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP3`, same no-auth OVH mirror as the already-known SP2 path |
-| AROME (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP2`, same access/auth situation as SP2 |
-| ECMWF open-data (hres/ens/aifs) | **No** | - | - | `pl` index lists `d,gh,q,r,t,u,v,vo,w,z` only; live `param="cc"` retrieve fails outright |
-| ICON-EU / ICON Global | **No** | - | - | `clc/` exists but is model-level only, no pressure-level variant published |
+| GFS | Yes (`TCDC`) | 50,100,150,200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,1000 (21) | Yes (`SPFH`,`TMP`,`HGT`) | 0.01,0.02,0.04,0.07,0.1,0.2,0.4,0.7,1,2,3,5,7,10,15,20,30,40,50,70,100,150,200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,975,1000 (41) |
+| GEFS Extended | No (one stray 475mb point only, not a real product) | - | Partial - `HGT`/`TMP` yes, `SPFH` absent entirely | 10,50,100,200,250,300,500,700,850,925,1000 (11) |
+| ARPEGE | Yes (`cc`, package `IP3`) | 100,125,150,175,200,225,250,275,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,1000 (24) | Yes, but `r` (relative humidity) not `q` (package `IP1`: z,t,u,v,r) | same 24 levels as cloud |
+| AROME | Yes (`cc`, package `IP2`) | same 24 levels as ARPEGE | Yes, but `r` not `q` (package `IP1`: z,t,u,v,r) | same 24 levels |
+| ECMWF HRES | No | - | Yes (`q`,`t`,`z`) | 300,500,700,850,925,1000 (6) |
+| ECMWF ENS | No | - | Partial - `q`,`t` yes, `z` absent (only `gh`, physically equivalent) | 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 (14) |
+| AIFS Single | No | - | Yes (`q`,`t`,`z`, plus `gh`) | t/z: 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 (14); q: same minus 10hPa (13) |
+| AIFS ENS | No | - | Yes (`q`,`t`,`z`) | same as AIFS Single |
+| ICON EU | No (`clc/` is model-level only) | - | Partial - `t`,`fi`(geopotential) yes, `q`/`qv` absent | 50,70,100,150,200,250,300,400,500,600,700,775,800,825,850,875,900,925,950,1000 (20) |
+| ICON Global | No (`clc/` is model-level only) | - | Partial - `t`,`fi` yes, `q`/`qv` absent | 30,50,70,100,150,200,250,300,400,500,600,700,800,850,900,925,950,1000 (18) |
 
-      Evidence: GFS confirmed via live `.idx` for 4 real cycles. AROME/ARPEGE
-      `IP1`-`IP5` "isobaric package" dirs were undocumented before this pass -
-      earlier T05 research only ruled out SP1/SP2/HP1 - found in the same
-      no-auth OVH mirror already used for SP2, live-decoded with eccodes to
-      confirm the real field. ECMWF: a live retrieve attempt with
-      `param="cc", levtype="pl"` failed outright (suggested `tcc` instead) -
-      not part of the open-data subset at all (may exist in the full paid
-      MARS archive, out of scope). ICON: confirmed DWD does publish
-      pressure-level products for *other* fields (e.g. `t`) - just never a
-      pressure-level `clc` variant; would need model-level -> isobaric
-      interpolation (using p/fi), not a native product.
+      Evidence: GFS/GEFS via live `.idx` files (AWS). ECMWF's three streams
+      (hres/ens/aifs) each live-checked against their own real index -
+      confirmed `enfo`(ens)/`aifs-ens`/`aifs-single` are genuinely separate
+      directories, not aliases of HRES's; ens's missing `z` confirmed two
+      ways (absent from index, and a live retrieve that logged "No index
+      entries for param=z" while still succeeding on q/t/gh). AROME/ARPEGE's
+      `IP1`-`IP5` "isobaric package" dirs were undocumented before this task
+      (earlier T05 only ruled out SP1/SP2/HP1) - found in the same no-auth
+      OVH mirror already used for SP2, real files downloaded and decoded
+      with cfgrib to confirm exact fields/levels, not just that a cc param
+      exists. ICON: confirmed DWD publishes pressure-level products for
+      other fields (`t`,`fi`) - just never a pressure-level `clc`/`qv`.
 
-      **Pass 3 (q/t/z for the models without native pressure-level cloud
-      fraction, i.e. do they at least have HRES's geometry/humidity
-      inputs?) - live-verified 2026-07-26, not assumed from HRES:**
+      Bottom line: **GFS and AROME/ARPEGE can get real per-level cloud
+      fraction with zero derivation risk** (new fetcher work only). Every
+      ECMWF-family model (hres/ens/aifs-single/aifs-ens) has real q/t
+      (+z or gh) already available from its own feed. ICON has geometry
+      (t/fi) but no humidity at all on pressure levels.
 
-| Model | q on pl? | t on pl? | z/geopotential on pl? | Levels (hPa) | Notes |
-|---|---|---|---|---|---|
-| ecmwf_hres | Yes | Yes | Yes (`z`) | 6: 1000,925,850,700,500,300 | Already fetched (see Pass 1) |
-| ecmwf_ens | Yes | Yes | Partial - no `z` param, but `gh` (geopotential height) present, physically equivalent | 14: 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 | Different real stream/dir (`enfo`) from HRES - not assumed to match it |
-| aifs_ens | Yes | Yes | Yes (`z`) | q: 13 (50-1000, no 10hPa); t/z: 14 (10-1000) | Different real dir (`aifs-ens/.../enfo`) from both HRES and classic ENS |
-| aifs_single | Yes | Yes | Yes (both `z` and `gh`) | Same as aifs_ens | Different real dir (`aifs-single/.../oper`) again |
-| icon_eu | **No** - model-level only | Yes | Yes (`fi`) | t/fi: 20 (50-1000, DWD's own level set) | `qv/` dir has zero pressure-level files, confirmed by directly grepping the real listing |
-      | icon_global | **No** - model-level only | Yes | Yes (`fi`) | t/fi: 18 (30-1000, DWD's own level set) | Same pattern as icon_eu |
-
-      Evidence: every row live-checked against that model's OWN real
-      index/directory listing (`.index` files under data.ecmwf.int for the
-      three ECMWF-family streams - confirmed `enfo`/`aifs-ens`/`aifs-single`
-      are genuinely separate directories, not just aliases of HRES's own -
-      and `opendata.dwd.de/weather/nwp/{icon-eu,icon}/grib/00/{t,qv,fi}/`
-      for ICON). ecmwf_ens's `z` gap was confirmed two ways: absent from the
-      index, and a live retrieve logging "No index entries for param=z"
-      while still succeeding on q/t/gh.
-
-      So, updated: **GFS and AROME/ARPEGE can get real per-level cloud
-      fraction with no derivation at all** (new fetcher work, no accuracy
-      risk). Of the rest, **ecmwf_hres, ecmwf_ens, aifs_ens, and aifs_single
-      all have real q+t(+z or gh) on pressure levels already available from
-      their own open-data feeds** - a humidity-derived cloud estimate could
-      in principle be attempted for any of them, not just HRES, though see
-      the calibration warning below before doing that. **ICON (both EU and
-      Global) has geometry (t/fi) but not humidity (q)** on pressure levels
-      at all - a humidity-based derivation isn't possible there without an
-      entirely different input.
-      Related, cautionary context: a humidity-derived low/mid/high cloud
-      estimate (RH from q/t via Murphy & Koop 2005, cloud fraction via
-      Sundqvist et al. 1989 RH-threshold, RHc=0.80/0.75/0.55 per band) was
-      built and wired into ecmwf_hres's rendering/extraction (T22), but
-      checked for real against ecmwf_hres's own native total cloud on
-      2026-07-26 and found to correlate only ~0.35 (mean |diff| ~14pp, max
-      ~97pp) - the RHc thresholds were tuned on a single GFS calibration
-      sample and never validated against HRES itself. Removed from
-      production per explicit user direction (see `src/derive/
-      humidity_to_cloud.py`, still present as a module - `cloud_field_
-      comparison.py`/Tool 3 and the calibration script still use it, just
-      no longer `tool1_renderer.py` or `ecmwf_extractor.py`). If this task
-      ends up needing cloud fraction along the sightline rather than just
-      geometric obstruction, don't reuse those RHc constants without a
-      real HRES-specific calibration pass first.
-      underlying logic.
+      Cautionary context: a humidity-derived low/mid/high cloud estimate
+      (Murphy & Koop 2005 + Sundqvist et al. 1989, RHc=0.80/0.75/0.55) was
+      built for ecmwf_hres (T22) but checked for real against its own
+      native total on 2026-07-26 and found to correlate only ~0.35 (mean
+      |diff| ~14pp, max ~97pp) - the RHc thresholds were tuned on a single
+      GFS sample and never validated against HRES itself. Removed from
+      production per explicit user direction (`src/derive/
+      humidity_to_cloud.py` still exists as a module, still used by Tool 3's
+      `cloud_field_comparison.py` and the calibration script, just no
+      longer `tool1_renderer.py`/`ecmwf_extractor.py`). Don't reuse those
+      RHc constants for this task without a real per-model calibration
+      pass first.
