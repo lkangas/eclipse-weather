@@ -4,7 +4,7 @@ src/fetchers/base.py - ECLIPSE_T env var, never hardcoded).
 
 PURE CONSUMER - this script renders nothing and never touches data/raw/.
 Rendering is a separate, earlier pass (scripts/render_backfill.py ->
-src/viz/tool1_renderer.py's render_run()), which writes every
+src/viz/frame_renderer.py's render_run()), which writes every
 step x structurally-supported field of every archived run to
 OUTPUT_DIR/{model}/{field}/{YYYYMMDDHH}_{step:03d}.png. All this script does
 is walk that tree, work out which step each run wants, and describe what it
@@ -23,7 +23,7 @@ comes from whether its PNG exists on disk - see _run_entry() below.
 
 Fetching: none. Rendering: none. Only a directory scan.
 
-Usage (inside Docker - no raw data is read, but importing tool1_renderer
+Usage (inside Docker - no raw data is read, but importing frame_renderer
 still pulls in the GRIB/matplotlib stack), with ECLIPSE_T overridden to a
 real near-future moment actually covered by current archive (see TASKS.md
 for how this value was picked):
@@ -35,11 +35,11 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from src.config import get_model
 from src.fetchers.base import eclipse_t, full_range_steps, nearest_step
-from src.viz.tool1_renderer import OUTPUT_DIR, supported_fields
+from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_tool3_manifest")
@@ -206,9 +206,30 @@ def _run_entry(
     }
 
 
+def _simulated_valid_time(now: datetime, days_ahead: int = 3) -> datetime:
+    """The eclipse's own 18:30Z, but `days_ahead` days from now - a valid
+    time current runs can actually reach, unlike the real eclipse (still
+    weeks beyond every model's forecast horizon, so every run reports
+    covers: false and Tool 3 has nothing to show).
+
+    Same idea as CLAUDE.md's live-forward sim mode, but as a per-manifest
+    target rather than an ECLIPSE_T override, so one manifest carries both
+    and the UI can toggle without regenerating anything. Recomputed on every
+    manifest generation, so it tracks "now" as the archive grows."""
+    eclipse = eclipse_t()
+    return (now + timedelta(days=days_ahead)).replace(
+        hour=eclipse.hour, minute=eclipse.minute, second=0, microsecond=0,
+    )
+
+
 def main() -> None:
-    target_valid_time = eclipse_t()
-    log.info("target valid time (eclipse_t()) = %s", target_valid_time.isoformat())
+    now = datetime.now(UTC)
+    targets = [
+        {"key": "eclipse", "label": "Eclipse", "valid_time": eclipse_t()},
+        {"key": "sim", "label": "Simulated (+3d)", "valid_time": _simulated_valid_time(now)},
+    ]
+    for t in targets:
+        log.info("target %r valid time = %s", t["key"], t["valid_time"].isoformat())
 
     manifest_models = []
     for model_id, label in MODELS:
@@ -227,11 +248,25 @@ def main() -> None:
             log.info("%s: no rendered frames on disk, skipping", model_id)
             continue
 
-        run_entries = [
-            _run_entry(model_id, model_config, run_init, index[run_init], target_valid_time)
-            for run_init in run_inits
-        ]
-        n_covering = sum(1 for r in run_entries if r["covers"])
+        # The run LIST is target-independent (it's whatever is rendered on
+        # disk), so each run carries one entry per target and toggling in the
+        # UI only swaps which step/images are shown - rows and ticks stay put.
+        run_entries = []
+        for run_init in run_inits:
+            entry = {"run_init": _iso_z(run_init), "by_target": {}}
+            for t in targets:
+                per_target = _run_entry(
+                    model_id, model_config, run_init, index[run_init], t["valid_time"],
+                )
+                per_target.pop("run_init")  # already on the parent entry
+                entry["by_target"][t["key"]] = per_target
+            run_entries.append(entry)
+
+        n_covering = sum(1 for r in run_entries if r["by_target"]["eclipse"]["covers"])
+        n_covering_sim = sum(1 for r in run_entries if r["by_target"]["sim"]["covers"])
+        log.info(
+            "%s: %d/%d runs cover the simulated target", model_id, n_covering_sim, len(run_entries),
+        )
         log.info(
             "%s: %d/%d run(s) cover the target valid time with rendered frames",
             model_id, n_covering, len(run_entries),
@@ -239,8 +274,15 @@ def main() -> None:
         manifest_models.append({"id": model_id, "label": label, "runs": run_entries})
 
     manifest = {
-        "generated_at": _iso_z(datetime.now(UTC)),
-        "target_valid_time": _iso_z(target_valid_time),
+        "generated_at": _iso_z(now),
+        "targets": [
+            {"key": t["key"], "label": t["label"], "valid_time": _iso_z(t["valid_time"])}
+            for t in targets
+        ],
+        # The simulated target is the useful default TODAY - the real eclipse
+        # is still beyond every model's horizon, so defaulting to it would
+        # show an empty tool. Flip to "eclipse" once runs actually reach it.
+        "default_target": "sim",
         "models": manifest_models,
     }
     manifest_path = OUTPUT_DIR / "tool3_manifest.json"

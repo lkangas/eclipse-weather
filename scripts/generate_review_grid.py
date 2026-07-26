@@ -9,8 +9,8 @@ native data for that field at any step (e.g. arome_france/arpege_europe's
 "total", ecmwf_ens's low/mid/high/prob_cloud) - not a rendering bug.
 
 Excludes aemet_harmonie: it's a pre-rendered color-ramp GeoTIFF with no
-L/M/H breakdown and no reader in tool1_renderer.py, so there is nothing
-here yet to pick a frame from (see tool1_renderer.py's own module docstring).
+L/M/H breakdown and no reader in frame_renderer.py, so there is nothing
+here yet to pick a frame from (see frame_renderer.py's own module docstring).
 
 Usage: uv run python -m scripts.generate_review_grid
 """

@@ -36,6 +36,45 @@
     letter-spacing: 0.05em;
     font-size: 9.5px;
   }
+  /* Quantity control - byte-for-byte the same look as tool1_real.html's, so
+     the three tools read as one product. Three mutually-exclusive radios plus
+     an INDEPENDENT rain checkbox (rain is an overlay, not a quantity). */
+  .quantityGroup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .quantityGroup .opt {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+  }
+  .quantityGroup input[type=radio] { accent-color: #8b3a2f; }
+  .rainOpt {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+    padding-left: 8px;
+    border-left: 1px solid #d8d4c8;
+  }
+  .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
+  .placeholderNote {
+    font-size: 9.5px;
+    color: #a8a498;
+    font-style: italic;
+  }
+  /* Cloud-prob mode locks the model picker to the only prob-capable model by
+     disabling every other <option>. Chrome greys disabled options on its own,
+     Firefox barely does - so say it explicitly. (Tool 1 greys ROWS instead,
+     via .row.disabled; here the rows are runs of one model, and every run of
+     the prob-capable model has prob frames, so there is nothing to grey.) */
+  select option:disabled { color: #a8a498; }
   select {
     background: #fff;
     color: #232320;
@@ -177,6 +216,26 @@
     z-index: 4;
     opacity: 0.6;
   }
+  /* The eclipse moment itself (manifest.eclipse_t, ultimately the ECLIPSE_T
+     env var - never hardcoded here). Violet AND dashed so it can't be
+     confused with either the solid red drag-cursor or the solid green now
+     line, and pointer-events:none for the same reason #nowLine has it: it
+     must never intercept a drag. Starts hidden - it's only shown when T
+     actually falls inside the visible window (see layoutTicks), which today
+     is rare, since the real eclipse is weeks past every model's horizon.
+     Identified by the "eclipse" entry in the .legend block below. */
+  #eclipseLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px; /* centre the 2px band on the computed pixel; the
+      position math itself is identical to #nowLine's */
+    background: repeating-linear-gradient(to bottom, #6a2fa0 0 4px, transparent 4px 8px);
+    pointer-events: none;
+    z-index: 3;
+    display: none;
+  }
   #axisRow {
     display: flex;
     align-items: center;
@@ -244,14 +303,14 @@
     <label for="modelSelect">Model</label>
     <select id="modelSelect"></select>
   </div>
-  <div>
-    <label for="quantitySelect">Quantity</label>
-    <select id="quantitySelect">
-      <option value="total">Total cloud</option>
-      <option value="hml_composite">H/M/L composite</option>
-      <option value="prob_hml_composite">Cloud prob. (H/M/L) — ensembles only</option>
-    </select>
+  <div class="quantityGroup" id="quantityGroup">
+    <label style="margin-right:0">Quantity</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="temp"> Temp</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudCover" checked> Cloud cover</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudProb"> Cloud prob.</label>
   </div>
+  <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
+  <span class="placeholderNote" id="placeholderNote"></span>
   <div>
     <label for="extentInput">Extent</label>
     <input type="range" id="extentInput" min="0" max="100" value="100">
@@ -265,6 +324,7 @@
   <div id="axisRow"><div class="rowLabel"></div><div class="preloadBtn"></div><div class="rowTrack" id="axisTrack"></div></div>
   <div id="cursorLine"><div id="cursorHandle"></div></div>
   <div id="nowLine"></div>
+  <div id="eclipseLine"></div>
 </div>
 
 <div class="legend">
@@ -272,6 +332,7 @@
   <span><span class="sw" style="background:#a19e92"></span>archived step</span>
   <span><span class="sw" style="background:#8b3a2f"></span>nearest to cursor</span>
   <span><span class="sw" style="background:#2f6f3f;opacity:.6"></span>now</span>
+  <span><span class="sw" style="background:repeating-linear-gradient(to bottom,#6a2fa0 0 3px,transparent 3px 6px)"></span>eclipse</span>
 </div>
 
 <div id="mapArea">
@@ -287,6 +348,11 @@
 // ---------------------------------------------------------------------------
 const NOW = new Date();
 let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, hasDataByStep}]}}
+// The eclipse moment, read from the manifest (which gets it from the
+// ECLIPSE_T env var via eclipse_t() - CLAUDE.md forbids hardcoding it here).
+// null when the manifest predates the eclipse_t field, or carries an
+// unparseable value: the marker is then simply never drawn.
+let ECLIPSE_TIME = null;
 
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
 // documented in tool1_real.html/tool3_real.html.
@@ -296,32 +362,23 @@ let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, 
 // that's aifs_ens only; aifs_single is deterministic (a single run has no
 // member spread to compute a P() from), so it's listed as a real gap below,
 // not rendered as a degenerate binary map.
+//
+// This replaces the old per-model/per-field KNOWN_FIELD_GAPS table: with
+// `total` no longer a user-selectable quantity (it's the FALLBACK for models
+// with no native low/mid/high - see resolveField), the only remaining gap is
+// "this model isn't the prob-capable ensemble", which PROB_ONLY_MODEL below
+// already states once instead of nine times.
 const PROB_HML_GAP = "Needs an ensemble with native low/mid/high cloud - only AIFS ENS currently qualifies";
-const KNOWN_FIELD_GAPS = {
-  arome_france: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  arpege_europe: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  ecmwf_ens: {
-    hml_composite: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  aifs_single: { prob_hml_composite: PROB_HML_GAP },
-  gfs: { prob_hml_composite: PROB_HML_GAP },
-  gefs_extended: { prob_hml_composite: PROB_HML_GAP },
-  ecmwf_hres: { prob_hml_composite: PROB_HML_GAP },
-  icon_eu: { prob_hml_composite: PROB_HML_GAP },
-  icon_global: { prob_hml_composite: PROB_HML_GAP },
-};
 
 async function loadManifest() {
   const resp = await fetch("tool2_manifest.json");
   if (!resp.ok) throw new Error("tool2_manifest.json fetch failed: HTTP " + resp.status);
   const manifest = await resp.json();
+
+  // Optional - a manifest generated before generate_tool2_manifest.py started
+  // emitting eclipse_t simply has no marker, rather than an error.
+  const eclipseRaw = manifest.eclipse_t ? new Date(manifest.eclipse_t) : null;
+  ECLIPSE_TIME = eclipseRaw && !isNaN(eclipseRaw.getTime()) ? eclipseRaw : null;
 
   MODELS = {};
   manifest.models.forEach(m => {
@@ -344,8 +401,26 @@ let cursorTime = NOW;      // Date
 let AXIS_START = NOW, AXIS_END = NOW; // full span for the current model
 let axisRightMs = 0;       // current right edge, narrowed by the extent slider
 
+// Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent rain
+// overlay checkbox - identical control to tool1_real.html's. NOT a field name:
+// which field backs cloudCover differs per model (see resolveField). Temp and
+// the rain overlay are both placeholders (no real data path yet).
+let quantityMode = "cloudCover";
+let rainOn = false;
+// Cloud prob only ever has data for aifs_ens (the only ensemble with a native
+// low/mid/high split). Tool 1 greys the non-capable ROWS; here the rows are
+// the RUNS of one model - every run of aifs_ens has prob frames - so the lock
+// belongs on the model picker instead: non-capable <option>s get disabled and
+// the selection is forced to aifs_ens. This remembers what was selected
+// before, so leaving Cloud prob restores it instead of stranding you on
+// aifs_ens (same role as tool1's modelBeforeProbForce).
+let modelBeforeProbForce = null;
+const PROB_ONLY_MODEL = "aifs_ens";
+
 const modelSelect = document.getElementById("modelSelect");
-const quantitySelect = document.getElementById("quantitySelect");
+const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
+const rainCheckbox = document.getElementById("rainCheckbox");
+const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
 const rowsEl = document.getElementById("rows");
@@ -354,6 +429,7 @@ const stackWrap = document.getElementById("stackWrap");
 const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
 const nowLine = document.getElementById("nowLine");
+const eclipseLine = document.getElementById("eclipseLine");
 const mapAreaTag = document.getElementById("mapAreaTag");
 // A real, successfully-rendered frame needs no banner - the image speaks
 // for itself. Collapsed via display:none (not just an empty string) so it
@@ -383,7 +459,54 @@ function stepValidTime(run, h) {
   return new Date(run.runInit.getTime() + h * 3600 * 1000);
 }
 
+// The complete set of fields rendered on disk today (the frame renderer's
+// supported_fields()) - what preloadRun() below warms. Only ever 2 of the 3
+// are actually displayable for a given model: exactly one cloud-cover field
+// exists per model (hml_composite for models with native low/mid/high, total
+// for ECMWF HRES/ENS which have neither), plus prob_hml_composite for
+// aifs_ens alone.
 const IMAGE_FIELDS = ["total", "hml_composite", "prob_hml_composite"];
+
+// Is field f actually displayable for this step? An image URL is always
+// written even when the underlying data is missing (a "(no data)" placeholder
+// frame), so has_data is what decides - but newer manifests simply omit the
+// field instead, and a manifest predating has_data has none at all, hence
+// "assume real unless explicitly false".
+function fieldHasData(images, hasData, f) {
+  if (!images || !images[f]) return false;
+  return hasData ? hasData[f] !== false : true;
+}
+
+// Which field to actually display for the current quantityMode. `total` is
+// NOT a user-selectable quantity - it's the FALLBACK for the models with no
+// native low/mid/high to build a composite from (ecmwf_hres/ecmwf_ens). Cloud
+// prob has no fallback: prob_total is deliberately never rendered, and only
+// aifs_ens has prob data at all (see PROB_ONLY_MODEL/applyQuantityMode).
+// Same resolution as tool1_real.html's resolveField().
+function resolveField(images, hasData, mode) {
+  if (mode === "cloudCover") {
+    if (fieldHasData(images, hasData, "hml_composite")) return "hml_composite";
+    if (fieldHasData(images, hasData, "total")) return "total";
+    return null;
+  }
+  if (mode === "cloudProb") {
+    return fieldHasData(images, hasData, "prob_hml_composite") ? "prob_hml_composite" : null;
+  }
+  return null; // temp - placeholder, no field to resolve yet
+}
+
+// Can this model answer the current quantity AT ALL (regardless of run/step)?
+// Cloud cover always can - every model has either a composite or a total.
+// Cloud prob needs the one prob-capable ensemble; Temp has no data path for
+// any model yet. Normally the model picker is locked to PROB_ONLY_MODEL in
+// Cloud prob mode, so a false here only happens against a manifest that has
+// no aifs_ens to force-select at all.
+function modelSupportsMode(modelId, mode) {
+  if (mode === "temp") return false;
+  if (mode === "cloudProb") return modelId === PROB_ONLY_MODEL;
+  return true;
+}
+
 const preloadedRuns = new Set(); // run.runInit.getTime() values already preloaded
 
 function preloadRun(run, btnEl) {
@@ -532,6 +655,18 @@ function layoutTicks() {
   } else {
     nowLine.style.display = "none";
   }
+
+  // Same visible-range test and same positioning math as #nowLine above -
+  // deliberately not re-derived, so the marker lines up with the ticks
+  // exactly the way the now line does. Expected to be hidden most of the
+  // time: the eclipse is normally far beyond every model's forecast horizon,
+  // so it falls outside [AXIS_START, AXIS_START+axisRightMs].
+  if (ECLIPSE_TIME && ECLIPSE_TIME >= AXIS_START && ECLIPSE_TIME - AXIS_START <= axisRightMs) {
+    eclipseLine.style.display = "block";
+    eclipseLine.style.left = Math.round(trackOffsetPx + timeToPx(ECLIPSE_TIME, trackWidthPx)) + "px";
+  } else {
+    eclipseLine.style.display = "none";
+  }
 }
 
 function nearestStep(run, targetTime) {
@@ -560,6 +695,43 @@ function selectRun(idx) {
   updateCursorUI();
 }
 
+// Switch the model picker to modelId and rebuild the run stack for it - the
+// programmatic equivalent of the user picking it, since setting .value alone
+// fires no "change" event.
+function switchModel(modelId) {
+  modelSelect.value = modelId;
+  loadModel(modelId);
+}
+
+function applyQuantityMode(mode) {
+  const wasForced = quantityMode === "cloudProb";
+  quantityMode = mode;
+
+  // Only lock the picker if the prob-capable model is actually in this
+  // manifest - disabling every option (and forcing nothing) would leave the
+  // control unusable. When it's absent, updateCursorUI's PROB_HML_GAP message
+  // explains why nothing is shown instead.
+  const probAvailable = Object.prototype.hasOwnProperty.call(MODELS, PROB_ONLY_MODEL);
+
+  if (mode === "cloudProb" && probAvailable) {
+    if (!wasForced) modelBeforeProbForce = selectedModelId; // remember for when we leave
+    Array.from(modelSelect.options).forEach(o => { o.disabled = o.value !== PROB_ONLY_MODEL; });
+    if (selectedModelId !== PROB_ONLY_MODEL) {
+      switchModel(PROB_ONLY_MODEL); // ends in updateCursorUI via selectRun
+      return;
+    }
+  } else {
+    Array.from(modelSelect.options).forEach(o => { o.disabled = false; });
+    const restore = modelBeforeProbForce;
+    modelBeforeProbForce = null;
+    if (wasForced && restore && restore !== selectedModelId && MODELS[restore]) {
+      switchModel(restore); // ends in updateCursorUI via selectRun
+      return;
+    }
+  }
+  updateCursorUI();
+}
+
 function updateCursorUI() {
   const trackRect = axisTrack.getBoundingClientRect();
   const wrapRect = stackWrap.getBoundingClientRect();
@@ -575,6 +747,10 @@ function updateCursorUI() {
     });
   });
 
+  // The rain checkbox is independent of the radios and deliberately changes
+  // nothing about the displayed image - it only says so.
+  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
+
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) {
     setMapTag("select a run");
     mapAreaImg.style.display = "none";
@@ -585,28 +761,34 @@ function updateCursorUI() {
 
   const { run } = builtRows[selectedRunIdx];
   const step = nearestStep(run, cursorTime);
-  const field = quantitySelect.value;
+
+  if (quantityMode === "temp") {
+    setMapTag("not available");
+    mapAreaImg.style.display = "none";
+    mapAreaTitle.textContent = MODELS[selectedModelId].label;
+    mapAreaSub.textContent = "temperature: not yet implemented";
+    return;
+  }
+
   const images = step === null ? null : run.imagesByStep[step];
   const hasDataFlags = step === null ? null : run.hasDataByStep[step];
-  // hasDataFlags[field] === false means this field has a URL (always
-  // written, even as a "(no data)" placeholder) but no real underlying
-  // data - null (no has_data info) falls back to "assume real".
-  const fieldHasData = hasDataFlags ? hasDataFlags[field] !== false : true;
-  const url = images && fieldHasData ? images[field] : null;
+  const field = resolveField(images, hasDataFlags, quantityMode);
+  const url = field ? images[field] : null;
 
   mapAreaTitle.textContent = MODELS[selectedModelId].label + " · run " + fmtTime(run.runInit);
-  mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
   if (url) {
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
+    mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
-    const knownReason = (KNOWN_FIELD_GAPS[selectedModelId] || {})[field];
     mapAreaSub.textContent = step === null
       ? "no step available"
-      : (knownReason || "no rendered frame for this field/step");
+      : (modelSupportsMode(selectedModelId, quantityMode)
+          ? "no rendered frame for this step"
+          : PROB_HML_GAP);
   }
 }
 
@@ -746,7 +928,13 @@ window.addEventListener("touchmove", e => {
 }, { passive: false });
 window.addEventListener("touchend", endDrag);
 window.addEventListener("touchcancel", endDrag);
-quantitySelect.addEventListener("change", updateCursorUI);
+quantityRadios.forEach(r => r.addEventListener("change", () => {
+  if (r.checked) applyQuantityMode(r.value);
+}));
+rainCheckbox.addEventListener("change", () => {
+  rainOn = rainCheckbox.checked;
+  updateCursorUI();
+});
 modelSelect.addEventListener("change", () => loadModel(modelSelect.value));
 
 function advanceStep(direction) {
@@ -775,8 +963,8 @@ const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
 window.addEventListener("keydown", e => {
   if (!_ARROW_KEYS.includes(e.key)) return;
   // Don't hijack arrow keys while the user is operating a focused control
-  // (the model/quantity selects and extent slider all have their own
-  // native arrow-key behavior).
+  // (the model select, the quantity radios and the extent slider all have
+  // their own native arrow-key behavior).
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   e.preventDefault();
@@ -813,6 +1001,13 @@ loadManifest()
   .then(() => {
     populateModelSelect();
     loadModel(modelSelect.value);
+    // Browsers (Firefox in particular) restore radio/checkbox state across a
+    // soft reload, so the DOM can already disagree with the defaults declared
+    // above - adopt whatever is actually checked instead of assuming Cloud
+    // cover, or the model lock and the visible selection would drift apart.
+    rainOn = rainCheckbox.checked;
+    const checkedQuantity = document.querySelector('input[name="quantityMode"]:checked');
+    applyQuantityMode(checkedQuantity ? checkedQuantity.value : "cloudCover");
   })
   .catch(err => {
     document.body.innerHTML = "<pre style='color:#8b3a2f'>failed to load tool2_manifest.json: " + err + "</pre>";

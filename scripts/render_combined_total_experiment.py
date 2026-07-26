@@ -50,7 +50,7 @@ import numpy as np
 from scripts.render_prob_by_quantity_experiment import _compute_prob as _compute_aifs_ens_prob
 from src.config import eclipse_config
 from src.viz.basemap import draw_basemap
-from src.viz.tool1_renderer import (
+from src.viz.frame_renderer import (
     OUTPUT_DIR,
     _MODEL_LABELS,
     _MODEL_READERS,

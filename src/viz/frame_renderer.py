@@ -1,4 +1,14 @@
-"""Tool 1's single-model/single-step map renderer.
+"""The shared map renderer: render_frame() for one (model, run_init, step,
+field) frame, render_run() for a whole archived run.
+
+Not tied to any one tool, despite its history - this began as
+tool1_renderer.py, when each tool's manifest script did its own rendering.
+Rendering is now decoupled from the tools entirely: scripts/render_backfill.py
+drives this module over every archived run, and Tool 1/2/3's manifest scripts
+only describe the frames it has already written. That separation is what lets
+production fetch -> render everything -> DELETE the raw GRIB (see CLAUDE.md's
+disk-footprint note); a manifest script that still needed raw data would break
+the moment raw data is deleted.
 
 Unlike cloud_field_comparison.py (T31c), which always renders every
 registered model's LATEST run for a fixed eclipse valid time,
@@ -409,14 +419,19 @@ def supported_fields(model_id: str) -> list[str]:
     despite the key existing in models.yaml for ecmwf_hres."""
     model_config = get_model(model_id)
     cloud = model_config.get("cloud", {})
-    fields = []
-    if "total" in cloud:
-        fields.append("total")
     has_native_levels = cloud.get("levels", {}).get("status") == "confirmed"
-    if has_native_levels:
-        fields.append("hml_composite")
-        if "ensemble" in model_config["kind"] and _MODEL_READERS[model_id] in _PROB_CAPABLE_READERS:
-            fields.append("prob_hml_composite")
+
+    # total is a FALLBACK, not a parallel quantity: a model with native
+    # low/mid/high shows the H/M/L composite, and total is only rendered for
+    # the models that have no levels to composite (ecmwf_hres, ecmwf_ens).
+    # Rendering both for a model that has levels produces frames no tool ever
+    # displays - the composite always wins - so it is pure waste.
+    if not has_native_levels:
+        return ["total"] if "total" in cloud else []
+
+    fields = ["hml_composite"]
+    if "ensemble" in model_config["kind"] and _MODEL_READERS[model_id] in _PROB_CAPABLE_READERS:
+        fields.append("prob_hml_composite")
     return fields
 
 
@@ -549,7 +564,7 @@ def render_frame(
     dispatched to _render_composite_frame instead - it needs three reads
     and an RGB composite, not one scalar pcolormesh."""
     if model_name not in _MODEL_READERS:
-        raise KeyError(f"tool1_renderer has no reader for model '{model_name}'")
+        raise KeyError(f"frame_renderer has no reader for model '{model_name}'")
 
     output_path = output_path or (
         OUTPUT_DIR / model_name / field / f"{format_init_dir(run_init)}_{step:03d}.png"
@@ -563,7 +578,7 @@ def render_frame(
     try:
         result = _MODEL_READERS[model_name](field, run_init, step, bbox)
     except Exception:
-        log.exception("tool1_renderer: %s/%s/+%dh/%s failed", model_name, run_init, step, field)
+        log.exception("frame_renderer: %s/%s/+%dh/%s failed", model_name, run_init, step, field)
         result = None
 
     if output_path.exists():
@@ -638,7 +653,7 @@ def _render_composite_frame(
         low_result = _MODEL_READERS[model_name](low_field, run_init, step, bbox)
     except Exception:
         log.exception(
-            "tool1_renderer: %s/%s/+%dh/%s (composite) failed", model_name, run_init, step, field
+            "frame_renderer: %s/%s/+%dh/%s (composite) failed", model_name, run_init, step, field
         )
         high_result = mid_result = low_result = None
 

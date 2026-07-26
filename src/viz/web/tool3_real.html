@@ -46,6 +46,43 @@
     font-family: inherit;
     font-size: 11.5px;
   }
+  /* tool1_real.html's .quantityGroup look, shared with Tool 3's own target
+     switch - both are the same kind of "pick one of N modes" control, so they
+     share one rule set rather than inventing a second control style. */
+  .quantityGroup, .targetGroup { display: flex; align-items: center; gap: 10px; }
+  .quantityGroup .opt, .targetGroup .opt {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .quantityGroup input[type=radio], .targetGroup input[type=radio] { accent-color: #8b3a2f; }
+  /* Rain is an independent overlay toggle, not one of the quantities - the
+     rule separates it from the radios visually. */
+  .rainOpt {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+    padding-left: 8px;
+    border-left: 1px solid #d8d4c8;
+  }
+  .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
+  .placeholderNote { font-size: 9.5px; color: #a8a498; font-style: italic; }
+  /* Cloud prob. mode: rows here ARE models, and only one model has prob data,
+     so every other row is greyed and unclickable - exactly tool1_real.html's
+     .row.disabled. pointer-events:none also lets a drag started over a greyed
+     row fall through to #stackWrap, so time-scrubbing still works there. */
+  .row.disabled { pointer-events: none; opacity: 0.35; }
+  /* The simulated target moves on every manifest generation, so its actual
+     valid time has to be on screen - "Simulated (+3d)" alone doesn't say
+     which moment that is. */
+  #targetReadout { font-variant-numeric: tabular-nums; color: #55534c; white-space: nowrap; }
   #extentInput { width: 150px; accent-color: #8b3a2f; vertical-align: middle; }
   #extentReadout { font-variant-numeric: tabular-nums; color: #55534c; margin-left: 4px; white-space: nowrap; }
   .viewToggle { display: flex; border: 1px solid #232320; }
@@ -137,6 +174,23 @@
   .legend span { margin-right: 16px; }
   .legend .sw { display: inline-block; width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
 
+  /* Shown when NOT ONE archived run of ANY model reaches the selected target
+     valid time - the normal state of the real-eclipse target today. Without
+     it every panel below would just say "not yet covering" with no hint that
+     this is expected rather than a broken tool. flex:none so it never eats
+     the room #gallery/#mapArea need. */
+  #targetEmpty {
+    flex: none;
+    margin-top: 4px;
+    border: 1px solid #c9b98a;
+    background: #fdf8e8;
+    color: #55534c;
+    font-size: 10.5px;
+    line-height: 1.5;
+    padding: 6px 8px;
+  }
+  #targetEmpty b { color: #232320; }
+
   #mapArea {
     margin-top: 2px; border: 1px solid #232320; background: #fff;
     flex: 1;    /* absorbs whatever vertical room is left below the
@@ -203,6 +257,10 @@
     border: 1px dashed #d8d4c8;
   }
   .galleryCell.noCoverage .cellBody { color: #c99; border-color: #e6c9c9; }
+  /* The quantity simply doesn't exist for this model (Cloud prob. on a
+     non-ensemble, or Temp on anything) - dimmed so the gallery reads as
+     "these can't answer" at a glance, rather than as broken cells. */
+  .galleryCell.unsupported { opacity: 0.5; }
 
   /* Touch-target bump for coarse pointers only (fingers, not mice) - keeps
      desktop mouse users pixel-identical to before. .row is 15px tall (fine
@@ -219,14 +277,17 @@
 <body>
 
 <div class="controls">
-  <div>
-    <label for="quantitySelect">Quantity</label>
-    <select id="quantitySelect">
-      <option value="total">Total cloud</option>
-      <option value="hml_composite">H/M/L composite</option>
-      <option value="prob_hml_composite">Cloud prob. (H/M/L) — ensembles only</option>
-    </select>
+  <div class="quantityGroup" id="quantityGroup">
+    <label style="margin-right:0">Quantity</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="temp"> Temp</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudCover" checked> Cloud cover</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudProb"> Cloud prob.</label>
   </div>
+  <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
+  <span class="placeholderNote" id="placeholderNote"></span>
+  <!-- Radios + the readout are built from the manifest's own targets[] in
+       buildTargetToggle() - labels and count are never hardcoded here. -->
+  <div class="targetGroup" id="targetGroup"></div>
   <div>
     <label for="extentInput">Extent</label>
     <input type="range" id="extentInput" min="0" max="100" value="100">
@@ -242,18 +303,20 @@
 <div id="stackWrap">
   <div id="rows"></div>
   <div id="axisRow"><div class="rowLabel"></div><div class="rowTrack" id="axisTrack"></div></div>
-  <div id="eclipseLine"><div class="tag">simulated eclipse T</div></div>
+  <div id="eclipseLine"><div class="tag" id="eclipseTag">target T</div></div>
   <div id="nowLine"></div>
   <div id="cursorLine"><div id="cursorHandle"></div></div>
 </div>
 
 <div class="legend">
   <span><span class="sw" style="background:#a19e92"></span>archived run</span>
-  <span><span class="sw" style="background:#d8d4c8"></span>run doesn't reach eclipse T yet</span>
+  <span><span class="sw" style="background:#d8d4c8"></span><span id="legendNoCoverage">run doesn't reach target T yet</span></span>
   <span><span class="sw" style="background:#8b3a2f"></span>nearest to cursor</span>
-  <span><span class="sw" style="background:#5a4a8b"></span>simulated eclipse T</span>
+  <span><span class="sw" style="background:#5a4a8b"></span><span id="legendTarget">target T</span></span>
   <span><span class="sw" style="background:#2f6f3f;opacity:.6"></span>now</span>
 </div>
+
+<div id="targetEmpty" style="display:none;"></div>
 
 <div id="mapArea" style="display:none;">
   <div class="placeholder-tag" id="mapAreaTag">click a row</div>
@@ -267,62 +330,124 @@
 <script>
 // ---------------------------------------------------------------------------
 // Real data via tool3_manifest.json (scripts/generate_tool3_manifest.py).
-// TARGET_VALID_TIME is deliberately a SHORT future (not the real 2026-08-12
-// eclipse, which today's real archive can't reach yet for any model) so
-// real archived runs actually cover it - see TASKS.md for how this value
-// was picked (the tightest real per-model reach at generation time).
+// The manifest carries SEVERAL target valid times (currently the real
+// 2026-08-12 eclipse, which today's archive can't reach yet for any model,
+// and a rolling "+3d" simulated one that real archived runs do cover) and
+// says which to start on via default_target. Each run therefore carries one
+// coverage entry PER target under run.by_target - see targetData() below.
 // ---------------------------------------------------------------------------
 const NOW = new Date();
-let TARGET_VALID_TIME = new Date();
-let MODELS = []; // [{id, label, runs: [{runInit, covers, images, hasData}]}]
+let TARGETS = [];            // [{key, label, validTime}] straight from the manifest
+let currentTarget = null;    // key into each run's byTarget map
+let TARGET_VALID_TIME = new Date(); // == currentTargetInfo().validTime, kept in sync by setTarget
+let MODELS = []; // [{id, label, runs: [{runInit, byTarget: {key: {covers, step, ...}}}]}]
 
-// Known, permanent (not-a-bug) per-model field gaps - same facts already
-// documented in tool1_real.html/tool2_real.html, repeated here since Tool 3
-// renders the same underlying fields.
+// Known, permanent (not-a-bug) field gap - same fact already documented in
+// tool1_real.html/tool2_real.html.
 // Cloud probability (per-pixel, not the pooled point metric T32 uses for
 // site ranking) is a per-grid-cell ensemble spread metric - only meaningful
 // for a model with genuine multi-member native low/mid/high data. Right now
 // that's aifs_ens only; aifs_single is deterministic (a single run has no
-// member spread to compute a P() from), so it's listed as a real gap below,
-// not rendered as a degenerate binary map.
+// member spread to compute a P() from), so it gets this message rather than a
+// degenerate binary map.
+//
+// This replaces the old per-model/per-field KNOWN_FIELD_GAPS table: with
+// `total` no longer a user-selectable quantity (it's the FALLBACK for models
+// with no native low/mid/high - see resolveField), the only remaining gap is
+// "this model isn't the prob-capable ensemble", which PROB_ONLY_MODEL below
+// already states once instead of nine times.
 const PROB_HML_GAP = "Needs an ensemble with native low/mid/high cloud - only AIFS ENS currently qualifies";
-const KNOWN_FIELD_GAPS = {
-  arome_france: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  arpege_europe: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  ecmwf_ens: {
-    hml_composite: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    prob_hml_composite: PROB_HML_GAP,
-  },
-  aifs_single: { prob_hml_composite: PROB_HML_GAP },
-  gfs: { prob_hml_composite: PROB_HML_GAP },
-  gefs_extended: { prob_hml_composite: PROB_HML_GAP },
-  ecmwf_hres: { prob_hml_composite: PROB_HML_GAP },
-  icon_eu: { prob_hml_composite: PROB_HML_GAP },
-  icon_global: { prob_hml_composite: PROB_HML_GAP },
-};
+const PROB_ONLY_MODEL = "aifs_ens";
 
 async function loadManifest() {
   const resp = await fetch("tool3_manifest.json");
   if (!resp.ok) throw new Error("tool3_manifest.json fetch failed: HTTP " + resp.status);
   const manifest = await resp.json();
 
-  TARGET_VALID_TIME = new Date(manifest.target_valid_time);
+  TARGETS = (manifest.targets || []).map(t => ({
+    key: t.key, label: t.label, validTime: new Date(t.valid_time),
+  }));
+  if (!TARGETS.length) throw new Error("tool3_manifest.json has no targets[]");
+  // default_target is the generator's opinion about which target is useful
+  // TODAY (it flips to the real eclipse once runs reach it); fall back to the
+  // first target if it ever names one that isn't in the list.
+  currentTarget = TARGETS.some(t => t.key === manifest.default_target)
+    ? manifest.default_target
+    : TARGETS[0].key;
+  TARGET_VALID_TIME = TARGETS.find(t => t.key === currentTarget).validTime;
+
+  // Note what is NOT read per target here: the run list itself. Which runs
+  // exist is a fact about what's rendered on disk, identical for every
+  // target, which is exactly why toggling can leave rows and ticks in place.
   MODELS = manifest.models.map(m => ({
     id: m.id,
     label: m.label,
     runs: m.runs.map(r => ({
       runInit: new Date(r.run_init),
-      covers: r.covers,
-      images: r.images,
-      hasData: r.has_data,
+      byTarget: r.by_target || {},
     })),
   }));
+}
+
+// Everything the manifest says ABOUT a run at a valid time - covers, step,
+// misalignment_h, images, has_data - lives under run.by_target[<key>]. Every
+// read goes through here so switching target is a pure data swap; reading
+// those fields off the run itself would silently see undefined.
+const NO_TARGET_DATA = { covers: false, step: null, misalignmentH: null, images: null, hasData: null };
+
+function targetData(run) {
+  const t = run.byTarget[currentTarget];
+  if (!t) return NO_TARGET_DATA; // target the generator didn't emit for this run
+  return {
+    covers: !!t.covers,
+    step: t.step,
+    misalignmentH: t.misalignment_h,
+    images: t.images,
+    hasData: t.has_data,
+  };
+}
+
+function currentTargetInfo() {
+  return TARGETS.find(t => t.key === currentTarget) || null;
+}
+
+// Is field f actually displayable for this run/target? An image URL is always
+// written even when the underlying data is missing (a "(no data)" placeholder
+// frame), so has_data is what decides - but newer manifests simply omit the
+// field instead, and a manifest predating has_data has none at all, hence
+// "assume real unless explicitly false".
+function fieldHasData(images, hasData, f) {
+  if (!images || !images[f]) return false;
+  return hasData ? hasData[f] !== false : true;
+}
+
+// Which field to actually display for the current quantityMode. `total` is
+// NOT a user-selectable quantity - it's the FALLBACK for the models with no
+// native low/mid/high to build a composite from (ecmwf_hres/ecmwf_ens). Cloud
+// prob has no fallback: prob_total is deliberately never rendered, and only
+// aifs_ens has prob data at all. Same resolution as tool1_real.html's
+// resolveField(); the images/hasData it works on always come from
+// targetData(run), so it composes with the target toggle for free.
+function resolveField(images, hasData, mode) {
+  if (mode === "cloudCover") {
+    if (fieldHasData(images, hasData, "hml_composite")) return "hml_composite";
+    if (fieldHasData(images, hasData, "total")) return "total";
+    return null;
+  }
+  if (mode === "cloudProb") {
+    return fieldHasData(images, hasData, "prob_hml_composite") ? "prob_hml_composite" : null;
+  }
+  return null; // temp - placeholder, no field to resolve yet
+}
+
+// Can this model answer the current quantity AT ALL (regardless of run or
+// target)? Cloud cover always can - every model has either a composite or a
+// total. Cloud prob needs the one prob-capable ensemble; Temp has no data
+// path for any model yet.
+function modelSupportsMode(modelId, mode) {
+  if (mode === "temp") return false;
+  if (mode === "cloudProb") return modelId === PROB_ONLY_MODEL;
+  return true;
 }
 // ---------------------------------------------------------------------------
 
@@ -331,14 +456,34 @@ let cursorTime = new Date(NOW);
 let clickedRowIdx = null;
 let viewMode = "gallery"; // "gallery" | "single"
 
+// Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent rain
+// overlay checkbox - identical control to tool1_real.html's. NOT a field name:
+// which field backs cloudCover differs per model (see resolveField). Temp and
+// the rain overlay are both placeholders (no real data path yet).
+let quantityMode = "cloudCover";
+let rainOn = false;
+// Rows here ARE models (the horizontal axis is run-init time), so Cloud prob
+// locks the selection the same way tool1_real.html does: grey every row but
+// the prob-capable one and force-select it. This remembers which row was
+// clicked before, so leaving Cloud prob restores it instead of stranding you
+// on AIFS ENS.
+let rowBeforeProbForce = null;
+
 const rowsEl = document.getElementById("rows");
 const axisTrack = document.getElementById("axisTrack");
 const stackWrap = document.getElementById("stackWrap");
 const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
 const eclipseLine = document.getElementById("eclipseLine");
+const eclipseTag = document.getElementById("eclipseTag");
 const nowLine = document.getElementById("nowLine");
-const quantitySelect = document.getElementById("quantitySelect");
+const targetGroup = document.getElementById("targetGroup");
+const targetEmpty = document.getElementById("targetEmpty");
+const legendNoCoverage = document.getElementById("legendNoCoverage");
+const legendTarget = document.getElementById("legendTarget");
+const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
+const rainCheckbox = document.getElementById("rainCheckbox");
+const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
 const viewGalleryBtn = document.getElementById("viewGalleryBtn");
@@ -357,19 +502,80 @@ const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
 const galleryEl = document.getElementById("gallery");
 
-let builtRows = []; // [{model, row, track}]
+let builtRows = []; // [{model, row, track, ticks: [{run, el}]}]
 let galleryCells = []; // [{model, cell, titleEl, bodyEl}]
+let targetReadout = null; // built by buildTargetToggle()
 
 function fmtTime(d) { return d.toISOString().slice(0, 16).replace("T", " ") + "Z"; }
 function fmtDuration(ms) {
   const h = ms / 3600000;
   return h < 48 ? h.toFixed(0) + "h" : (h / 24).toFixed(1) + "d";
 }
+
+function buildTargetToggle() {
+  targetGroup.innerHTML = "";
+  const heading = document.createElement("label");
+  heading.textContent = "Target";
+  heading.style.marginRight = "0";
+  targetGroup.appendChild(heading);
+
+  TARGETS.forEach(t => {
+    const opt = document.createElement("label");
+    opt.className = "opt";
+    opt.title = "valid " + fmtTime(t.validTime);
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "targetKey";
+    input.value = t.key;
+    input.checked = t.key === currentTarget;
+    input.addEventListener("change", () => { if (input.checked) setTarget(t.key); });
+    opt.appendChild(input);
+    opt.appendChild(document.createTextNode(t.label));
+    targetGroup.appendChild(opt);
+  });
+
+  targetReadout = document.createElement("span");
+  targetReadout.id = "targetReadout";
+  targetGroup.appendChild(targetReadout);
+}
+
+// Four places name the current target (the axis marker's tag, two legend
+// entries, the readout next to the radios). All of them take the manifest's
+// own label, so adding or renaming a target needs no change here.
+function syncTargetLabels() {
+  const info = currentTargetInfo();
+  const label = info ? info.label : "target";
+  eclipseTag.textContent = label + " T";
+  legendTarget.textContent = label + " T";
+  legendNoCoverage.textContent = "run doesn't reach " + label + " T yet";
+  if (targetReadout) targetReadout.textContent = info ? "valid " + fmtTime(info.validTime) : "—";
+}
+
+function setTarget(key) {
+  currentTarget = key;
+  const info = currentTargetInfo();
+  if (info) TARGET_VALID_TIME = info.validTime;
+  syncTargetLabels();
+  // Deliberately NOT layoutTicks(): which runs exist, and therefore every
+  // tick's x-position and every row, are target-independent. The toggle only
+  // repaints each tick's coverage colour and moves the target marker, so the
+  // stack stays visually anchored while switching.
+  refreshTickCoverage();
+  placeMarkers();
+  updateUI();
+}
+
 function init() {
   const allRunInits = MODELS.flatMap(m => m.runs.map(r => r.runInit.getTime()));
   AXIS_START = new Date(Math.min(...allRunInits));
-  // extend a bit past the target marker so it's visible on the shared axis
-  AXIS_END = new Date(Math.max(TARGET_VALID_TIME.getTime() + 6 * 3600 * 1000, ...allRunInits));
+  // Extend a bit past a target marker so it's visible on the shared axis -
+  // but from the NEAREST target only, and once, so the axis never depends on
+  // which target is selected (toggling would otherwise reflow every tick).
+  // Stretching to the farthest one (the real eclipse, weeks past every
+  // archived run) would squash the whole run-init history into a few pixels;
+  // placeMarkers() simply hides a marker that lands off the axis instead.
+  const nearestTargetMs = Math.min(...TARGETS.map(t => t.validTime.getTime()));
+  AXIS_END = new Date(Math.max(nearestTargetMs + 6 * 3600 * 1000, ...allRunInits));
   const fullSpanMs = AXIS_END - AXIS_START;
   axisRightMs = fullSpanMs;
   extentInput.min = 0;
@@ -395,7 +601,7 @@ function init() {
     track.className = "rowTrack";
     row.appendChild(track);
 
-    row.addEventListener("click", () => selectRowForSingleView(idx));
+    row.addEventListener("click", () => trySelectRow(idx));
     rowsEl.appendChild(row);
     builtRows.push({ model, row, track });
   });
@@ -420,9 +626,18 @@ function init() {
     galleryCells.push({ model, cell, titleEl, imgEl, bodyEl });
   });
 
+  buildTargetToggle();
+  syncTargetLabels();
   layoutTicks();
   if (MODELS.length) selectRowForSingleView(0);
-  updateUI();
+  // Browsers (Firefox in particular) restore radio/checkbox state across a
+  // soft reload, so the DOM can already disagree with the defaults declared
+  // above - adopt whatever is actually checked instead of assuming Cloud
+  // cover, or the row lock and the visible selection would drift apart.
+  // Ends in updateUI(), so no separate call here.
+  rainOn = rainCheckbox.checked;
+  const checkedQuantity = document.querySelector('input[name="quantityMode"]:checked');
+  applyQuantityMode(checkedQuantity ? checkedQuantity.value : "cloudCover");
 }
 
 function timeToPx(t, trackWidthPx) {
@@ -441,15 +656,20 @@ function pickAxisIntervalMs(spanMs) {
 
 function layoutTicks() {
   const trackWidthPx = axisTrack.getBoundingClientRect().width;
-  builtRows.forEach(({ model, track }) => {
+  builtRows.forEach(entry => {
+    const { model, track } = entry;
     track.innerHTML = "";
+    entry.ticks = [];
     model.runs.forEach(run => {
       if (run.runInit - AXIS_START > axisRightMs) return;
       const tick = document.createElement("div");
-      tick.className = "tick" + (run.covers ? "" : " noCoverage");
+      tick.className = "tick" + (targetData(run).covers ? "" : " noCoverage");
       tick.style.left = timeToPx(run.runInit, trackWidthPx) + "px";
       tick.dataset.runMs = run.runInit.getTime();
       track.appendChild(tick);
+      // Kept so the target toggle can repaint coverage without rebuilding
+      // (and so it never has to re-derive which run a tick belongs to).
+      entry.ticks.push({ run, el: tick });
     });
   });
 
@@ -464,6 +684,12 @@ function layoutTicks() {
     axisTrack.appendChild(el);
   }
 
+  placeMarkers();
+}
+
+// Split out of layoutTicks() because switching target moves the target
+// marker without touching a single tick.
+function placeMarkers() {
   const trackRect = axisTrack.getBoundingClientRect();
   const wrapRect = stackWrap.getBoundingClientRect();
   const trackOffsetPx = trackRect.left - wrapRect.left;
@@ -473,6 +699,9 @@ function layoutTicks() {
       el.style.display = "block";
       el.style.left = Math.round(trackOffsetPx + timeToPx(t, trackRect.width)) + "px";
     } else {
+      // Off the axis entirely - the normal case for the real-eclipse target,
+      // which sits weeks past the last archived run. Hiding the line is
+      // right; #targetEmpty below is what explains the situation in words.
       el.style.display = "none";
     }
   };
@@ -483,6 +712,14 @@ function layoutTicks() {
   // otherwise overflow past the stack.
   const eclipsePx = timeToPx(TARGET_VALID_TIME, trackRect.width);
   eclipseLine.classList.toggle("flip", trackRect.width - eclipsePx < 90);
+}
+
+function refreshTickCoverage() {
+  builtRows.forEach(({ ticks }) => {
+    (ticks || []).forEach(({ run, el }) => {
+      el.classList.toggle("noCoverage", !targetData(run).covers);
+    });
+  });
 }
 
 function nearestRun(model, targetTime) {
@@ -505,35 +742,155 @@ function selectRowForSingleView(idx) {
   updateUI();
 }
 
-function describeRunAtEclipse(model, run) {
-  const field = quantitySelect.value;
-  const title = model.label + " · run " + fmtTime(run.runInit);
+// Guarded entry point for USER-driven row selection (row click, arrow keys).
+// While Cloud prob has the selection locked to the prob-capable model, this
+// refuses to move it - .row.disabled's pointer-events:none only stops direct
+// clicks, it does nothing about keyboard navigation. applyQuantityMode's own
+// forcing calls selectRowForSingleView directly, bypassing this on purpose.
+function trySelectRow(idx) {
+  if (idx === null || !builtRows[idx]) return false;
+  if (quantityMode === "cloudProb" && builtRows[idx].model.id !== PROB_ONLY_MODEL) return false;
+  selectRowForSingleView(idx);
+  return true;
+}
 
-  if (!run.covers) {
+function applyQuantityMode(mode) {
+  const wasForced = quantityMode === "cloudProb";
+  quantityMode = mode;
+
+  // builtRows is built in MODELS order, so the model's index IS its row index.
+  // -1 when the manifest has no prob-capable model at all: grey nothing then,
+  // and let every cell say why via PROB_HML_GAP instead of leaving the stack
+  // fully disabled with nothing selectable.
+  const probIdx = MODELS.findIndex(m => m.id === PROB_ONLY_MODEL);
+
+  if (mode === "cloudProb" && probIdx !== -1) {
+    if (!wasForced) rowBeforeProbForce = clickedRowIdx; // remember for when we leave
+    builtRows.forEach(({ model, row }) => {
+      row.classList.toggle("disabled", model.id !== PROB_ONLY_MODEL);
+    });
+    if (clickedRowIdx !== probIdx) {
+      selectRowForSingleView(probIdx); // ends in updateUI()
+      return;
+    }
+  } else {
+    builtRows.forEach(({ row }) => row.classList.remove("disabled"));
+    const restore = rowBeforeProbForce;
+    rowBeforeProbForce = null;
+    if (wasForced && restore !== null && restore !== clickedRowIdx && builtRows[restore]) {
+      selectRowForSingleView(restore); // ends in updateUI()
+      return;
+    }
+  }
+  updateUI();
+}
+
+// Returns `sub` (the full sentence for the single-run map area) and `note`
+// (the short version the small gallery cells show) - the prob/temp
+// explanations are far too long to read inside a 160px cell.
+function describeRunAtTarget(model, run) {
+  const title = model.label + " · run " + fmtTime(run.runInit);
+  const td = targetData(run); // never read covers/images/has_data off `run`
+
+  // Answered before the coverage check on purpose: "this model has no such
+  // quantity at all" is true regardless of whether this run reaches the
+  // target, and saying "doesn't reach the target yet" would be misleading.
+  if (!modelSupportsMode(model.id, quantityMode)) {
+    const isTemp = quantityMode === "temp";
     return {
-      covers: false, hasImage: false, imageUrl: null, title,
-      sub: "run doesn't reach the target valid time yet (needs +" +
-        Math.round((TARGET_VALID_TIME - run.runInit) / 3600000) + "h)",
+      covers: td.covers, hasImage: false, imageUrl: null, title,
+      sub: isTemp ? "temperature: not yet implemented" : PROB_HML_GAP,
+      note: isTemp ? "temp: not yet implemented" : "no cloud prob. data",
     };
   }
 
-  // has_data[field] === false means an image URL exists (a "(no data)"
-  // placeholder is always rendered) but this field has no real underlying
-  // data for this model - null (no has_data info) falls back to "assume
-  // real" so this doesn't break against a manifest that predates the flag.
-  const fieldHasData = run.hasData ? run.hasData[field] !== false : true;
-  const url = run.images && fieldHasData ? run.images[field] : null;
-  const knownReason = (KNOWN_FIELD_GAPS[model.id] || {})[field];
+  if (!td.covers) {
+    const gapH = Math.round((TARGET_VALID_TIME - run.runInit) / 3600000);
+    return {
+      covers: false, hasImage: false, imageUrl: null, title,
+      sub: gapH >= 0
+        ? "run doesn't reach the target valid time yet (needs +" + gapH + "h)"
+        // Can only happen if the manifest's target has drifted behind an
+        // archived run - not a state today, but cheaper to word than to debug.
+        : "target valid time is " + Math.abs(gapH) + "h before this run's init",
+      note: "not yet covering",
+    };
+  }
+
+  // Per-model field resolution over THIS target's images (see resolveField):
+  // one cloud-cover field exists per model, composite where there are native
+  // low/mid/high levels, plain total otherwise.
+  const field = resolveField(td.images, td.hasData, quantityMode);
+  const url = field ? td.images[field] : null;
+
+  // The nearest published step rarely lands exactly on the target valid time
+  // (misalignment_h); showing both makes it obvious when a frame is really
+  // an hour or two off rather than exactly at T.
+  let stamp = "valid " + fmtTime(TARGET_VALID_TIME);
+  if (td.step !== null && td.step !== undefined) stamp += "  ·  step +" + td.step + "h";
+  if (td.misalignmentH) stamp += " (" + td.misalignmentH + "h off)";
 
   return {
     covers: true,
     hasImage: !!url,
     imageUrl: url,
     title,
-    sub: url
-      ? "valid " + fmtTime(TARGET_VALID_TIME) + "  ·  field: " + field
-      : (knownReason || "no rendered frame for this field/run"),
+    sub: url ? stamp + "  ·  field: " + field : "no rendered frame for this run",
+    note: url ? "" : "no rendered frame",
   };
+}
+
+// How many archived runs reach the selected target at all. Counted over
+// every run, not just the extent slider's visible window: this is a fact
+// about the target, not about the current zoom.
+function coveringRunCount() {
+  let covering = 0, total = 0;
+  MODELS.forEach(m => m.runs.forEach(r => {
+    total += 1;
+    if (targetData(r).covers) covering += 1;
+  }));
+  return { covering, total };
+}
+
+// The banner is what keeps "the real eclipse is still weeks past every
+// model's horizon" from looking like a broken tool: without it the panels
+// below would just say "not yet covering" everywhere with no explanation.
+// Shown whenever nothing on screen has a frame (anyShown === false), with
+// wording that distinguishes "no run reaches this target at all" from "some
+// do, but not the ones nearest the cursor".
+function updateTargetEmpty(anyShown) {
+  if (anyShown) {
+    targetEmpty.style.display = "none";
+    return;
+  }
+  const info = currentTargetInfo();
+  const label = info ? info.label : "this target";
+  const { covering, total } = coveringRunCount();
+  const others = TARGETS.filter(t => t.key !== currentTarget).map(t => t.label);
+  const switchHint = others.length
+    ? "  Switch target to " + others.join(" / ") + " to see current data."
+    : "";
+
+  targetEmpty.style.display = "block";
+  targetEmpty.innerHTML = "";
+  const head = document.createElement("b");
+  const body = document.createElement("div");
+  if (covering === 0) {
+    head.textContent = "No archived run reaches " + label +
+      " (valid " + fmtTime(TARGET_VALID_TIME) + ") yet.";
+    body.textContent =
+      "All " + total + " archived runs fall short of that valid time — each " +
+      "only forecasts as far as its model's horizon from its own init, and " +
+      "short-range models (AROME France, ~51 h) never will." + switchHint;
+  } else {
+    head.textContent = "Nothing to show at the cursor for " + label +
+      " (valid " + fmtTime(TARGET_VALID_TIME) + ").";
+    body.textContent =
+      "Only " + covering + " of " + total + " archived runs reach that valid " +
+      "time (the dark ticks above) — drag the run-init cursor onto one." + switchHint;
+  }
+  targetEmpty.appendChild(head);
+  targetEmpty.appendChild(body);
 }
 
 function updateUI() {
@@ -543,17 +900,41 @@ function updateUI() {
   cursorLine.style.left = Math.round(trackOffsetPx + timeToPx(cursorTime, trackRect.width)) + "px";
   cursorReadout.textContent = "cursor " + fmtTime(cursorTime);
 
+  // The rain checkbox is independent of the radios and deliberately changes
+  // nothing about the displayed image - it only says so.
+  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
+
+  // Does anything on screen actually have a frame at this cursor position?
+  // Collected here because the row loop already resolves every model's
+  // nearest run, and both views need the same answer for #targetEmpty.
+  let anyShown = false;
   builtRows.forEach(({ model, track }) => {
     const nearest = nearestRun(model, cursorTime);
+    // null when the extent slider has hidden every run of this model.
+    const nearestMs = nearest ? nearest.runInit.getTime() : null;
+    if (nearest && targetData(nearest).covers) anyShown = true;
     track.querySelectorAll(".tick").forEach(tickEl => {
-      tickEl.classList.toggle("near", parseFloat(tickEl.dataset.runMs) === nearest.runInit.getTime());
+      tickEl.classList.toggle("near", parseFloat(tickEl.dataset.runMs) === nearestMs);
     });
   });
+  updateTargetEmpty(anyShown);
 
   if (viewMode === "gallery") {
     galleryCells.forEach(({ model, cell, imgEl, bodyEl }) => {
       const run = nearestRun(model, cursorTime);
-      const info = describeRunAtEclipse(model, run);
+      // Dim the models that can't answer the current quantity at all (Cloud
+      // prob. on anything but the one ensemble, Temp on everything) - the
+      // cell then states it in words below rather than showing a broken or
+      // empty image.
+      cell.classList.toggle("unsupported", !modelSupportsMode(model.id, quantityMode));
+      if (!run) {
+        cell.classList.add("noCoverage");
+        imgEl.style.display = "none";
+        bodyEl.style.display = "flex";
+        bodyEl.textContent = "no run in view";
+        return;
+      }
+      const info = describeRunAtTarget(model, run);
       cell.classList.toggle("noCoverage", !info.covers);
       if (info.hasImage) {
         imgEl.src = info.imageUrl;
@@ -562,7 +943,7 @@ function updateUI() {
       } else {
         imgEl.style.display = "none";
         bodyEl.style.display = "flex";
-        bodyEl.textContent = info.covers ? info.sub : "not yet covering";
+        bodyEl.textContent = info.note;
       }
     });
     return;
@@ -578,7 +959,14 @@ function updateUI() {
   }
   const { model } = builtRows[clickedRowIdx];
   const run = nearestRun(model, cursorTime);
-  const info = describeRunAtEclipse(model, run);
+  if (!run) {
+    setMapTag("no run in view");
+    mapAreaImg.style.display = "none";
+    mapAreaTitle.textContent = model.label;
+    mapAreaSub.textContent = "the extent slider has hidden every archived run of this model";
+    return;
+  }
+  const info = describeRunAtTarget(model, run);
   if (info.hasImage) {
     setMapTag("");
     mapAreaImg.src = info.imageUrl;
@@ -642,7 +1030,13 @@ window.addEventListener("touchmove", e => {
 }, { passive: false });
 window.addEventListener("touchend", endDrag);
 window.addEventListener("touchcancel", endDrag);
-quantitySelect.addEventListener("change", updateUI);
+quantityRadios.forEach(r => r.addEventListener("change", () => {
+  if (r.checked) applyQuantityMode(r.value);
+}));
+rainCheckbox.addEventListener("change", () => {
+  rainOn = rainCheckbox.checked;
+  updateUI();
+});
 
 function setViewMode(mode) {
   viewMode = mode;
@@ -663,7 +1057,7 @@ function advanceRow(direction) {
   if (!builtRows.length) return;
   const currentIndex = clickedRowIdx === null ? -1 : clickedRowIdx;
   const nextIndex = Math.min(builtRows.length - 1, Math.max(0, currentIndex + direction));
-  selectRowForSingleView(nextIndex);
+  trySelectRow(nextIndex); // no-op while Cloud prob. has the row locked
 }
 
 function advanceRun(direction) {
@@ -688,8 +1082,8 @@ const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
 window.addEventListener("keydown", e => {
   if (!_ARROW_KEYS.includes(e.key)) return;
   // Don't hijack arrow keys while the user is operating a focused control
-  // (the quantity select and extent slider both have their own native
-  // arrow-key behavior).
+  // (the quantity/target radios and the extent slider all have their own
+  // native arrow-key behavior).
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   e.preventDefault();

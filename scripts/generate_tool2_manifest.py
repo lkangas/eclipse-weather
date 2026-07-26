@@ -3,7 +3,7 @@ every step of every run each model has frames for.
 
 PURE CONSUMER - this script renders nothing and never touches data/raw/.
 Rendering is a separate, earlier pass (scripts/render_backfill.py ->
-src/viz/tool1_renderer.py's render_run()), which writes every
+src/viz/frame_renderer.py's render_run()), which writes every
 step x structurally-supported field of every archived run to
 OUTPUT_DIR/{model}/{field}/{YYYYMMDDHH}_{step:03d}.png. All this script does
 is walk that tree and describe what it finds. That decoupling is what makes
@@ -19,7 +19,7 @@ Fetching: none. Rendering: none. Only a directory scan, so this is now cheap
 to re-run as often as wanted (it used to be the expensive one, thousands of
 renders per model).
 
-Usage (inside Docker - no raw data is read, but importing tool1_renderer
+Usage (inside Docker - no raw data is read, but importing frame_renderer
 still pulls in the GRIB/matplotlib stack):
     .venv/bin/python -m scripts.generate_tool2_manifest
 """
@@ -31,7 +31,8 @@ import logging
 import re
 from datetime import UTC, datetime, timedelta
 
-from src.viz.tool1_renderer import OUTPUT_DIR, supported_fields
+from src.fetchers.base import eclipse_t
+from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_tool2_manifest")
@@ -202,7 +203,16 @@ def main() -> None:
     # a pure directory scan finishes in well under a second, so incremental
     # writes would only add a window where a truncated manifest could
     # overwrite a complete one.
-    manifest = {"generated_at": _iso_z(datetime.now(UTC)), "models": manifest_models}
+    # eclipse_t() (ECLIPSE_T env var, src/fetchers/base.py) rather than a
+    # literal - CLAUDE.md's "never hardcode T" rule applies to the UI too, and
+    # the browser has no other way to learn it. Consumed by tool2_real.html to
+    # place its eclipse marker on the time axis; that marker is simply not
+    # drawn if this key is absent (an older manifest).
+    manifest = {
+        "generated_at": _iso_z(datetime.now(UTC)),
+        "eclipse_t": _iso_z(eclipse_t()),
+        "models": manifest_models,
+    }
     manifest_path = OUTPUT_DIR / "tool2_manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

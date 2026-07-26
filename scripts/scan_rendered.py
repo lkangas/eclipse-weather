@@ -24,7 +24,7 @@ import time
 from datetime import UTC, datetime
 
 from src.config import DATA_RAW
-from src.viz.tool1_renderer import OUTPUT_DIR, supported_fields
+from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
 MODELS = [
     "gfs", "gefs_extended", "arome_france", "arpege_europe", "ecmwf_hres",

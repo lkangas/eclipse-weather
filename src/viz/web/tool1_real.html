@@ -194,6 +194,40 @@
     z-index: 4;
     opacity: 0.6;
   }
+  /* The eclipse moment itself (manifest.eclipse_t, ultimately the ECLIPSE_T
+     env var - never hardcoded here). Violet AND dashed so it can't be
+     confused with either the solid red drag-cursor or the solid green now
+     line, and pointer-events:none for the same reason #nowLine has it: it
+     must never intercept a drag. Starts hidden - it's only shown when T
+     actually falls inside the visible window (see layoutTicks), which today
+     is rare, since the real eclipse is weeks past every model's horizon. */
+  #eclipseLine {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    margin-left: -1px; /* centre the 2px band on the computed pixel; the
+      position math itself is identical to #nowLine's */
+    background: repeating-linear-gradient(to bottom, #6a2fa0 0 4px, transparent 4px 8px);
+    pointer-events: none;
+    z-index: 3;
+    display: none;
+  }
+  /* This file has no legend block (unlike tool2_real.html), so the marker
+     carries its own minimal inline tag. A title tooltip wouldn't work here -
+     pointer-events:none means the browser never hover-tests the line. */
+  #eclipseLabel {
+    position: absolute;
+    top: 0;
+    left: 4px;
+    font-size: 7.5px;
+    line-height: 9px;
+    color: #6a2fa0;
+    background: rgba(255, 255, 255, 0.85);
+    padding: 0 2px;
+    white-space: nowrap;
+    letter-spacing: 0.04em;
+  }
   #cursorLine {
     position: absolute;
     top: 0;
@@ -298,6 +332,7 @@
   <div id="axisRow"><div class="rowLabel"></div><div class="preloadBtn"></div><div class="rowTrack" id="axisTrack"></div></div>
   <div id="cursorLine"><div id="cursorHandle"></div></div>
   <div id="nowLine"></div>
+  <div id="eclipseLine"><div id="eclipseLabel">eclipse</div></div>
 </div>
 
 <div id="mapArea">
@@ -313,6 +348,11 @@ let AXIS_START = new Date(), AXIS_END = new Date(); // full span across all load
 let axisRightMs = 0;    // current right edge, ms from AXIS_START - narrowed by the extent slider
 let selectedModel = null;
 let cursorTime = new Date();
+// The eclipse moment, read from the manifest (which gets it from the
+// ECLIPSE_T env var via eclipse_t() - CLAUDE.md forbids hardcoding it here).
+// null when the manifest predates the eclipse_t field, or carries an
+// unparseable value: the marker is then simply never drawn.
+let ECLIPSE_TIME = null;
 
 // Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent
 // rain overlay checkbox - see tool1_renderer.py's hml_composite/prob_*
@@ -328,12 +368,22 @@ let rainOn = false;
 let modelBeforeProbForce = null;
 const PROB_ONLY_MODEL = "aifs_ens";
 
+// Takes a ROW id, which is not always the model id: a model whose newest run
+// is shorter than an older archived one contributes a second "<model>__long"
+// row. Resolving through MODELS' own modelId keeps both of that model's rows
+// prob-capable instead of only the one whose row id happens to match.
+function isProbRow(rowId) {
+  const entry = MODELS.find(m => m.id === rowId);
+  return !!entry && entry.modelId === PROB_ONLY_MODEL;
+}
+
 const rowsEl = document.getElementById("rows");
 const axisTrack = document.getElementById("axisTrack");
 const stackWrap = document.getElementById("stackWrap");
 const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
 const nowLine = document.getElementById("nowLine");
+const eclipseLine = document.getElementById("eclipseLine");
 const mapAreaTag = document.getElementById("mapAreaTag");
 // A real, successfully-rendered frame needs no banner - the image speaks
 // for itself. Collapsed via display:none (not just an empty string) so it
@@ -371,8 +421,21 @@ async function loadManifest() {
   if (!resp.ok) throw new Error("manifest.json fetch failed: HTTP " + resp.status);
   const manifest = await resp.json();
 
+  // Optional - a manifest generated before generate_tool1_manifest.py started
+  // emitting eclipse_t simply has no marker, rather than an error.
+  const eclipseRaw = manifest.eclipse_t ? new Date(manifest.eclipse_t) : null;
+  ECLIPSE_TIME = eclipseRaw && !isNaN(eclipseRaw.getTime()) ? eclipseRaw : null;
+
   MODELS = manifest.models.map(m => ({
     id: m.id,
+    // The real model behind this row. Usually identical to id, but a model
+    // whose newest run is shorter than an older archived one contributes a
+    // SECOND row (id "<model>__long") for that longer run - see
+    // generate_tool1_manifest.py's _longer_archived_run(). Per-model
+    // behaviour (the ensemble-only cloud-probability lock below) must key on
+    // this, not on the row id, or the long row of an ensemble model would be
+    // treated as a different, non-ensemble model.
+    modelId: m.model_id || m.id,
     label: m.label,
     runInit: new Date(m.run_init),
     steps: m.steps.map(s => s.h),
@@ -546,6 +609,18 @@ function layoutTicks() {
   } else {
     nowLine.style.display = "none";
   }
+
+  // Same visible-range test and same positioning math as #nowLine above -
+  // deliberately not re-derived, so the marker lines up with the ticks
+  // exactly the way the now line does. Expected to be hidden most of the
+  // time: the eclipse is normally far beyond every model's forecast horizon,
+  // so it falls outside [AXIS_START, AXIS_START+axisRightMs].
+  if (ECLIPSE_TIME && ECLIPSE_TIME >= AXIS_START && ECLIPSE_TIME - AXIS_START <= axisRightMs) {
+    eclipseLine.style.display = "block";
+    eclipseLine.style.left = Math.round(trackOffsetPx + timeToPx(ECLIPSE_TIME, trackRect.width)) + "px";
+  } else {
+    eclipseLine.style.display = "none";
+  }
 }
 
 function nearestStep(model, targetTime) {
@@ -576,14 +651,17 @@ function applyQuantityMode(mode) {
   if (mode === "cloudProb") {
     if (!wasForced) modelBeforeProbForce = selectedModel; // remember for when we leave
     document.querySelectorAll(".row").forEach(r => {
-      r.classList.toggle("disabled", r.dataset.modelId !== PROB_ONLY_MODEL);
+      r.classList.toggle("disabled", !isProbRow(r.dataset.modelId));
     });
-    if (selectedModel !== PROB_ONLY_MODEL && MODELS.some(m => m.id === PROB_ONLY_MODEL)) {
-      selectModel(PROB_ONLY_MODEL);
+    // Any row of the prob-capable model will do - a model contributing both a
+    // newest and a longer-run row has two, either of which has prob frames.
+    const probRow = MODELS.find(m => m.modelId === PROB_ONLY_MODEL);
+    if (probRow && !isProbRow(selectedModel)) {
+      selectModel(probRow.id);
     }
   } else {
     document.querySelectorAll(".row").forEach(r => r.classList.remove("disabled"));
-    if (wasForced && modelBeforeProbForce && modelBeforeProbForce !== PROB_ONLY_MODEL) {
+    if (wasForced && modelBeforeProbForce && !isProbRow(modelBeforeProbForce)) {
       selectModel(modelBeforeProbForce);
     }
     modelBeforeProbForce = null;
@@ -718,7 +796,7 @@ let isTouch = false; // true while the current interaction is touch-driven - wid
 // getBoundingClientRect-based lookup. Returns whether the switch happened.
 function trySelectModel(modelId) {
   if (modelId === null) return false;
-  if (quantityMode === "cloudProb" && modelId !== PROB_ONLY_MODEL) return false;
+  if (quantityMode === "cloudProb" && !isProbRow(modelId)) return false;
   selectModel(modelId);
   return true;
 }

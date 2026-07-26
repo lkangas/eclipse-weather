@@ -13,7 +13,7 @@ hunting" range into one near-white band. The other variants concentrate
 levels at the low end instead.
 
 Reuses the same field readers, basemap overlay, title formatting and
-edge-to-edge figure layout as tool1_renderer.render_frame() - only the
+edge-to-edge figure layout as frame_renderer.render_frame() - only the
 pcolormesh -> contourf call and level set differ.
 
 Usage (inside Docker, GRIB deps required):
@@ -30,7 +30,7 @@ import numpy as np
 
 from src.config import eclipse_config
 from src.viz.basemap import draw_basemap
-from src.viz.tool1_renderer import (
+from src.viz.frame_renderer import (
     OUTPUT_DIR,
     _FIELD_LABELS,
     _MODEL_LABELS,

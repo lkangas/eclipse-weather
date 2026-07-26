@@ -1,7 +1,7 @@
 """AIFS ENS only: compute P(quantity >= threshold) separately for each of
 total/low/mid/high (not just low, which is all the wired-in "prob_cloud"
 field does today), each rendered both raw-linear and gamma=0.6 stretched -
-locked-in final values (threshold via tool1_renderer.py's own
+locked-in final values (threshold via frame_renderer.py's own
 _PROB_CLOUD_THRESHOLD_PCT, now 10%; gamma=0.6 chosen as a milder low-end
 boost than the main cloud fields' 0.4, after comparing both via the
 threshold-sweep review tool, since removed).
@@ -30,7 +30,7 @@ from src.extract.ecmwf_extractor import _iter_members, _percent_scale
 from src.fetchers.base import format_init_dir
 from src.viz.basemap import draw_basemap
 from src.viz.cloud_field_comparison import _crop
-from src.viz.tool1_renderer import (
+from src.viz.frame_renderer import (
     OUTPUT_DIR,
     _PROB_CLOUD_THRESHOLD_PCT,
     _TOTALITY_BAND_LAT,

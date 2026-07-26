@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 
 from src.config import eclipse_config
 from src.viz.basemap import draw_basemap
-from src.viz.tool1_renderer import (
+from src.viz.frame_renderer import (
     OUTPUT_DIR,
     _FIELD_LABELS,
     _MODEL_LABELS,

@@ -1,6 +1,6 @@
 """Standalone, decoupled renderer: for every archived (model, run_init) on
 disk, render every step x every structurally-supported field via
-render_run() (see src/viz/tool1_renderer.py). Produces no tool-specific
+render_run() (see src/viz/frame_renderer.py). Produces no tool-specific
 manifest.json - just images on disk, in the same OUTPUT_DIR/model/field/
 run_step.png convention render_frame() has always used - which Tool 1/2/3's
 own manifest scripts can then scan and reference however each one needs.
@@ -25,7 +25,7 @@ import logging
 from datetime import UTC, datetime
 
 from src.config import DATA_RAW
-from src.viz.tool1_renderer import OUTPUT_DIR, render_run
+from src.viz.frame_renderer import OUTPUT_DIR, render_run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("render_backfill")
