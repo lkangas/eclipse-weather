@@ -5,22 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 3 — eclipse valid-time, all models, run-init slider (real data)</title>
 <style>
+  html, body { height: 100%; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
     background: #f6f4ef;
     color: #232320;
     margin: 0;
-    padding: 24px;
+    padding: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* #mapArea / #gallery below are the flexible elements
+      that absorb whatever room is left after controls+slider+legend - see
+      their own comments. Same layout approach as tool1_real.html /
+      tool2_real.html. */
   }
   .controls {
     display: flex;
     align-items: center;
     gap: 18px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
     font-size: 11.5px;
-    border-top: 1px solid #232320;
     border-bottom: 1px solid #d8d4c8;
-    padding: 6px 0;
+    padding: 4px 6px;
+    flex: none;
   }
   .controls label {
     color: #7a776c;
@@ -65,8 +73,9 @@
     position: relative;
     border: 1px solid #232320;
     background: #fff;
-    padding: 5px 14px 5px 0;
+    padding: 3px 14px 3px 0;
     user-select: none;
+    flex: none; /* fixed content height - #mapArea/#gallery are the flexible ones */
     cursor: ew-resize;
     touch-action: none;
   }
@@ -124,23 +133,49 @@
   #axisRow { display: flex; align-items: center; height: 14px; margin-top: 3px; border-top: 1px solid #232320; }
   #axisRow .rowLabel { visibility: hidden; }
   .axisTick { position: absolute; top: 3px; font-size: 9px; color: #7a776c; transform: translateX(-50%); white-space: nowrap; }
-  .legend { font-size: 9.5px; color: #7a776c; margin-top: 6px; }
+  .legend { font-size: 9.5px; color: #7a776c; margin-top: 4px; flex: none; }
   .legend span { margin-right: 16px; }
   .legend .sw { display: inline-block; width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
 
   #mapArea {
-    margin-top: 18px; border: 1px solid #232320; background: #fff;
-    min-height: 260px; display: flex; align-items: center; justify-content: center;
-    flex-direction: column; gap: 6px; color: #7a776c; font-size: 12px; padding: 10px;
+    margin-top: 2px; border: 1px solid #232320; background: #fff;
+    flex: 1;    /* absorbs whatever vertical room is left below the
+      fixed-size controls/slider/legend above - same layout approach as
+      tool1_real.html / tool2_real.html. */
+    min-height: 80px; /* just enough for the placeholder/error text to stay
+      legible on a very cramped viewport - not a target size. */
+    display: flex; align-items: center; justify-content: center;
+    flex-direction: column; gap: 4px; color: #7a776c; font-size: 12px;
+    padding: 6px; box-sizing: border-box;
   }
   #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
   #mapArea .placeholder-tag { font-size: 9.5px; color: #a8a498; text-transform: uppercase; letter-spacing: 0.09em; }
+  #mapAreaImg {
+    max-width: 100%;
+    flex: 1 1 0;
+    min-height: 0;
+    width: auto;
+    object-fit: contain;
+    display: none;
+  }
 
+  /* The gallery is the OTHER flexible element - only one of #gallery /
+     #mapArea is ever displayed at a time (see setViewMode), so both claim
+     flex:1. Unlike #mapArea (a single image that scales to fit) the gallery
+     is an N-cell grid that can genuinely need more room than the viewport
+     has, so it scrolls internally rather than being clipped by body's
+     overflow:hidden. */
   #gallery {
-    margin-top: 18px;
+    margin-top: 2px;
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 10px;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    align-content: start;
+    padding: 2px;
+    box-sizing: border-box;
   }
   .galleryCell {
     border: 1px solid #232320;
@@ -188,10 +223,8 @@
     <label for="quantitySelect">Quantity</label>
     <select id="quantitySelect">
       <option value="total">Total cloud</option>
-      <option value="low">Low cloud</option>
-      <option value="mid">Mid cloud</option>
-      <option value="high">High cloud</option>
-      <option value="prob_cloud">P(low cloud &gt;=20%) — ensembles only</option>
+      <option value="hml_composite">H/M/L composite</option>
+      <option value="prob_hml_composite">Cloud prob. (H/M/L) — ensembles only</option>
     </select>
   </div>
   <div>
@@ -224,7 +257,7 @@
 
 <div id="mapArea" style="display:none;">
   <div class="placeholder-tag" id="mapAreaTag">click a row</div>
-  <img id="mapAreaImg" alt="" style="max-width:100%; display:none;">
+  <img id="mapAreaImg" alt="">
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
 </div>
@@ -244,37 +277,34 @@ let TARGET_VALID_TIME = new Date();
 let MODELS = []; // [{id, label, runs: [{runInit, covers, images, hasData}]}]
 
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
-// documented in tool1_real.html, repeated here since Tool 3 renders the
-// same underlying fields.
-// P(low cloud >=20%) - cloud probability, not clear probability - is a
-// per-grid-cell ensemble spread metric (T32's own pooled point metric,
-// complementary threshold, applied per-pixel) - only meaningful for a model
-// with genuine multi-member native low-cloud data. Right now that's
-// aifs_ens only; aifs_single is deterministic (a single run has no member
-// spread to compute a P() from), so it's listed as a real gap below, not
-// rendered as a degenerate binary map.
-const PROB_CLOUD_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
+// documented in tool1_real.html/tool2_real.html, repeated here since Tool 3
+// renders the same underlying fields.
+// Cloud probability (per-pixel, not the pooled point metric T32 uses for
+// site ranking) is a per-grid-cell ensemble spread metric - only meaningful
+// for a model with genuine multi-member native low/mid/high data. Right now
+// that's aifs_ens only; aifs_single is deterministic (a single run has no
+// member spread to compute a P() from), so it's listed as a real gap below,
+// not rendered as a degenerate binary map.
+const PROB_HML_GAP = "Needs an ensemble with native low/mid/high cloud - only AIFS ENS currently qualifies";
 const KNOWN_FIELD_GAPS = {
   arome_france: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
+    prob_hml_composite: PROB_HML_GAP,
   },
   arpege_europe: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
+    prob_hml_composite: PROB_HML_GAP,
   },
   ecmwf_ens: {
-    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    prob_cloud: PROB_CLOUD_GAP,
+    hml_composite: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    prob_hml_composite: PROB_HML_GAP,
   },
-  aifs_single: { prob_cloud: PROB_CLOUD_GAP },
-  gfs: { prob_cloud: PROB_CLOUD_GAP },
-  gefs_extended: { prob_cloud: PROB_CLOUD_GAP },
-  ecmwf_hres: { prob_cloud: PROB_CLOUD_GAP },
-  icon_eu: { prob_cloud: PROB_CLOUD_GAP },
-  icon_global: { prob_cloud: PROB_CLOUD_GAP },
+  aifs_single: { prob_hml_composite: PROB_HML_GAP },
+  gfs: { prob_hml_composite: PROB_HML_GAP },
+  gefs_extended: { prob_hml_composite: PROB_HML_GAP },
+  ecmwf_hres: { prob_hml_composite: PROB_HML_GAP },
+  icon_eu: { prob_hml_composite: PROB_HML_GAP },
+  icon_global: { prob_hml_composite: PROB_HML_GAP },
 };
 
 async function loadManifest() {
@@ -315,6 +345,13 @@ const viewGalleryBtn = document.getElementById("viewGalleryBtn");
 const viewSingleBtn = document.getElementById("viewSingleBtn");
 const mapArea = document.getElementById("mapArea");
 const mapAreaTag = document.getElementById("mapAreaTag");
+// A real, successfully-rendered frame needs no banner - the image speaks
+// for itself. Collapsed via display:none (not just an empty string) so it
+// doesn't leave behind an empty line's worth of vertical space/gap.
+function setMapTag(text) {
+  mapAreaTag.textContent = text;
+  mapAreaTag.style.display = text ? "" : "none";
+}
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
@@ -533,7 +570,7 @@ function updateUI() {
 
   // single view
   if (clickedRowIdx === null || !builtRows[clickedRowIdx]) {
-    mapAreaTag.textContent = "click a row";
+    setMapTag("click a row");
     mapAreaImg.style.display = "none";
     mapAreaTitle.textContent = "";
     mapAreaSub.textContent = "—";
@@ -543,11 +580,11 @@ function updateUI() {
   const run = nearestRun(model, cursorTime);
   const info = describeRunAtEclipse(model, run);
   if (info.hasImage) {
-    mapAreaTag.textContent = "real rendered frame";
+    setMapTag("");
     mapAreaImg.src = info.imageUrl;
     mapAreaImg.style.display = "block";
   } else {
-    mapAreaTag.textContent = info.covers ? "not available" : "not yet covering";
+    setMapTag(info.covers ? "not available" : "not yet covering");
     mapAreaImg.style.display = "none";
   }
   mapAreaTitle.textContent = info.title;
@@ -565,7 +602,21 @@ function startDrag(clientX) { dragging = true; cursorTime = timeFromClientX(clie
 function moveDrag(clientX) { if (dragging) { cursorTime = timeFromClientX(clientX); updateUI(); } }
 function endDrag() { dragging = false; }
 
-stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
+// The label column has no meaningful position on the time axis - it sits to
+// the LEFT of axisTrack, so timeFromClientX() would clamp it to frac=0 (the
+// axis start). Pressing on a label must therefore only ever select that
+// model row (the row's own "click" listener does that, and still fires after
+// this early return) and never yank the shared run-init cursor back to the
+// start of the axis. Tool 3 has no separate row-drag mode - unlike tool2 the
+// only drag axis here is time - so this just suppresses the drag entirely.
+function isLabelTarget(target) {
+  return !!(target && target.closest && target.closest(".rowLabel"));
+}
+
+stackWrap.addEventListener("mousedown", e => {
+  if (isLabelTarget(e.target)) return;
+  startDrag(e.clientX);
+});
 window.addEventListener("mousemove", e => moveDrag(e.clientX));
 window.addEventListener("mouseup", endDrag);
 
@@ -578,6 +629,7 @@ window.addEventListener("mouseup", endDrag);
 // scrolling/pinch-zoom elsewhere on the page (and taps on the quantity/view
 // controls, which live outside #stackWrap) are never intercepted.
 stackWrap.addEventListener("touchstart", e => {
+  if (isLabelTarget(e.target)) return; // see isLabelTarget - tap still selects
   const t = e.touches[0];
   if (t) startDrag(t.clientX);
 }, { passive: true });
@@ -602,6 +654,53 @@ function setViewMode(mode) {
 }
 viewGalleryBtn.addEventListener("click", () => setViewMode("gallery"));
 viewSingleBtn.addEventListener("click", () => setViewMode("single"));
+
+// Tool 3's two axes are not tool2's: rows are MODELS (one per model, all at
+// the same fixed valid time) and the horizontal axis is RUN-INIT time, so
+// up/down walks models and left/right walks the archived runs of whichever
+// model row is currently clicked.
+function advanceRow(direction) {
+  if (!builtRows.length) return;
+  const currentIndex = clickedRowIdx === null ? -1 : clickedRowIdx;
+  const nextIndex = Math.min(builtRows.length - 1, Math.max(0, currentIndex + direction));
+  selectRowForSingleView(nextIndex);
+}
+
+function advanceRun(direction) {
+  const entry = clickedRowIdx === null ? builtRows[0] : builtRows[clickedRowIdx];
+  if (!entry) return;
+  // Same visibility filter as nearestRun - stepping must never land the
+  // cursor on a run the extent slider has scrolled off the axis.
+  const visible = entry.model.runs
+    .filter(r => r.runInit - AXIS_START <= axisRightMs)
+    .map(r => r.runInit.getTime())
+    .sort((a, b) => a - b);
+  if (!visible.length) return;
+  const current = nearestRun(entry.model, cursorTime);
+  const currentIndex = current === null ? -1 : visible.indexOf(current.runInit.getTime());
+  const nextIndex = Math.min(visible.length - 1, Math.max(0, currentIndex + direction));
+  cursorTime = new Date(visible[nextIndex]);
+  updateUI();
+}
+
+const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
+
+window.addEventListener("keydown", e => {
+  if (!_ARROW_KEYS.includes(e.key)) return;
+  // Don't hijack arrow keys while the user is operating a focused control
+  // (the quantity select and extent slider both have their own native
+  // arrow-key behavior).
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  e.preventDefault();
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    advanceRun(e.key === "ArrowRight" ? 1 : -1);
+  } else {
+    // builtRows follows MODELS order top-to-bottom, so Down moves to the
+    // next row visually below and Up to the one above.
+    advanceRow(e.key === "ArrowDown" ? 1 : -1);
+  }
+});
 
 extentInput.addEventListener("input", () => {
   axisRightMs = parseInt(extentInput.value, 10);
