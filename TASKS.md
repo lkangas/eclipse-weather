@@ -1239,16 +1239,16 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
 
 | Model | Precalc. cloud cover? | Cloud levels (hPa/mb) | q,t,z? | q/t/z levels (hPa/mb) |
 |---|---|---|---|---|
-| GFS | Yes (`TCDC`) | 50,100,150,200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,1000 (21) | Yes (`SPFH`,`TMP`,`HGT`) | 0.01,0.02,0.04,0.07,0.1,0.2,0.4,0.7,1,2,3,5,7,10,15,20,30,40,50,70,100,150,200,250,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,975,1000 (41) |
-| GEFS Extended | No (one stray 475mb point only, not a real product) | - | Partial - `HGT`/`TMP` yes, `SPFH` absent entirely | 10,50,100,200,250,300,500,700,850,925,1000 (11) |
-| ARPEGE | Yes (`cc`, package `IP3`) | 100,125,150,175,200,225,250,275,300,350,400,450,500,550,600,650,700,750,800,850,900,925,950,1000 (24) | Yes, but `r` (relative humidity) not `q` (package `IP1`: z,t,u,v,r) | same 24 levels as cloud |
-| AROME | Yes (`cc`, package `IP2`) | same 24 levels as ARPEGE | Yes, but `r` not `q` (package `IP1`: z,t,u,v,r) | same 24 levels |
-| ECMWF HRES | No | - | Yes (`q`,`t`,`z`) | 300,500,700,850,925,1000 (6) |
-| ECMWF ENS | No | - | Partial - `q`,`t` yes, `z` absent (only `gh`, physically equivalent) | 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 (14) |
-| AIFS Single | No | - | Yes (`q`,`t`,`z`, plus `gh`) | t/z: 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 (14); q: same minus 10hPa (13) |
+| GFS | Yes (`TCDC`) | 21:<br>50,100,150,200,250,300,350,400<br>450,500,550,600,650,700,750,800<br>850,900,925,950,1000 | Yes (`SPFH`,`TMP`,`HGT`) | 41:<br>0.01,0.02,0.04,0.07,0.1,0.2,0.4,0.7<br>1,2,3,5,7,10,15,20<br>30,40,50,70,100,150,200,250<br>300,350,400,450,500,550,600,650<br>700,750,800,850,900,925,950,975<br>1000 |
+| GEFS Extended | No (1 stray point, not a real product) | - | Partial - `HGT`/`TMP` yes, `SPFH` absent | 11:<br>10,50,100,200,250,300,500,700<br>850,925,1000 |
+| ARPEGE | Yes (`cc`, pkg `IP3`) | 24:<br>100,125,150,175,200,225,250,275<br>300,350,400,450,500,550,600,650<br>700,750,800,850,900,925,950,1000 | Yes, but `r` not `q` (pkg `IP1`: z,t,u,v,r) | 24: same set as cloud (left) |
+| AROME | Yes (`cc`, pkg `IP2`) | 24: same set as ARPEGE (above) | Yes, but `r` not `q` (pkg `IP1`: z,t,u,v,r) | 24: same set |
+| ECMWF HRES | No | - | Yes (`q`,`t`,`z`) | 6:<br>300,500,700,850,925,1000 |
+| ECMWF ENS | No | - | Partial - `q`,`t` yes, `z` absent (`gh` instead) | 14:<br>10,50,100,150,200,250,300,400<br>500,600,700,850,925,1000 |
+| AIFS Single | No | - | Yes (`q`,`t`,`z`,`gh`) | t/z (14):<br>10,50,100,150,200,250,300,400<br>500,600,700,850,925,1000<br>q (13): same minus 10hPa |
 | AIFS ENS | No | - | Yes (`q`,`t`,`z`) | same as AIFS Single |
-| ICON EU | No (`clc/` is model-level only) | - | Partial - `t`,`fi`(geopotential) yes, `q`/`qv` absent | 50,70,100,150,200,250,300,400,500,600,700,775,800,825,850,875,900,925,950,1000 (20) |
-| ICON Global | No (`clc/` is model-level only) | - | Partial - `t`,`fi` yes, `q`/`qv` absent | 30,50,70,100,150,200,250,300,400,500,600,700,800,850,900,925,950,1000 (18) |
+| ICON EU | No (model-level only) | - | Partial - `t`,`fi` yes, `q`/`qv` absent | 20:<br>50,70,100,150,200,250,300,400<br>500,600,700,775,800,825,850,875<br>900,925,950,1000 |
+| ICON Global | No (model-level only) | - | Partial - `t`,`fi` yes, `q`/`qv` absent | 18:<br>30,50,70,100,150,200,250,300<br>400,500,600,700,800,850,900,925<br>950,1000 |
 
       Evidence: GFS/GEFS via live `.idx` files (AWS). ECMWF's three streams
       (hres/ens/aifs) each live-checked against their own real index -
