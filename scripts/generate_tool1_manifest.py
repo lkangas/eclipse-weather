@@ -33,7 +33,7 @@ from src.viz.tool1_renderer import OUTPUT_DIR, render_frame
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_tool1_manifest")
 
-FIELDS = ["total", "low", "mid", "high", "prob_cloud"]
+FIELDS = ["total", "hml_composite", "prob_hml_composite"]
 MODELS = [
     ("gfs", "GFS"),
     ("gefs_extended", "GEFS Extended"),

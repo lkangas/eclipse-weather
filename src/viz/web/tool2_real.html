@@ -5,22 +5,29 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 2 — one model, stacked historical runs (real data)</title>
 <style>
+  html, body { height: 100%; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
     background: #f6f4ef;
     color: #232320;
     margin: 0;
-    padding: 24px;
+    padding: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* #mapArea below is the one flexible element that
+      absorbs whatever room is left after controls+slider+legend - see its
+      own comment. Same layout approach as tool1_real.html. */
   }
   .controls {
     display: flex;
     align-items: center;
     gap: 18px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
     font-size: 11.5px;
-    border-top: 1px solid #232320;
     border-bottom: 1px solid #d8d4c8;
-    padding: 6px 0;
+    padding: 4px 6px;
+    flex: none;
   }
   .controls label {
     color: #7a776c;
@@ -60,8 +67,9 @@
     position: relative;
     border: 1px solid #232320;
     background: #fff;
-    padding: 5px 14px 5px 0;
+    padding: 3px 14px 3px 0;
     user-select: none;
+    flex: none; /* fixed content height - #mapArea is the one flexible element */
     cursor: default;
     touch-action: none;
   }
@@ -186,18 +194,23 @@
     white-space: nowrap;
   }
   #mapArea {
-    margin-top: 18px;
+    margin-top: 2px;
     border: 1px solid #232320;
     background: #fff;
-    min-height: 260px;
+    flex: 1;    /* absorbs whatever vertical room is left below the
+      fixed-size controls/slider/legend above - same layout approach as
+      tool1_real.html. */
+    min-height: 80px; /* just enough for the placeholder/error text to stay
+      legible on a very cramped viewport - not a target size. */
     display: flex;
     align-items: center;
     justify-content: center;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     color: #7a776c;
     font-size: 12px;
-    padding: 10px;
+    padding: 6px;
+    box-sizing: border-box;
   }
   #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
   #mapArea .placeholder-tag {
@@ -206,10 +219,19 @@
     text-transform: uppercase;
     letter-spacing: 0.09em;
   }
+  #mapAreaImg {
+    max-width: 100%;
+    flex: 1 1 0;
+    min-height: 0;
+    width: auto;
+    object-fit: contain;
+    display: none;
+  }
   .legend {
     font-size: 9.5px;
     color: #7a776c;
-    margin-top: 6px;
+    margin-top: 4px;
+    flex: none;
   }
   .legend span { margin-right: 16px; }
   .legend .sw { display: inline-block; width: 9px; height: 9px; vertical-align: -1px; margin-right: 3px; }
@@ -226,10 +248,8 @@
     <label for="quantitySelect">Quantity</label>
     <select id="quantitySelect">
       <option value="total">Total cloud</option>
-      <option value="low">Low cloud</option>
-      <option value="mid">Mid cloud</option>
-      <option value="high">High cloud</option>
-      <option value="prob_cloud">P(low cloud &gt;=20%) — ensembles only</option>
+      <option value="hml_composite">H/M/L composite</option>
+      <option value="prob_hml_composite">Cloud prob. (H/M/L) — ensembles only</option>
     </select>
   </div>
   <div>
@@ -256,7 +276,7 @@
 
 <div id="mapArea">
   <div class="placeholder-tag" id="mapAreaTag">select a run</div>
-  <img id="mapAreaImg" alt="" style="max-width:100%; display:none;">
+  <img id="mapAreaImg" alt="">
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
 </div>
@@ -270,35 +290,32 @@ let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, 
 
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
 // documented in tool1_real.html/tool3_real.html.
-// P(low cloud >=20%) - cloud probability, not clear probability - is a
-// per-grid-cell ensemble spread metric (T32's own pooled point metric,
-// complementary threshold, applied per-pixel) - only meaningful for a model
-// with genuine multi-member native low-cloud data. Right now that's
-// aifs_ens only; aifs_single is deterministic (a single run has no member
-// spread to compute a P() from), so it's listed as a real gap below, not
-// rendered as a degenerate binary map.
-const PROB_CLOUD_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
+// Cloud probability (per-pixel, not the pooled point metric T32 uses for
+// site ranking) is a per-grid-cell ensemble spread metric - only meaningful
+// for a model with genuine multi-member native low/mid/high data. Right now
+// that's aifs_ens only; aifs_single is deterministic (a single run has no
+// member spread to compute a P() from), so it's listed as a real gap below,
+// not rendered as a degenerate binary map.
+const PROB_HML_GAP = "Needs an ensemble with native low/mid/high cloud - only AIFS ENS currently qualifies";
 const KNOWN_FIELD_GAPS = {
   arome_france: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
+    prob_hml_composite: PROB_HML_GAP,
   },
   arpege_europe: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
+    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try H/M/L composite",
+    prob_hml_composite: PROB_HML_GAP,
   },
   ecmwf_ens: {
-    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    prob_cloud: PROB_CLOUD_GAP,
+    hml_composite: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
+    prob_hml_composite: PROB_HML_GAP,
   },
-  aifs_single: { prob_cloud: PROB_CLOUD_GAP },
-  gfs: { prob_cloud: PROB_CLOUD_GAP },
-  gefs_extended: { prob_cloud: PROB_CLOUD_GAP },
-  ecmwf_hres: { prob_cloud: PROB_CLOUD_GAP },
-  icon_eu: { prob_cloud: PROB_CLOUD_GAP },
-  icon_global: { prob_cloud: PROB_CLOUD_GAP },
+  aifs_single: { prob_hml_composite: PROB_HML_GAP },
+  gfs: { prob_hml_composite: PROB_HML_GAP },
+  gefs_extended: { prob_hml_composite: PROB_HML_GAP },
+  ecmwf_hres: { prob_hml_composite: PROB_HML_GAP },
+  icon_eu: { prob_hml_composite: PROB_HML_GAP },
+  icon_global: { prob_hml_composite: PROB_HML_GAP },
 };
 
 async function loadManifest() {
@@ -338,6 +355,13 @@ const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
 const nowLine = document.getElementById("nowLine");
 const mapAreaTag = document.getElementById("mapAreaTag");
+// A real, successfully-rendered frame needs no banner - the image speaks
+// for itself. Collapsed via display:none (not just an empty string) so it
+// doesn't leave behind an empty line's worth of vertical space/gap.
+function setMapTag(text) {
+  mapAreaTag.textContent = text;
+  mapAreaTag.style.display = text ? "" : "none";
+}
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
@@ -552,7 +576,7 @@ function updateCursorUI() {
   });
 
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) {
-    mapAreaTag.textContent = "select a run";
+    setMapTag("select a run");
     mapAreaImg.style.display = "none";
     mapAreaTitle.textContent = "";
     mapAreaSub.textContent = "—";
@@ -573,11 +597,11 @@ function updateCursorUI() {
   mapAreaTitle.textContent = MODELS[selectedModelId].label + " · run " + fmtTime(run.runInit);
   mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
   if (url) {
-    mapAreaTag.textContent = "real rendered frame";
+    setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
   } else {
-    mapAreaTag.textContent = "not available";
+    setMapTag("not available");
     mapAreaImg.style.display = "none";
     const knownReason = (KNOWN_FIELD_GAPS[selectedModelId] || {})[field];
     mapAreaSub.textContent = step === null
@@ -672,9 +696,29 @@ function moveDrag(clientX, clientY) {
 
 function endDrag() { dragMode = null; isTouch = false; }
 
+// The label column has no meaningful position on the time axis - it sits to
+// the LEFT of axisTrack, so timeFromClientX() would clamp it to frac=0 (the
+// axis start). Clicking it must therefore only ever switch runs, never
+// touch cursorTime - unlike the general "click away from both handles jumps
+// both" behavior everywhere else in the row (see startDrag's else branch).
+function handleLabelPointerDown(target, clientX, clientY) {
+  const label = target.closest(".rowLabel");
+  if (!label) return false;
+  const idx = rowIndexAtClientY(clientY);
+  if (idx !== null) selectRun(idx);
+  // Starting on the label still begins a row-drag - moveDrag's "row" branch
+  // only ever looks at clientY, so continuing to drag up/down from here
+  // switches runs same as starting from the track, it just never touches
+  // cursorTime the way starting from elsewhere in a non-selected row would.
+  dragMode = "row";
+  applyHoverHint(clientX, clientY);
+  return true;
+}
+
 stackWrap.addEventListener("mousedown", e => {
   if (e.target.closest(".preloadBtn")) return;
   isTouch = false;
+  if (handleLabelPointerDown(e.target, e.clientX, e.clientY)) return;
   startDrag(e.clientX, e.clientY);
 });
 window.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
@@ -688,6 +732,7 @@ stackWrap.addEventListener("touchstart", e => {
   const t = e.touches[0];
   if (!t) return;
   isTouch = true;
+  if (handleLabelPointerDown(e.target, t.clientX, t.clientY)) return;
   startDrag(t.clientX, t.clientY);
   // No preventDefault here: an off-handle tap must still fall through to the
   // "click away still jumps both" behavior, and must not block page scroll.
@@ -703,6 +748,46 @@ window.addEventListener("touchend", endDrag);
 window.addEventListener("touchcancel", endDrag);
 quantitySelect.addEventListener("change", updateCursorUI);
 modelSelect.addEventListener("change", () => loadModel(modelSelect.value));
+
+function advanceStep(direction) {
+  if (selectedRunIdx === null || !builtRows[selectedRunIdx]) return;
+  const run = builtRows[selectedRunIdx].run;
+  const visible = run.steps
+    .filter(h => stepValidTime(run, h) - AXIS_START <= axisRightMs)
+    .sort((a, b) => a - b);
+  if (!visible.length) return;
+  const current = nearestStep(run, cursorTime);
+  const currentIndex = current === null ? -1 : visible.indexOf(current);
+  const nextIndex = Math.min(visible.length - 1, Math.max(0, currentIndex + direction));
+  cursorTime = stepValidTime(run, visible[nextIndex]);
+  updateCursorUI();
+}
+
+function advanceRun(direction) {
+  if (!builtRows.length) return;
+  const currentIndex = selectedRunIdx === null ? -1 : selectedRunIdx;
+  const nextIndex = Math.min(builtRows.length - 1, Math.max(0, currentIndex + direction));
+  selectRun(nextIndex);
+}
+
+const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
+
+window.addEventListener("keydown", e => {
+  if (!_ARROW_KEYS.includes(e.key)) return;
+  // Don't hijack arrow keys while the user is operating a focused control
+  // (the model/quantity selects and extent slider all have their own
+  // native arrow-key behavior).
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  e.preventDefault();
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    advanceStep(e.key === "ArrowRight" ? 1 : -1);
+  } else {
+    // builtRows is newest-on-top - Up moves to the newer/previous row,
+    // Down to the older/next one, matching visual top-to-bottom order.
+    advanceRun(e.key === "ArrowDown" ? 1 : -1);
+  }
+});
 
 extentInput.addEventListener("input", () => {
   axisRightMs = parseInt(extentInput.value, 10);

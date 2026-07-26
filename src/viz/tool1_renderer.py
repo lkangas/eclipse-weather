@@ -30,6 +30,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import cfgrib
+import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -45,7 +46,7 @@ from src.extract.icon_extractor import (
     _expected_filename as _icon_filename,
 )
 from src.extract.meteofrance_extractor import _cloud_dataset, _group_files, _step_hour_index
-from src.fetchers.base import format_init_dir
+from src.fetchers.base import format_init_dir, full_range_steps
 from src.viz.basemap import draw_basemap
 from src.viz.cloud_field_comparison import TOTALITY_PATH_JSON, _crop
 
@@ -91,7 +92,7 @@ def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple |
 def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     if field == "total":
         return None  # SP2 has no native total field (meteofrance_extractor.py's own note)
-    if field == "prob_cloud":
+    if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arome_france", run_init):
@@ -112,7 +113,7 @@ def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tupl
     T31c's own _field_arpege for the same reasoning."""
     if field == "total":
         return None
-    if field == "prob_cloud":
+    if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     var = _AROME_VAR_BY_FIELD[field]
     for path in _group_files("arpege_europe", run_init):
@@ -272,11 +273,14 @@ def _aifs_field(
     with tcc/lcc/mcc/hcc all genuinely native (ecmwf_extractor.py's
     _aifs_rows note), unlike hres's native-total/derived-levels split.
 
-    field="prob_cloud" is the one exception to the total/low/mid/high set -
-    it's not a raw model field at all, it's P(cloud_low >= threshold) computed
-    across members (see _read_ecmwf_grid_prob_cloud). Ensemble-only: a
-    deterministic model (aifs_single) has no member spread to compute a P()
-    from, so it's a meaningless binary 0%/100% map per cell, not a real
+    field="prob_{total,low,mid,high}" is the exception to the plain
+    total/low/mid/high set - each is P(that quantity >= threshold) computed
+    across members (see _read_ecmwf_grid_prob_cloud), independently per
+    quantity rather than always reusing "low" - generalized from an earlier
+    low-only version per explicit user direction, matching the per-quantity
+    probability grid already validated in the review tooling. Ensemble-only:
+    a deterministic model (aifs_single) has no member spread to compute a
+    P() from, so it's a meaningless binary 0%/100% map per cell, not a real
     probability - skip it there rather than render something misleading."""
     model_config = get_model(model_name)
     path = DATA_RAW / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
@@ -284,11 +288,17 @@ def _aifs_field(
         scale = _percent_scale(model_config["cloud"]["total"], "total")
         shortname = model_config["cloud"]["total"]["param"]
         return _read_ecmwf_grid(path, shortname, scale, bbox)
-    if field == "prob_cloud":
+    if field.startswith("prob_"):
         if "ensemble" not in model_config["kind"]:
             return None  # deterministic, single member - no ensemble spread to compute a P() from
-        scale = _percent_scale(model_config["cloud"]["levels"], "levels")
-        return _read_ecmwf_grid_prob_cloud(path, _AIFS_SHORTNAME_BY_FIELD["low"], scale, bbox)
+        quantity = field[len("prob_"):]
+        if quantity == "total":
+            scale = _percent_scale(model_config["cloud"]["total"], "total")
+            shortname = model_config["cloud"]["total"]["param"]
+        else:
+            scale = _percent_scale(model_config["cloud"]["levels"], "levels")
+            shortname = _AIFS_SHORTNAME_BY_FIELD[quantity]
+        return _read_ecmwf_grid_prob_cloud(path, shortname, scale, bbox)
     scale = _percent_scale(model_config["cloud"]["levels"], "levels")
     shortname = _AIFS_SHORTNAME_BY_FIELD[field]
     return _read_ecmwf_grid(path, shortname, scale, bbox)
@@ -321,7 +331,7 @@ def _icon_path(model_name: str, run_init: datetime, step: int, param: str) -> Pa
 def _icon_eu_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Already regular lat/lon - direct read, no remap (unlike icon_global
     below)."""
-    if field == "prob_cloud":
+    if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     path = _icon_path("icon_eu", run_init, step, param)
@@ -338,7 +348,7 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     weights (already built/verified for the eclipse archiver's own
     DATA_RAW-rooted icon_global path) to remap+crop to Iberia in one call,
     same as cloud_field_comparison.py's _field_icon_global."""
-    if field == "prob_cloud":
+    if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
     param = _ICON_PARAM_BY_FIELD[field]
     src_path = _icon_path("icon_global", run_init, step, param)
@@ -369,6 +379,77 @@ _MODEL_READERS = {
 }
 
 
+# The only readers with real per-member probability support - see
+# _aifs_field's own prob_ branch (further gated internally on "ensemble" in
+# kind, to separate aifs_ens from aifs_single). gefs_extended's models.yaml
+# kind: ensemble is true too (the GEFS product family genuinely has 31
+# members upstream), but this project's own fetcher only ever pulls the
+# control member c00 - see _gefs_extended_field's own docstring - so
+# per-pixel probability across "members" would be meaningless there; its
+# reader never implements a prob_ branch at all regardless of what the
+# YAML kind label says about the upstream product. Trust the reader
+# (what this project's own code actually supports), not the label.
+_PROB_CAPABLE_READERS = {_aifs_single_field, _aifs_ens_field}
+
+
+def supported_fields(model_id: str) -> list[str]:
+    """Which of the 3 canonical fields (total, hml_composite,
+    prob_hml_composite) this model can actually produce - derived from
+    models.yaml/the reader registry, never a separately-maintained table
+    (CLAUDE.md's own single-source-of-truth rule), so callers never attempt
+    a render that's known in advance to be structurally impossible for this
+    model (e.g. hml_composite for ecmwf_hres/ecmwf_ens, prob_hml_composite
+    for every model but aifs_ens, total for arome_france/arpege_europe).
+
+    cloud.levels must be status == "confirmed" (genuinely native low/mid/
+    high) to count, not merely present - ecmwf_hres's levels are status:
+    derived (the humidity-derived estimate this renderer deliberately never
+    uses, see _ecmwf_hres_field's own docstring) and ecmwf_ens's are
+    status: absent_in_open_data; neither is real hml_composite material
+    despite the key existing in models.yaml for ecmwf_hres."""
+    model_config = get_model(model_id)
+    cloud = model_config.get("cloud", {})
+    fields = []
+    if "total" in cloud:
+        fields.append("total")
+    has_native_levels = cloud.get("levels", {}).get("status") == "confirmed"
+    if has_native_levels:
+        fields.append("hml_composite")
+        if "ensemble" in model_config["kind"] and _MODEL_READERS[model_id] in _PROB_CAPABLE_READERS:
+            fields.append("prob_hml_composite")
+    return fields
+
+
+def render_run(model_id: str, run_init: datetime) -> dict[int, dict[str, bool]]:
+    """Render every step x every structurally-supported field (see
+    supported_fields()) for one already-fetched (model_id, run_init) - the
+    single reusable rendering entry point, called identically by:
+      - a desktop backfill loop, once per already-archived run found on
+        disk (newest-first - see scripts/generate_tool{2,3}_manifest.py's
+        own _archived_run_inits())
+      - the future production fetch->render->delete pipeline, once right
+        after a fresh fetch, before that run's raw data gets deleted (see
+        CLAUDE.md's disk-footprint note - this is the render step that must
+        happen before deletion, not lazily whenever some tool's manifest
+        script next happens to run)
+
+    Returns {step: {field: has_data}} so callers can build their own
+    manifest.json (Tool 1/2/3 each want a different subset of runs/steps)
+    without ever touching raw data themselves, and production can use it to
+    confirm rendering actually produced something before deleting the
+    source."""
+    model_config = get_model(model_id)
+    steps = full_range_steps(model_config, run_init)
+    fields = supported_fields(model_id)
+    result: dict[int, dict[str, bool]] = {}
+    for step in steps:
+        result[step] = {}
+        for field in fields:
+            _, has_data = render_frame(model_id, run_init, step, field)
+            result[step][field] = has_data
+    return result
+
+
 # Display labels for the title text - same small per-model mapping already
 # duplicated across scripts/generate_tool{1,2,3}_manifest.py; kept local
 # here too rather than importing a script module into src/.
@@ -387,14 +468,41 @@ _MODEL_LABELS = {
 
 # "temp" reserved for future surface-temperature frames (deferred - none of
 # the fetchers pull it yet, see models.yaml's surface_temp entries/T37).
+# Short by design - these go straight into every rendered PNG's title, so
+# kept to a couple words (the RGB channel legend used to live here too;
+# moved out per explicit user direction against title bloat).
 _FIELD_LABELS = {
     "total": "Total",
     "low": "Low",
     "mid": "Mid",
     "high": "High",
-    "prob_cloud": "Prob",
+    "prob_low": "Prob (Low)",
+    "prob_mid": "Prob (Mid)",
+    "prob_high": "Prob (High)",
+    "hml_composite": "H/M/L",
+    "prob_hml_composite": "Prob H/M/L",
     "temp": "Temp",
 }
+
+# Composite fields aren't a single reader call - render_frame() reads each
+# of these three sub-fields via the model's own reader and alpha-composites
+# them (R=high,G=mid,B=low), instead of pcolormesh-ing one scalar array.
+_COMPOSITE_SUBFIELDS = {
+    "hml_composite": ("high", "mid", "low"),
+    "prob_hml_composite": ("prob_high", "prob_mid", "prob_low"),
+}
+
+# Cloud fields (0-100% cloud fraction) wash low values out under linear
+# scaling - gamma=0.4 stretch fixes that (picked after comparing 0.25/0.4/0.6
+# against real data this session). Probability fields get a milder gamma=0.6
+# (locked in separately, see TASKS.md). Applies both to the scalar
+# pcolormesh path below and to each channel of the two composite fields.
+_CLOUD_GAMMA = 0.40
+_PROB_GAMMA = 0.60
+
+
+def _gamma_for_field(field: str) -> float:
+    return _PROB_GAMMA if field.startswith("prob_") else _CLOUD_GAMMA
 
 
 def _fmt_dm_z(dt: datetime) -> str:
@@ -435,7 +543,11 @@ def render_frame(
     listing at all, not just whether *a* PNG got written - render_frame
     always writes ONE (a real map or a "(no data)" placeholder), but a
     placeholder is only useful to show for a field genuinely absent from an
-    otherwise-real step, not for a step nothing was ever published for."""
+    otherwise-real step, not for a step nothing was ever published for.
+
+    field in _COMPOSITE_SUBFIELDS (hml_composite/prob_hml_composite) is
+    dispatched to _render_composite_frame instead - it needs three reads
+    and an RGB composite, not one scalar pcolormesh."""
     if model_name not in _MODEL_READERS:
         raise KeyError(f"tool1_renderer has no reader for model '{model_name}'")
 
@@ -444,6 +556,10 @@ def render_frame(
     )
 
     bbox = eclipse_config()["bbox"]
+
+    if field in _COMPOSITE_SUBFIELDS:
+        return _render_composite_frame(model_name, run_init, step, field, bbox, output_path)
+
     try:
         result = _MODEL_READERS[model_name](field, run_init, step, bbox)
     except Exception:
@@ -467,8 +583,9 @@ def render_frame(
         )
     else:
         lats, lons, values = result
+        norm = mcolors.PowerNorm(gamma=_gamma_for_field(field), vmin=0, vmax=100)
         ax.pcolormesh(
-            lons, lats, values, cmap="Blues", vmin=0, vmax=100,
+            lons, lats, values, cmap="Blues", norm=norm,
             shading="auto", rasterized=True,
         )
         # Coastline/roads/eclipse-path drawn stroke-only, on top of the
@@ -489,10 +606,9 @@ def render_frame(
         spine.set_visible(False)
 
     label = _MODEL_LABELS.get(model_name, model_name)
-    field_label = _FIELD_LABELS.get(field, field)
     valid = run_init + timedelta(hours=step)
     ax.set_title(
-        f"{label} {field_label} - init {_fmt_dm_z(run_init)} - valid {_fmt_dm_z(valid)} (+{step}h)",
+        f"{label} · {_fmt_dm_z(run_init)} → {_fmt_dm_z(valid)} (+{step}h)",
         fontsize=10,
     )
     fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
@@ -501,3 +617,98 @@ def render_frame(
     fig.savefig(output_path, dpi=100)
     plt.close(fig)
     return output_path, result is not None
+
+
+def _render_composite_frame(
+    model_name: str, run_init: datetime, step: int, field: str, bbox: dict, output_path: Path
+) -> tuple[Path, bool]:
+    """R=high,G=mid,B=low alpha-composite over a white background - see
+    _COMPOSITE_SUBFIELDS for which three sub-fields feed which composite.
+    Each channel gets the same gamma stretch its own scalar field would
+    (cloud fields 0.4, prob fields 0.6) before compositing, so a thin/faint
+    layer still shows up as a tint instead of vanishing into white. High
+    composited first (as if farthest away), then mid, then low last/on top
+    - low cloud (or P(low)) is the most decisive layer for whether the
+    eclipse is actually visible, so it should visually win where layers
+    overlap."""
+    high_field, mid_field, low_field = _COMPOSITE_SUBFIELDS[field]
+    try:
+        high_result = _MODEL_READERS[model_name](high_field, run_init, step, bbox)
+        mid_result = _MODEL_READERS[model_name](mid_field, run_init, step, bbox)
+        low_result = _MODEL_READERS[model_name](low_field, run_init, step, bbox)
+    except Exception:
+        log.exception(
+            "tool1_renderer: %s/%s/+%dh/%s (composite) failed", model_name, run_init, step, field
+        )
+        high_result = mid_result = low_result = None
+
+    has_data = high_result is not None and mid_result is not None and low_result is not None
+
+    if output_path.exists():
+        return output_path, has_data
+
+    gamma = _gamma_for_field(field)
+    fig_width, fig_height, axes_top = _figure_layout(bbox)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    if not has_data:
+        ax.text(
+            0.5, 0.5, f"{model_name}\n(no data)",
+            ha="center", va="center", color="red", transform=ax.transAxes,
+        )
+    else:
+        lats, lons, hval = high_result
+        _, _, mval = mid_result
+        _, _, lval = low_result
+
+        r_alpha = np.clip(hval / 100, 0, 1) ** gamma
+        g_alpha = np.clip(mval / 100, 0, 1) ** gamma
+        b_alpha = np.clip(lval / 100, 0, 1) ** gamma
+
+        canvas = np.ones(r_alpha.shape + (3,))
+        for alpha, color in (
+            (r_alpha, np.array([1.0, 0.0, 0.0])),   # high -> red
+            (g_alpha, np.array([0.0, 0.65, 0.0])),  # mid  -> green
+            (b_alpha, np.array([0.0, 0.3, 1.0])),   # low  -> blue
+        ):
+            canvas = canvas * (1 - alpha[..., None]) + color * alpha[..., None]
+
+        # imshow needs ascending lat order with origin="lower" to place
+        # north at the top - flip if the source grid is north-to-south.
+        if lats[0] > lats[-1]:
+            lats = lats[::-1]
+            canvas = canvas[::-1, :, :]
+
+        ax.imshow(
+            canvas,
+            extent=(bbox["lon_min"], bbox["lon_max"], bbox["lat_min"], bbox["lat_max"]),
+            origin="lower",
+            aspect="auto",
+            interpolation="nearest",
+        )
+        draw_basemap(ax, bbox)
+        ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "k-", linewidth=0.8, alpha=0.5, zorder=7)
+        ax.plot(
+            _TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "k--", linewidth=1, alpha=0.7, zorder=7
+        )
+
+    ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
+    ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
+    ax.set_aspect(1.3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    label = _MODEL_LABELS.get(model_name, model_name)
+    valid = run_init + timedelta(hours=step)
+    ax.set_title(
+        f"{label} · {_fmt_dm_z(run_init)} → {_fmt_dm_z(valid)} (+{step}h)",
+        fontsize=10,
+    )
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=100)
+    plt.close(fig)
+    return output_path, has_data

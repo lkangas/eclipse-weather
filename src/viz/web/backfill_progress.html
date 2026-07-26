@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Render backfill progress</title>
+<style>
+  body {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    background: #f6f4ef;
+    color: #232320;
+    margin: 0;
+    padding: 16px;
+    font-size: 12px;
+  }
+  h1 { font-size: 14px; margin: 0 0 10px; }
+  #status {
+    border: 1px solid #232320;
+    background: #fff;
+    padding: 8px 10px;
+    margin-bottom: 14px;
+  }
+  #status .stale { color: #8b3a2f; font-weight: 700; }
+  #status .live { color: #2f6f3f; font-weight: 700; }
+  #status .done { color: #2f6f3f; font-weight: 700; }
+  table { border-collapse: collapse; width: 100%; background: #fff; }
+  th, td {
+    border: 1px solid #d8d4c8;
+    padding: 4px 8px;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  th { background: #f0e8d2; font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.04em; }
+  tr.active { background: #f0e8d2; }
+  tr.active td:first-child::before { content: "\25b6 "; color: #8b3a2f; }
+  .dim { color: #a8a498; }
+  #error { color: #8b3a2f; font-weight: 700; display: none; }
+</style>
+</head>
+<body>
+
+<h1>Render backfill progress</h1>
+<div id="status">loading…</div>
+<div id="error"></div>
+<table id="modelsTable">
+  <thead>
+    <tr><th>Model</th><th>Planned runs</th><th>Completed</th><th>Latest run rendered</th><th>Steps</th><th>With data</th><th>Finished at</th></tr>
+  </thead>
+  <tbody id="modelsBody"></tbody>
+</table>
+
+<script>
+const statusEl = document.getElementById("status");
+const errorEl = document.getElementById("error");
+const modelsBody = document.getElementById("modelsBody");
+
+function fmtAgo(iso) {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  return Math.round(s / 3600) + "h ago";
+}
+
+async function poll() {
+  try {
+    const resp = await fetch("backfill_progress.json?_=" + Date.now());
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const state = await resp.json();
+    errorEl.style.display = "none";
+    render(state);
+  } catch (e) {
+    errorEl.style.display = "block";
+    errorEl.textContent = "Couldn't load backfill_progress.json (" + e.message + ") - has a backfill run been started?";
+  }
+}
+
+function render(state) {
+  const ageMs = Date.now() - new Date(state.updated_at).getTime();
+  const staleness = state.done
+    ? '<span class="done">done</span>'
+    : (ageMs > 60000 ? '<span class="stale">no update in ' + fmtAgo(state.updated_at) + ' - possibly stalled</span>'
+                      : '<span class="live">running</span>');
+  const scope = state.args.model
+    ? state.args.model + (state.args.max_runs ? " (max " + state.args.max_runs + " run(s))" : "")
+    : "all models";
+  statusEl.innerHTML =
+    staleness + " &middot; scope: " + scope +
+    " &middot; started " + fmtAgo(state.started_at) +
+    " &middot; updated " + fmtAgo(state.updated_at) +
+    (state.current_model
+      ? " &middot; current: <b>" + state.current_model + (state.current_run ? " @ " + state.current_run : "") + "</b>"
+      : "");
+
+  modelsBody.innerHTML = "";
+  Object.entries(state.models).forEach(([modelId, m]) => {
+    const completed = m.completed || [];
+    const latest = completed[completed.length - 1];
+    const row = document.createElement("tr");
+    if (modelId === state.current_model) row.classList.add("active");
+    row.innerHTML =
+      "<td>" + modelId + "</td>" +
+      "<td>" + m.planned_runs + "</td>" +
+      "<td>" + completed.length + " / " + m.planned_runs + "</td>" +
+      "<td>" + (latest ? latest.run_init : '<span class="dim">—</span>') + "</td>" +
+      "<td>" + (latest ? latest.steps : "") + "</td>" +
+      "<td>" + (latest ? latest.steps_with_data : "") + "</td>" +
+      "<td>" + (latest ? fmtAgo(latest.finished_at) : "") + "</td>";
+    modelsBody.appendChild(row);
+  });
+}
+
+poll();
+setInterval(poll, 3000);
+</script>
+
+</body>
+</html>

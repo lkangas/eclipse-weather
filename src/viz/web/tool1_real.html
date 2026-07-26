@@ -5,22 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 1 — latest run per model (real data, 10 gridded models)</title>
 <style>
+  html, body { height: 100%; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
     background: #f6f4ef;
     color: #232320;
     margin: 0;
-    padding: 24px;
+    padding: 0;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden; /* the layout is sized to fit exactly - #mapArea below
+      is the one flexible element that absorbs whatever room is left after
+      the controls+slider, so nothing here should need to scroll. Kept as a
+      safety net (not a hard requirement) - see #mapArea's own min-height. */
   }
   .controls {
     display: flex;
     align-items: center;
     gap: 18px;
-    margin-bottom: 12px;
+    margin-bottom: 4px;
     font-size: 11.5px;
-    border-top: 1px solid #232320;
     border-bottom: 1px solid #d8d4c8;
-    padding: 6px 0;
+    padding: 4px 6px;
+    flex: none;
   }
   .controls label {
     color: #7a776c;
@@ -28,6 +36,40 @@
     text-transform: uppercase;
     letter-spacing: 0.05em;
     font-size: 9.5px;
+  }
+  .quantityGroup {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .quantityGroup .opt {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+  }
+  .quantityGroup input[type=radio] { accent-color: #8b3a2f; }
+  .rainOpt {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: #232320;
+    cursor: pointer;
+    padding-left: 8px;
+    border-left: 1px solid #d8d4c8;
+  }
+  .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
+  .placeholderNote {
+    font-size: 9.5px;
+    color: #a8a498;
+    font-style: italic;
+  }
+  .row.disabled {
+    pointer-events: none;
+    opacity: 0.35;
   }
   select {
     background: #fff;
@@ -58,25 +100,24 @@
     position: relative;
     border: 1px solid #232320;
     background: #fff;
-    padding: 5px 14px 5px 0;
+    padding: 3px 14px 3px 0;
     user-select: none;
-    cursor: ew-resize; /* clicking/dragging ANYWHERE in here scrubs the time
-      cursor (see script - no proximity gating at all), so the whole area
-      should read as horizontally-draggable, not just near the drawn line. */
+    flex: none; /* fixed content height - #mapArea below is the one flexible
+      element, see body's own flex-column comment. */
+    cursor: default; /* actual cursor is set by the hint-time/hint-row
+      classes below, based on proximity to the time cursor vs. the selected
+      row's own band - see script's hitZoneAt(). */
     touch-action: none; /* this element owns the drag-to-scrub gesture -
       stop the browser's own pan/zoom gestures inside it so touchmove
       dragging (see script) isn't fought over with native scrolling. Scoped
       to this element only, not body - page scroll elsewhere is untouched. */
   }
+  #stackWrap.hint-time { cursor: ew-resize; }
+  #stackWrap.hint-row { cursor: ns-resize; }
   .row {
     display: flex;
     align-items: center;
     height: 11px;
-    cursor: ew-resize; /* a row click both jumps the time cursor AND selects
-      that model in one action - ew-resize (inherited from #stackWrap would
-      be overridden by this element's own default otherwise) signals the
-      less-discoverable of the two, hover highlighting already covers
-      "this row is clickable" via .row:hover below. */
   }
   .row:hover { background: #f6f4ef; }
   .row.selected { background: #f0e8d2; }
@@ -194,20 +235,36 @@
     transform: translateX(-50%);
   }
   #mapArea {
-    margin-top: 18px;
+    margin-top: 2px;
     border: 1px solid #232320;
     background: #fff;
-    min-height: 260px;
+    flex: 1;    /* absorbs whatever vertical room is left below the fixed-size
+      controls/slider above - the map image (below) then flexes to fill
+      whatever that turns out to be, instead of dictating the page height by
+      its own width-scaled aspect ratio. */
+    min-height: 80px; /* just enough for the placeholder/error text to stay
+      legible on a very cramped viewport - not a target size. */
     display: flex;
     align-items: center;
     justify-content: center;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     color: #7a776c;
     font-size: 12px;
-    padding: 10px;
+    padding: 6px;
+    box-sizing: border-box;
   }
-  #mapAreaImg { max-width: 100%; display: none; }
+  #mapAreaImg {
+    max-width: 100%;
+    flex: 1 1 0;
+    min-height: 0; /* required for a flex item to shrink below its own
+      intrinsic (width-scaled) height inside a column flex container */
+    width: auto;
+    object-fit: contain; /* scale to fit the flexed box on both axes, not
+      just width, preserving aspect ratio - the actual fix for the map not
+      fitting the viewport alongside the slider. */
+    display: none;
+  }
   #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
   #mapArea .placeholder-tag {
     font-size: 9.5px;
@@ -220,18 +277,14 @@
 <body>
 
 <div class="controls">
-  <div>
-    <label for="quantitySelect">Quantity</label>
-    <select id="quantitySelect">
-      <option value="total">Total cloud</option>
-      <option value="low">Low cloud</option>
-      <option value="mid">Mid cloud</option>
-      <option value="high">High cloud</option>
-      <option value="prob_cloud">P(low cloud &gt;=20%) — ensembles only</option>
-      <option value="combined_rain">Combined cloud + rain (not yet designed)</option>
-      <option value="surface_temp">Surface temperature (not yet researched)</option>
-    </select>
+  <div class="quantityGroup" id="quantityGroup">
+    <label style="margin-right:0">Quantity</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="temp"> Temp</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudCover" checked> Cloud cover</label>
+    <label class="opt"><input type="radio" name="quantityMode" value="cloudProb"> Cloud prob.</label>
   </div>
+  <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
+  <span class="placeholderNote" id="placeholderNote"></span>
   <div>
     <label for="extentInput">Extent</label>
     <input type="range" id="extentInput" min="0" max="1" step="3600000" value="1">
@@ -255,11 +308,25 @@
 </div>
 
 <script>
-let MODELS = [];        // [{id, label, runInit (Date), steps: [h,...], imagesByStep: {h: {total,low,mid,high}}}]
+let MODELS = [];        // [{id, label, runInit (Date), steps: [h,...], imagesByStep: {h: {...fields}}}]
 let AXIS_START = new Date(), AXIS_END = new Date(); // full span across all loaded models' runs/reach
 let axisRightMs = 0;    // current right edge, ms from AXIS_START - narrowed by the extent slider
 let selectedModel = null;
 let cursorTime = new Date();
+
+// Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent
+// rain overlay checkbox - see tool1_renderer.py's hml_composite/prob_*
+// fields, which is what backs cloudCover/cloudProb here. Temp and the rain
+// overlay are both placeholders (no real data path yet).
+let quantityMode = "cloudCover";
+let rainOn = false;
+// Cloud prob only ever has data for aifs_ens (the only ensemble with a
+// native low/mid/high split) - selecting it force-switches the model and
+// greys out every other row; this remembers what was selected before, so
+// switching back to Cloud cover/Temp restores it instead of leaving you
+// stuck on aifs_ens.
+let modelBeforeProbForce = null;
+const PROB_ONLY_MODEL = "aifs_ens";
 
 const rowsEl = document.getElementById("rows");
 const axisTrack = document.getElementById("axisTrack");
@@ -268,10 +335,19 @@ const cursorLine = document.getElementById("cursorLine");
 const cursorReadout = document.getElementById("cursorReadout");
 const nowLine = document.getElementById("nowLine");
 const mapAreaTag = document.getElementById("mapAreaTag");
+// A real, successfully-rendered frame needs no banner - the image speaks
+// for itself. Collapsed via display:none (not just an empty string) so it
+// doesn't leave behind an empty line's worth of vertical space/gap.
+function setMapTag(text) {
+  mapAreaTag.textContent = text;
+  mapAreaTag.style.display = text ? "" : "none";
+}
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
-const quantitySelect = document.getElementById("quantitySelect");
+const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
+const rainCheckbox = document.getElementById("rainCheckbox");
+const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
 
@@ -341,43 +417,32 @@ function timeToPx(t, trackWidthPx) {
   return Math.round(Math.min(1, Math.max(0, frac)) * trackWidthPx);
 }
 
-const IMAGE_FIELDS = ["total", "low", "mid", "high"];
-// Known, permanent (not-a-bug) per-model field gaps, confirmed against real
-// data - see tool1_renderer.py's corresponding reader docstrings for each:
-//   - arome_france/arpege_europe: Meteo-France's SP2 package has no native
-//     total-cloud field, only low/mid/high.
-//   - ecmwf_ens: classic ECMWF ENS via ecmwf-opendata has no native
-//     low/mid/high at all (T01 research) - only AIFS ens has that split.
-// P(low cloud >=20%) - cloud probability, not clear probability - is a
-// per-grid-cell ensemble spread metric (T32's own pooled point metric,
-// complementary threshold, applied per-pixel) - only meaningful for a model
-// with genuine multi-member native low-cloud data. Right now that's
-// aifs_ens only; aifs_single is deterministic (a single run has no member
-// spread to compute a P() from), so it's listed as a real gap below, not
-// rendered as a degenerate binary map.
-const PROB_CLOUD_GAP = "Needs an ensemble with native low cloud - only AIFS ENS currently qualifies";
-const KNOWN_FIELD_GAPS = {
-  arome_france: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
-  },
-  arpege_europe: {
-    total: "Meteo-France's SP2 package has no native total-cloud field for this model — try Low/Mid/High",
-    prob_cloud: PROB_CLOUD_GAP,
-  },
-  ecmwf_ens: {
-    low: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    mid: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    high: "Classic ECMWF ENS has no native low/mid/high cloud split — try Total, or AIFS ENS for a low/mid/high breakdown",
-    prob_cloud: PROB_CLOUD_GAP,
-  },
-  aifs_single: { prob_cloud: PROB_CLOUD_GAP },
-  gfs: { prob_cloud: PROB_CLOUD_GAP },
-  gefs_extended: { prob_cloud: PROB_CLOUD_GAP },
-  ecmwf_hres: { prob_cloud: PROB_CLOUD_GAP },
-  icon_eu: { prob_cloud: PROB_CLOUD_GAP },
-  icon_global: { prob_cloud: PROB_CLOUD_GAP },
-};
+// Only ever 4 fields actually shown now (the rest - total/low/mid/high -
+// are still rendered/cached server-side since hml_composite is built from
+// them, but never displayed directly): the two "primary" composites and
+// their two fallbacks, resolved per (model, mode) in resolveField() below.
+const IMAGE_FIELDS = ["hml_composite", "total", "prob_hml_composite"];
+
+// resolveField() picks which field to actually display for the current
+// quantityMode - Comb Color (the R=High/G=Mid/B=Low composite) by default,
+// falling back to plain Total if this model doesn't have native low/mid/high
+// to build a composite from (ecmwf_hres/ecmwf_ens - they only ever have
+// native total). Cloud prob only ever has real data for aifs_ens (see
+// PROB_ONLY_MODEL/applyQuantityMode) - no Total fallback for it, there's
+// nothing to fall back to (prob_total is deliberately not rendered).
+function resolveField(model, step, mode) {
+  const hasData = (model.hasDataByStep[step] || {});
+  if (mode === "cloudCover") {
+    if (hasData.hml_composite) return "hml_composite";
+    if (hasData.total) return "total";
+    return null;
+  }
+  if (mode === "cloudProb") {
+    return hasData.prob_hml_composite ? "prob_hml_composite" : null;
+  }
+  return null; // temp - placeholder, no field to resolve yet
+}
+
 const preloadedModels = new Set();
 
 function preloadModel(model, btnEl) {
@@ -440,9 +505,8 @@ function buildRows() {
     track.className = "rowTrack";
     row.appendChild(track);
 
-    row.addEventListener("click", () => selectModel(model.id));
     rowsEl.appendChild(row);
-    builtRows.push({ model, track });
+    builtRows.push({ model, row, track });
   });
 }
 
@@ -505,6 +569,28 @@ function selectModel(modelId) {
   updateCursorUI();
 }
 
+function applyQuantityMode(mode) {
+  const wasForced = quantityMode === "cloudProb";
+  quantityMode = mode;
+
+  if (mode === "cloudProb") {
+    if (!wasForced) modelBeforeProbForce = selectedModel; // remember for when we leave
+    document.querySelectorAll(".row").forEach(r => {
+      r.classList.toggle("disabled", r.dataset.modelId !== PROB_ONLY_MODEL);
+    });
+    if (selectedModel !== PROB_ONLY_MODEL && MODELS.some(m => m.id === PROB_ONLY_MODEL)) {
+      selectModel(PROB_ONLY_MODEL);
+    }
+  } else {
+    document.querySelectorAll(".row").forEach(r => r.classList.remove("disabled"));
+    if (wasForced && modelBeforeProbForce && modelBeforeProbForce !== PROB_ONLY_MODEL) {
+      selectModel(modelBeforeProbForce);
+    }
+    modelBeforeProbForce = null;
+  }
+  updateCursorUI();
+}
+
 function updateCursorUI() {
   const trackRect = axisTrack.getBoundingClientRect();
   const wrapRect = stackWrap.getBoundingClientRect();
@@ -522,7 +608,7 @@ function updateCursorUI() {
   });
 
   if (!selectedModel) {
-    mapAreaTag.textContent = "select a model";
+    setMapTag("select a model");
     mapAreaImg.style.display = "none";
     mapAreaTitle.textContent = "";
     mapAreaSub.textContent = "—";
@@ -531,32 +617,36 @@ function updateCursorUI() {
 
   const model = MODELS.find(m => m.id === selectedModel);
   const step = nearestStep(model, cursorTime);
-  const field = quantitySelect.value;
+
+  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
+
+  if (quantityMode === "temp") {
+    setMapTag("not available");
+    mapAreaImg.style.display = "none";
+    mapAreaTitle.textContent = model.label;
+    mapAreaSub.textContent = "temperature: not yet implemented";
+    return;
+  }
+
+  const field = step === null ? null : resolveField(model, step, quantityMode);
   const images = step === null ? null : model.imagesByStep[step];
-  const hasDataFlags = step === null ? null : model.hasDataByStep[step];
-  // hasDataFlags[field] === false means this field has a URL (always
-  // written, even as a "(no data)" placeholder) but no real underlying
-  // data - null (no has_data info, e.g. a stale manifest) falls back to
-  // "assume real" so this widget doesn't break against an older manifest.
-  const fieldHasData = hasDataFlags ? hasDataFlags[field] !== false : true;
-  const url = images && fieldHasData ? images[field] : null;
+  const url = field && images ? images[field] : null;
 
   if (url) {
-    mapAreaTag.textContent = "real rendered frame";
+    setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
     mapAreaTitle.textContent = model.label + " · run " + fmtTime(model.runInit);
     mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(model, step));
   } else {
-    mapAreaTag.textContent = "not available";
+    setMapTag("not available");
     mapAreaImg.style.display = "none";
     mapAreaTitle.textContent = model.label;
-    const knownReason = (KNOWN_FIELD_GAPS[model.id] || {})[field];
     mapAreaSub.textContent = step === null
       ? "no step available"
-      : (field === "combined_rain" || field === "surface_temp"
-          ? "quantity not implemented yet"
-          : (knownReason || "no rendered frame for this field/step"));
+      : (quantityMode === "cloudProb"
+          ? "needs an ensemble with native low/mid/high - only AIFS ENS qualifies"
+          : "no rendered frame for this step");
   }
 }
 
@@ -566,36 +656,195 @@ function timeFromClientX(clientX) {
   return new Date(AXIS_START.getTime() + frac * axisRightMs);
 }
 
-let dragging = false;
-function startDrag(clientX) { dragging = true; cursorTime = timeFromClientX(clientX); updateCursorUI(); }
-function moveDrag(clientX) { if (dragging) { cursorTime = timeFromClientX(clientX); updateCursorUI(); } }
-function endDrag() { dragging = false; }
+// Two independent drag handles, each only grabbable near its OWN current
+// position: the vertical (time) cursor horizontally, the horizontal (row)
+// cursor vertically - the latter has no drawn line, the row highlight IS
+// its visual (same mechanic as Tool 2's own run-picker). Clicking away from
+// both still jumps both immediately; dragging only "sticks" to a handle
+// grabbed within its hit zone.
+const CURSOR_HIT_PX = 8;   // horizontal tolerance around the vertical cursor line
+const ROW_HIT_PAD_PX = 6;  // vertical tolerance around the selected row's own band
+const CURSOR_HIT_PX_TOUCH = 20;  // same, widened for a finger instead of a mouse pointer
+const ROW_HIT_PAD_PX_TOUCH = 16;
 
-stackWrap.addEventListener("mousedown", e => startDrag(e.clientX));
-window.addEventListener("mousemove", e => moveDrag(e.clientX));
+function isNearCursorLine(clientX) {
+  const rect = cursorLine.getBoundingClientRect();
+  const tol = isTouch ? CURSOR_HIT_PX_TOUCH : CURSOR_HIT_PX;
+  return Math.abs(clientX - (rect.left + rect.width / 2)) <= tol;
+}
+
+function isNearSelectedRow(clientY) {
+  const entry = builtRows.find(r => r.model.id === selectedModel);
+  if (!entry) return false;
+  const r = entry.row.getBoundingClientRect();
+  const pad = isTouch ? ROW_HIT_PAD_PX_TOUCH : ROW_HIT_PAD_PX;
+  return clientY >= r.top - pad && clientY <= r.bottom + pad;
+}
+
+function modelIdAtClientY(clientY) {
+  if (!builtRows.length) return null;
+  for (const entry of builtRows) {
+    const r = entry.row.getBoundingClientRect();
+    if (clientY >= r.top && clientY <= r.bottom) return entry.model.id;
+  }
+  if (clientY < builtRows[0].row.getBoundingClientRect().top) return builtRows[0].model.id;
+  if (clientY > builtRows[builtRows.length - 1].row.getBoundingClientRect().bottom) {
+    return builtRows[builtRows.length - 1].model.id;
+  }
+  return null;
+}
+
+// Precedence: the vertical (time) cursor wins where both hit zones overlap.
+function hitZoneAt(clientX, clientY) {
+  if (isNearCursorLine(clientX)) return "time";
+  if (isNearSelectedRow(clientY)) return "row";
+  return null;
+}
+
+function applyHoverHint(clientX, clientY) {
+  const zone = hitZoneAt(clientX, clientY);
+  stackWrap.classList.toggle("hint-time", zone === "time");
+  stackWrap.classList.toggle("hint-row", zone === "row");
+}
+
+let dragMode = null; // "time" | "row" | null (a plain click, no continued drag-follow)
+let isTouch = false; // true while the current interaction is touch-driven - widens hit tolerances
+
+// While Cloud Prob mode has forced/locked the model to PROB_ONLY_MODEL (see
+// applyQuantityMode), the row-drag mechanic below must not be able to switch
+// away from it just because the pointer passes over another (greyed-out)
+// row's geometry - .row.disabled's pointer-events:none only stops direct
+// hit-testing on that element, it doesn't stop modelIdAtClientY's own
+// getBoundingClientRect-based lookup. Returns whether the switch happened.
+function trySelectModel(modelId) {
+  if (modelId === null) return false;
+  if (quantityMode === "cloudProb" && modelId !== PROB_ONLY_MODEL) return false;
+  selectModel(modelId);
+  return true;
+}
+
+function startDrag(clientX, clientY) {
+  dragMode = hitZoneAt(clientX, clientY);
+  if (dragMode === "time") {
+    cursorTime = timeFromClientX(clientX);
+    updateCursorUI();
+  } else if (dragMode === "row") {
+    trySelectModel(modelIdAtClientY(clientY));
+  } else {
+    // Away from both handles: plain click still jumps both, same as before.
+    cursorTime = timeFromClientX(clientX);
+    if (!trySelectModel(modelIdAtClientY(clientY))) updateCursorUI();
+  }
+  applyHoverHint(clientX, clientY);
+}
+
+function moveDrag(clientX, clientY) {
+  if (dragMode === "time") {
+    cursorTime = timeFromClientX(clientX);
+    updateCursorUI();
+  } else if (dragMode === "row") {
+    const modelId = modelIdAtClientY(clientY);
+    if (modelId !== selectedModel) trySelectModel(modelId);
+  }
+  applyHoverHint(clientX, clientY);
+}
+
+function endDrag() { dragMode = null; isTouch = false; }
+
+// The label column has no meaningful position on the time axis - it sits to
+// the LEFT of axisTrack, so timeFromClientX() would clamp it to frac=0 (the
+// axis start). Clicking it must therefore only ever switch models, never
+// touch cursorTime - unlike the general "click away from both handles jumps
+// both" behavior everywhere else in the row (see startDrag's else branch).
+function handleLabelPointerDown(target, clientX, clientY) {
+  const label = target.closest(".rowLabel");
+  if (!label) return false;
+  const row = label.closest(".row");
+  if (row) trySelectModel(row.dataset.modelId);
+  // Starting on the label still begins a row-drag - moveDrag's "row" branch
+  // only ever looks at clientY, so continuing to drag up/down from here
+  // switches models same as starting from the track, it just never touches
+  // cursorTime the way starting from elsewhere in a non-selected row would.
+  dragMode = "row";
+  applyHoverHint(clientX, clientY);
+  return true;
+}
+
+stackWrap.addEventListener("mousedown", e => {
+  if (e.target.closest(".preloadBtn")) return;
+  isTouch = false;
+  if (handleLabelPointerDown(e.target, e.clientX, e.clientY)) return;
+  startDrag(e.clientX, e.clientY);
+});
+window.addEventListener("mousemove", e => moveDrag(e.clientX, e.clientY));
 window.addEventListener("mouseup", endDrag);
-quantitySelect.addEventListener("change", updateCursorUI);
+quantityRadios.forEach(r => r.addEventListener("change", () => {
+  if (r.checked) applyQuantityMode(r.value);
+}));
+rainCheckbox.addEventListener("change", () => {
+  rainOn = rainCheckbox.checked;
+  updateCursorUI();
+});
 
-// Touch support - reuses the exact same startDrag/moveDrag/endDrag functions
-// the mouse handlers above call, just fed touch coordinates instead of mouse
-// ones. No separate touch-vs-mouse hit-zone tolerance here: unlike a
-// "grab the handle precisely" widget, this file's drag surface has no
-// proximity gating at all - mousedown/touchstart anywhere inside #stackWrap
-// already jumps the cursor there and starts dragging (cursorHandle is purely
-// decorative; it inherits pointer-events:none from #cursorLine), so there's
-// no tolerance constant to widen.
+// Touch: same startDrag/moveDrag/endDrag as mouse, same attachment points
+// (touchstart on stackWrap only, touchmove/touchend on window so a drag that
+// leaves stackWrap's bounds is still tracked) - just fed touch coordinates.
 stackWrap.addEventListener("touchstart", e => {
-  if (!e.touches.length) return;
-  startDrag(e.touches[0].clientX);
+  if (e.target.closest(".preloadBtn")) return;
+  const t = e.touches[0];
+  if (!t) return;
+  isTouch = true;
+  if (handleLabelPointerDown(e.target, t.clientX, t.clientY)) return;
+  startDrag(t.clientX, t.clientY);
+  // No preventDefault here: an off-handle tap must still fall through to the
+  // "click away still jumps both" behavior, and must not block page scroll.
 }, { passive: true });
 window.addEventListener("touchmove", e => {
-  if (!dragging) return; // let untouched scrolling/other controls behave normally
-  if (!e.touches.length) return;
-  e.preventDefault(); // only while a drag is actually in progress
-  moveDrag(e.touches[0].clientX);
+  if (!dragMode) return; // let untouched scrolling/other controls behave normally
+  const t = e.touches[0];
+  if (!t) return;
+  e.preventDefault(); // only swallow the scroll/zoom gesture once a real handle drag is underway
+  moveDrag(t.clientX, t.clientY);
 }, { passive: false });
 window.addEventListener("touchend", endDrag);
 window.addEventListener("touchcancel", endDrag); // e.g. OS interrupts the touch mid-drag
+
+function advanceStep(direction) {
+  if (!selectedModel) return;
+  const model = MODELS.find(m => m.id === selectedModel);
+  const visible = model.steps
+    .filter(h => stepValidTime(model, h) - AXIS_START <= axisRightMs)
+    .sort((a, b) => a - b);
+  if (!visible.length) return;
+  const current = nearestStep(model, cursorTime);
+  const currentIndex = current === null ? -1 : visible.indexOf(current);
+  const nextIndex = Math.min(visible.length - 1, Math.max(0, currentIndex + direction));
+  cursorTime = stepValidTime(model, visible[nextIndex]);
+  updateCursorUI();
+}
+
+function advanceModel(direction) {
+  if (!MODELS.length) return;
+  const currentIndex = MODELS.findIndex(m => m.id === selectedModel);
+  const nextIndex = currentIndex === -1 ? 0 : Math.min(MODELS.length - 1, Math.max(0, currentIndex + direction));
+  trySelectModel(MODELS[nextIndex].id); // no-op while Cloud Prob mode has the model locked
+}
+
+const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
+
+window.addEventListener("keydown", e => {
+  if (!_ARROW_KEYS.includes(e.key)) return;
+  // Don't hijack arrow keys while the user is operating a focused control
+  // (the extent range slider has its own native arrow-key behavior).
+  const tag = document.activeElement && document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  e.preventDefault();
+  if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
+    advanceStep(e.key === "ArrowRight" ? 1 : -1);
+  } else {
+    advanceModel(e.key === "ArrowDown" ? 1 : -1);
+  }
+});
 
 extentInput.addEventListener("input", () => {
   axisRightMs = parseInt(extentInput.value, 10);
@@ -624,7 +873,7 @@ loadManifest()
     updateCursorUI();
   })
   .catch(err => {
-    mapAreaTag.textContent = "error";
+    setMapTag("error");
     mapAreaTitle.textContent = "failed to load manifest.json";
     mapAreaSub.textContent = String(err);
     console.error(err);
