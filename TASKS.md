@@ -1266,11 +1266,38 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
       pressure-level `clc` variant; would need model-level -> isobaric
       interpolation (using p/fi), not a native product.
 
-      So: GFS and AROME/ARPEGE can get real per-level cloud fraction with no
-      derivation at all (new fetcher work, but no accuracy risk); ecmwf_hres
-      has the geometry (z) but would still need derived cloud fraction if
-      cloud-along-the-sightline is wanted there specifically; ICON and
-      ECMWF's own open-data feed (hres/ens/aifs) have neither.
+      **Pass 3 (q/t/z for the models without native pressure-level cloud
+      fraction, i.e. do they at least have HRES's geometry/humidity
+      inputs?) - live-verified 2026-07-26, not assumed from HRES:**
+
+| Model | q on pl? | t on pl? | z/geopotential on pl? | Levels (hPa) | Notes |
+|---|---|---|---|---|---|
+| ecmwf_hres | Yes | Yes | Yes (`z`) | 6: 1000,925,850,700,500,300 | Already fetched (see Pass 1) |
+| ecmwf_ens | Yes | Yes | Partial - no `z` param, but `gh` (geopotential height) present, physically equivalent | 14: 10,50,100,150,200,250,300,400,500,600,700,850,925,1000 | Different real stream/dir (`enfo`) from HRES - not assumed to match it |
+| aifs_ens | Yes | Yes | Yes (`z`) | q: 13 (50-1000, no 10hPa); t/z: 14 (10-1000) | Different real dir (`aifs-ens/.../enfo`) from both HRES and classic ENS |
+| aifs_single | Yes | Yes | Yes (both `z` and `gh`) | Same as aifs_ens | Different real dir (`aifs-single/.../oper`) again |
+| icon_eu | **No** - model-level only | Yes | Yes (`fi`) | t/fi: 20 (50-1000, DWD's own level set) | `qv/` dir has zero pressure-level files, confirmed by directly grepping the real listing |
+      | icon_global | **No** - model-level only | Yes | Yes (`fi`) | t/fi: 18 (30-1000, DWD's own level set) | Same pattern as icon_eu |
+
+      Evidence: every row live-checked against that model's OWN real
+      index/directory listing (`.index` files under data.ecmwf.int for the
+      three ECMWF-family streams - confirmed `enfo`/`aifs-ens`/`aifs-single`
+      are genuinely separate directories, not just aliases of HRES's own -
+      and `opendata.dwd.de/weather/nwp/{icon-eu,icon}/grib/00/{t,qv,fi}/`
+      for ICON). ecmwf_ens's `z` gap was confirmed two ways: absent from the
+      index, and a live retrieve logging "No index entries for param=z"
+      while still succeeding on q/t/gh.
+
+      So, updated: **GFS and AROME/ARPEGE can get real per-level cloud
+      fraction with no derivation at all** (new fetcher work, no accuracy
+      risk). Of the rest, **ecmwf_hres, ecmwf_ens, aifs_ens, and aifs_single
+      all have real q+t(+z or gh) on pressure levels already available from
+      their own open-data feeds** - a humidity-derived cloud estimate could
+      in principle be attempted for any of them, not just HRES, though see
+      the calibration warning below before doing that. **ICON (both EU and
+      Global) has geometry (t/fi) but not humidity (q)** on pressure levels
+      at all - a humidity-based derivation isn't possible there without an
+      entirely different input.
       Related, cautionary context: a humidity-derived low/mid/high cloud
       estimate (RH from q/t via Murphy & Koop 2005, cloud fraction via
       Sundqvist et al. 1989 RH-threshold, RHc=0.80/0.75/0.55 per band) was

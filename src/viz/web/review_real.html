@@ -69,7 +69,6 @@
     display: block;
     margin: 0 auto;
   }
-  .cap { font-size: 0.7rem; color: var(--muted); margin-top: 0.25rem; }
   .empty-inner { padding: 2.5rem 0.5rem; }
   a.imglink { display: block; }
 </style>
@@ -87,6 +86,8 @@ const FIELD_LABELS = {
   low: "Low",
   mid: "Mid",
   high: "High",
+  combined_total: "Combined Total (H+M+L)",
+  total_diff: "Combined vs Native Total",
 };
 
 function buildCell(cell, cacheBust, altText) {
@@ -103,10 +104,6 @@ function buildCell(cell, cacheBust, altText) {
     img.alt = altText;
     a.appendChild(img);
     td.appendChild(a);
-    const cap = document.createElement("div");
-    cap.className = "cap";
-    cap.textContent = `+${cell.h}h (valid ${cell.valid.replace("T", " ").replace("Z", "Z")})`;
-    td.appendChild(cap);
   } else {
     td.className = "empty";
     const inner = document.createElement("div");
