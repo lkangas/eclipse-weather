@@ -76,35 +76,60 @@ def _archived_run_inits(model_id: str) -> list[datetime]:
     return run_inits
 
 
-def _render_model(model_id: str, max_runs: int | None, state: dict) -> None:
-    """Work through model_id's backlog as a dynamic queue, not a fixed list -
-    after every render, re-check disk for a run fetched WHILE we were busy
-    (this can be a long-running backfill; the scheduler keeps fetching the
-    whole time) and jump straight to anything new before continuing down
-    the old backlog. Without this, a freshly-fetched run would sit waiting
-    behind whatever history was still left to render, possibly for a long
-    time on a slow model.
+def _interleave_by_rank(per_model: dict[str, list[datetime]], models: list[str]) -> list[tuple[str, datetime]]:
+    """Flatten {model: [newest, ..., oldest]} into one queue ordered by RANK,
+    not by model: every model's newest run first, then every model's
+    2nd-newest, and so on.
 
-    Mutates and writes `state` (see main()'s own shape) after every run
-    completes, for backfill_progress.html to poll."""
-    all_archived = _archived_run_inits(model_id)
-    initial_run_inits = all_archived[:max_runs] if max_runs is not None else all_archived
-    log.info("%s: %d archived run(s) to render", model_id, len(initial_run_inits))
+    This is the whole point of "newest first" - the goal is that all 10
+    models have usable recent data quickly (so the tools are worth looking
+    at) while history fills in behind. Rendering model-by-model instead
+    would spend hours on one model's full 3-week backlog before the next
+    model showed anything at all.
 
-    model_state = {"planned_runs": len(initial_run_inits), "completed": []}
-    state["models"][model_id] = model_state
-    state["current_model"] = model_id
+    Rank rather than a global sort on run_init, deliberately: models publish
+    at wildly different cadences (arome_france 8 cycles/day vs ecmwf_hres 4),
+    so a straight chronological sort would let the high-cadence models
+    monopolise the whole recent window before a slower model's newest run
+    came up."""
+    queue: list[tuple[str, datetime]] = []
+    for rank in range(max((len(v) for v in per_model.values()), default=0)):
+        for model_id in models:
+            runs = per_model[model_id]
+            if rank < len(runs):
+                queue.append((model_id, runs[rank]))
+    return queue
 
-    queue = list(initial_run_inits)
-    # seen must cover EVERY run already on disk, not just the (possibly
-    # --max-runs-sliced) subset we're rendering: the mid-loop recheck below
-    # compares against the full unsliced _archived_run_inits() result, so
-    # seeding this from `queue` alone made every run excluded by --max-runs
-    # look "newly appeared" on the first recheck - turning a --max-runs 1
-    # smoke test into a full backfill of every archived run.
-    seen = set(all_archived)
+
+def _run_backfill(models: list[str], max_runs: int | None, state: dict) -> None:
+    """Render one rank-interleaved queue across ALL models (see
+    _interleave_by_rank), re-checking disk after every run for anything
+    fetched WHILE we were busy - a long backfill runs for hours and the
+    scheduler keeps fetching the whole time, so a freshly-fetched run should
+    jump the queue rather than wait behind the entire remaining backlog.
+
+    Mutates and writes `state` after every run, for
+    backfill_progress.html to poll."""
+    per_model = {}
+    for model_id in models:
+        all_archived = _archived_run_inits(model_id)
+        per_model[model_id] = all_archived[:max_runs] if max_runs is not None else all_archived
+        state["models"][model_id] = {
+            "planned_runs": len(per_model[model_id]), "completed": [],
+        }
+        log.info("%s: %d archived run(s) to render", model_id, len(per_model[model_id]))
+
+    queue = _interleave_by_rank(per_model, models)
+    # seen must cover EVERY run already on disk per model, not just the
+    # (possibly --max-runs-sliced) subset queued: the recheck below compares
+    # against the full unsliced _archived_run_inits() result, so seeding this
+    # from the queue alone made every run excluded by --max-runs look "newly
+    # appeared" - turning a --max-runs 1 smoke test into a full backfill.
+    seen = {m: set(_archived_run_inits(m)) for m in models}
+
     while queue:
-        run_init = queue.pop(0)
+        model_id, run_init = queue.pop(0)
+        state["current_model"] = model_id
         state["current_run"] = _iso_z(run_init)
         _write_progress(state)
 
@@ -115,7 +140,7 @@ def _render_model(model_id: str, max_runs: int | None, state: dict) -> None:
             "%s %s: rendered %d step(s), %d with real data",
             model_id, run_init.isoformat(), n_steps, n_with_data,
         )
-        model_state["completed"].append({
+        state["models"][model_id]["completed"].append({
             "run_init": _iso_z(run_init),
             "steps": n_steps,
             "steps_with_data": n_with_data,
@@ -124,16 +149,26 @@ def _render_model(model_id: str, max_runs: int | None, state: dict) -> None:
         state["current_run"] = None
         _write_progress(state)
 
-        new_arrivals = [r for r in _archived_run_inits(model_id) if r not in seen]
-        if new_arrivals:
-            new_arrivals.sort(reverse=True)  # newest of the new arrivals first
+        # Check EVERY model for new arrivals, not just the one just rendered -
+        # the queue spans all models, so a run fetched for any of them should
+        # be picked up at the next opportunity.
+        new_pairs = []
+        for m in models:
+            fresh = [r for r in _archived_run_inits(m) if r not in seen[m]]
+            if fresh:
+                fresh.sort(reverse=True)
+                seen[m].update(fresh)
+                state["models"][m]["planned_runs"] += len(fresh)
+                new_pairs.extend((m, r) for r in fresh)
+        if new_pairs:
+            # Newest across models first, then straight to the front of the
+            # queue - ahead of the remaining (older) backlog.
+            new_pairs.sort(key=lambda pair: pair[1], reverse=True)
             log.info(
-                "%s: %d new run(s) appeared mid-backfill, prioritizing: %s",
-                model_id, len(new_arrivals), [r.isoformat() for r in new_arrivals],
+                "%d new run(s) appeared mid-backfill, prioritizing: %s",
+                len(new_pairs), [f"{m} {r.isoformat()}" for m, r in new_pairs],
             )
-            queue = new_arrivals + queue
-            seen.update(new_arrivals)
-            model_state["planned_runs"] += len(new_arrivals)
+            queue = new_pairs + queue
 
 
 def main() -> None:
@@ -156,8 +191,7 @@ def main() -> None:
     }
     _write_progress(state)
 
-    for model_id in models:
-        _render_model(model_id, args.max_runs, state)
+    _run_backfill(models, args.max_runs, state)
 
     state["current_model"] = None
     state["done"] = True

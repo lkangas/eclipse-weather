@@ -383,7 +383,7 @@ function stepValidTime(run, h) {
   return new Date(run.runInit.getTime() + h * 3600 * 1000);
 }
 
-const IMAGE_FIELDS = ["total", "low", "mid", "high"];
+const IMAGE_FIELDS = ["total", "hml_composite", "prob_hml_composite"];
 const preloadedRuns = new Set(); // run.runInit.getTime() values already preloaded
 
 function preloadRun(run, btnEl) {

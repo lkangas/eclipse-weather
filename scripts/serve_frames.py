@@ -29,7 +29,7 @@ _NO_CACHE_NAMES = {
     "manifest.json", "index.html",
     "tool2_manifest.json", "tool2_index.html",
     "tool3_manifest.json", "tool3_index.html",
-    "backfill_progress.json", "backfill_progress.html",
+    "backfill_progress.json", "backfill_progress.html", "rendered_index.json",
 }
 
 
