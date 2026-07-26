@@ -1246,13 +1246,13 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
       **Pass 2 (native cloud fraction ON pressure levels, no derivation
       needed) - real live-verified findings, better than pass 1 assumed:**
 
-      | Provider | Cloud fraction on pressure levels? | Field | Levels | Access path |
-      |---|---|---|---|---|
-      | GFS | **Yes** | `TCDC` | 21 (50-1000mb, every 50mb) | Already reachable - same S3/idx path as GFS's existing cloud-layer fetch |
-      | ARPEGE (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP3`, same no-auth OVH mirror as the already-known SP2 path |
-      | AROME (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP2`, same access/auth situation as SP2 |
-      | ECMWF open-data (hres/ens/aifs) | **No** | - | - | `pl` index lists `d,gh,q,r,t,u,v,vo,w,z` only; live `param="cc"` retrieve fails outright |
-      | ICON-EU / ICON Global | **No** | - | - | `clc/` exists but is model-level only, no pressure-level variant published |
+| Provider | Cloud fraction on pressure levels? | Field | Levels | Access path |
+|---|---|---|---|---|
+| GFS | **Yes** | `TCDC` | 21 (50-1000mb, every 50mb) | Already reachable - same S3/idx path as GFS's existing cloud-layer fetch |
+| ARPEGE (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP3`, same no-auth OVH mirror as the already-known SP2 path |
+| AROME (Météo-France) | **Yes** | `cc` (isobaricInhPa) | 24 (100-1000 hPa) | Package `IP2`, same access/auth situation as SP2 |
+| ECMWF open-data (hres/ens/aifs) | **No** | - | - | `pl` index lists `d,gh,q,r,t,u,v,vo,w,z` only; live `param="cc"` retrieve fails outright |
+| ICON-EU / ICON Global | **No** | - | - | `clc/` exists but is model-level only, no pressure-level variant published |
 
       Evidence: GFS confirmed via live `.idx` for 4 real cycles. AROME/ARPEGE
       `IP1`-`IP5` "isobaric package" dirs were undocumented before this pass -
