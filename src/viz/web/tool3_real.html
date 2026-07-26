@@ -23,7 +23,15 @@
   .controls {
     display: flex;
     align-items: center;
+    /* Wrap, unlike tool1_real.html's single-line bar: this row now carries the
+       quantity radios AND the target radios AND the view toggle, which is
+       wider than a 1280px viewport - without wrapping, #cursorReadout (pushed
+       right by its margin-left:auto) is simply clipped by body's
+       overflow:hidden. A wrapped second line just makes the fixed-height
+       controls block taller; #gallery/#mapArea absorb the difference. */
+    flex-wrap: wrap;
     gap: 18px;
+    row-gap: 4px; /* after the `gap` shorthand, which would otherwise reset it */
     margin-bottom: 4px;
     font-size: 11.5px;
     border-bottom: 1px solid #d8d4c8;

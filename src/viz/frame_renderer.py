@@ -555,10 +555,11 @@ def render_frame(
     start at +1h, not +0h, despite full_range_steps() assuming every model
     publishes a step-0 field - see TASKS.md T34 for the real case that
     surfaced this). Callers use has_data to decide whether a step is worth
-    listing at all, not just whether *a* PNG got written - render_frame
-    always writes ONE (a real map or a "(no data)" placeholder), but a
-    placeholder is only useful to show for a field genuinely absent from an
-    otherwise-real step, not for a step nothing was ever published for.
+    listing at all. NO file is written when there is no data: a placeholder
+    PNG would be indistinguishable from a real map to the manifest scripts,
+    which see only file existence now that they no longer read raw data, and
+    no tool ever displayed one anyway - all three gate on has_data and show
+    their own prose instead. So "a frame exists on disk" == "has real data".
 
     field in _COMPOSITE_SUBFIELDS (hml_composite/prob_hml_composite) is
     dispatched to _render_composite_frame instead - it needs three reads
@@ -589,28 +590,31 @@ def render_frame(
         # expensive matplotlib construction/savefig below.
         return output_path, result is not None
 
+    if result is None:
+        # No file at all when there's no data - see the module note on why
+        # "a frame exists on disk" is the has_data signal now. A placeholder
+        # PNG here would be indistinguishable from a real map to the
+        # manifest scripts, which only see file existence (they no longer
+        # read raw data), and no tool ever displayed it anyway: all three
+        # gate on has_data and render their own prose instead.
+        return output_path, False
+
+    lats, lons, values = result
     fig_width, fig_height, axes_top = _figure_layout(bbox)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
-    if result is None:
-        ax.text(
-            0.5, 0.5, f"{model_name}\n(no data)",
-            ha="center", va="center", color="red", transform=ax.transAxes,
-        )
-    else:
-        lats, lons, values = result
-        norm = mcolors.PowerNorm(gamma=_gamma_for_field(field), vmin=0, vmax=100)
-        ax.pcolormesh(
-            lons, lats, values, cmap="Blues", norm=norm,
-            shading="auto", rasterized=True,
-        )
-        # Coastline/roads/eclipse-path drawn stroke-only, on top of the
-        # cloud fill - see basemap.py's docstring for why (no fill: the
-        # pcolormesh above already covers the whole bbox, land included).
-        draw_basemap(ax, bbox)
-        ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "r-", linewidth=0.8, alpha=0.6, zorder=7)
-        ax.plot(
-            _TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "r--", linewidth=1, alpha=0.8, zorder=7
-        )
+    norm = mcolors.PowerNorm(gamma=_gamma_for_field(field), vmin=0, vmax=100)
+    ax.pcolormesh(
+        lons, lats, values, cmap="Blues", norm=norm,
+        shading="auto", rasterized=True,
+    )
+    # Coastline/roads/eclipse-path drawn stroke-only, on top of the
+    # cloud fill - see basemap.py's docstring for why (no fill: the
+    # pcolormesh above already covers the whole bbox, land included).
+    draw_basemap(ax, bbox)
+    ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "r-", linewidth=0.8, alpha=0.6, zorder=7)
+    ax.plot(
+        _TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "r--", linewidth=1, alpha=0.8, zorder=7
+    )
 
     ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
     ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
@@ -662,50 +666,50 @@ def _render_composite_frame(
     if output_path.exists():
         return output_path, has_data
 
+    if not has_data:
+        # No file at all - same reasoning as render_frame()'s own early
+        # return: a placeholder is indistinguishable from a real map to a
+        # manifest script that only sees file existence.
+        return output_path, False
+
     gamma = _gamma_for_field(field)
     fig_width, fig_height, axes_top = _figure_layout(bbox)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
 
-    if not has_data:
-        ax.text(
-            0.5, 0.5, f"{model_name}\n(no data)",
-            ha="center", va="center", color="red", transform=ax.transAxes,
-        )
-    else:
-        lats, lons, hval = high_result
-        _, _, mval = mid_result
-        _, _, lval = low_result
+    lats, lons, hval = high_result
+    _, _, mval = mid_result
+    _, _, lval = low_result
 
-        r_alpha = np.clip(hval / 100, 0, 1) ** gamma
-        g_alpha = np.clip(mval / 100, 0, 1) ** gamma
-        b_alpha = np.clip(lval / 100, 0, 1) ** gamma
+    r_alpha = np.clip(hval / 100, 0, 1) ** gamma
+    g_alpha = np.clip(mval / 100, 0, 1) ** gamma
+    b_alpha = np.clip(lval / 100, 0, 1) ** gamma
 
-        canvas = np.ones(r_alpha.shape + (3,))
-        for alpha, color in (
-            (r_alpha, np.array([1.0, 0.0, 0.0])),   # high -> red
-            (g_alpha, np.array([0.0, 0.65, 0.0])),  # mid  -> green
-            (b_alpha, np.array([0.0, 0.3, 1.0])),   # low  -> blue
-        ):
-            canvas = canvas * (1 - alpha[..., None]) + color * alpha[..., None]
+    canvas = np.ones(r_alpha.shape + (3,))
+    for alpha, color in (
+        (r_alpha, np.array([1.0, 0.0, 0.0])),   # high -> red
+        (g_alpha, np.array([0.0, 0.65, 0.0])),  # mid  -> green
+        (b_alpha, np.array([0.0, 0.3, 1.0])),   # low  -> blue
+    ):
+        canvas = canvas * (1 - alpha[..., None]) + color * alpha[..., None]
 
-        # imshow needs ascending lat order with origin="lower" to place
-        # north at the top - flip if the source grid is north-to-south.
-        if lats[0] > lats[-1]:
-            lats = lats[::-1]
-            canvas = canvas[::-1, :, :]
+    # imshow needs ascending lat order with origin="lower" to place
+    # north at the top - flip if the source grid is north-to-south.
+    if lats[0] > lats[-1]:
+        lats = lats[::-1]
+        canvas = canvas[::-1, :, :]
 
-        ax.imshow(
-            canvas,
-            extent=(bbox["lon_min"], bbox["lon_max"], bbox["lat_min"], bbox["lat_max"]),
-            origin="lower",
-            aspect="auto",
-            interpolation="nearest",
-        )
-        draw_basemap(ax, bbox)
-        ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "k-", linewidth=0.8, alpha=0.5, zorder=7)
-        ax.plot(
-            _TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "k--", linewidth=1, alpha=0.7, zorder=7
-        )
+    ax.imshow(
+        canvas,
+        extent=(bbox["lon_min"], bbox["lon_max"], bbox["lat_min"], bbox["lat_max"]),
+        origin="lower",
+        aspect="auto",
+        interpolation="nearest",
+    )
+    draw_basemap(ax, bbox)
+    ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "k-", linewidth=0.8, alpha=0.5, zorder=7)
+    ax.plot(
+        _TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "k--", linewidth=1, alpha=0.7, zorder=7
+    )
 
     ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
     ax.set_ylim(bbox["lat_min"], bbox["lat_max"])

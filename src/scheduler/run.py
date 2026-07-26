@@ -9,7 +9,13 @@ from src.config import load_models
 from src.extract import registry as extract_registry
 from src.extract.base import already_extracted, append_points, mark_extracted
 from src.fetchers import registry as fetch_registry
-from src.fetchers.base import already_fetched, cycle_run_inits, due_time
+from src.fetchers.base import (
+    already_fetched,
+    cycle_run_inits,
+    due_time,
+    record_fetch_attempt,
+    should_attempt_fetch,
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("scheduler")
@@ -38,15 +44,30 @@ def run_once() -> None:
             continue  # aggregator/reference entries (open_meteo, climatology): no direct fetch
         for run_init in cycle_run_inits(model_config["cycles"], now):
             already_have_files = already_fetched(model_name, run_init)
-            if not already_have_files:
+            # Not just "have we fetched this run at all" - a run keeps gaining
+            # steps after its first fetch (see should_attempt_fetch's note on
+            # GEFS's extended range publishing ~25-27h after init), so it stays
+            # eligible for top-up passes until it ages out. Fetchers skip files
+            # they already hold, so a pass over a complete run is nearly free.
+            if should_attempt_fetch(model_name, run_init, now):
                 due = due_time(model_config.get("publication_lag_h", [0, 0]), run_init)
                 if now < due:
                     continue
                 try:
                     fetcher = fetch_registry.get_fetcher(model_config["fetch"])
+                    record_fetch_attempt(model_name, run_init, now)
                     result = fetcher(model_name, model_config, run_init)
-                    log.info("fetched %s %s: %s", model_name, run_init.isoformat(), result.status)
-                    already_have_files = bool(result.files_written)
+                    n_new = len(result.files_written)
+                    if already_have_files:
+                        log.info(
+                            "top-up %s %s: %s, %d file(s) present/written",
+                            model_name, run_init.isoformat(), result.status, n_new,
+                        )
+                    else:
+                        log.info(
+                            "fetched %s %s: %s", model_name, run_init.isoformat(), result.status,
+                        )
+                    already_have_files = already_have_files or bool(result.files_written)
                 except Exception as e:
                     log.error("fetch failed for %s %s: %s", model_name, run_init.isoformat(), e)
                     continue
