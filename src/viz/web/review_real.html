@@ -60,7 +60,7 @@
     position: sticky;
     left: 0;
   }
-  td.cell { background: var(--cell-bg); text-align: center; width: 220px; max-width: 220px; }
+  td.cell { background: var(--cell-bg); text-align: center; }
   td.empty { background: var(--empty-bg); color: var(--muted); font-size: 0.75rem; }
   td.cell img {
     width: 100%;
@@ -131,13 +131,17 @@ async function main() {
   // <col> - otherwise auto-layout dumps leftover width (table is 100% wide)
   // into whichever column it feels like, which is what caused the "Comb
   // Color" column to balloon to several times the others' width earlier.
+  // Percentages (not px) so the table always fits the viewport width
+  // exactly - no horizontal scroll on any screen size, images just shrink
+  // to fit via their own width:100%/height:auto.
   const colgroup = document.createElement("colgroup");
   const labelCol = document.createElement("col");
-  labelCol.style.width = "170px";
+  labelCol.style.width = "10%";
   colgroup.appendChild(labelCol);
+  const dataColPct = (90 / data.fields.length).toFixed(4) + "%";
   for (const field of data.fields) {
     const col = document.createElement("col");
-    col.style.width = "230px";
+    col.style.width = dataColPct;
     colgroup.appendChild(col);
   }
   table.appendChild(colgroup);
