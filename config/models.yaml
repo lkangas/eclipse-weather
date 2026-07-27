@@ -718,25 +718,30 @@ models:
                             finding). The altitude figures are height above the model's own internal orography
                             ('relief modele'), NOT above sea level or real terrain - a separate ALTITUDE
                             parameter is the real-terrain reference, don't conflate the two."}}
-    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, height: skin, units: K,
-                    status: confirmed, task: T37, corrected: T45,
-                    correction: "T45 (2026-07-27): this is SKIN (surface) temperature, NOT 2 m air
-                      temperature, and T37 recorded it as the latter. Proven against a real archived
-                      SP2 file: `t` EXCEEDS the same file's own `max_2t` (the 2 m maximum over a window
-                      containing the step) at 76.7% of gridpoints, mean excess +2.12 K, domain max
-                      64.3 C vs max_2t's 49.8 C - impossible for an instantaneous 2 m value bounded by
-                      its own windowed maximum. Full inventory of SP2 shows only t(surface), 2d(2m
-                      dewpoint) and the WINDOWED max_2t/min_2t: there is NO instantaneous 2 m
-                      temperature in SP2 at all. Skin temperature has ~2x the diurnal amplitude of 2 m
-                      air temperature, so plotting it on a shared 2 m colour scale with the other
-                      models would exaggerate this model's apparent eclipse cooling and mislead.
-                      height: skin is what excludes it from the temperature layer by config rather
-                      than by a model name in code. Real 2 m temperature requires package SP1, which
-                      is a genuinely new fetch (~600 MB/run for ARPEGE), not the free ride T37
-                      assumed.",
-                    note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
-                      (000H012H) with cfgrib.open_datasets() - zero new fetch needed, same SP2 package the cloud
-                      fields already come from. Rides along for free."}
+    surface_temp: {package: "SP1", param: 2t, cfgrib_var: t2m, level: heightAboveGround,
+                    height: 2m, units: K, step_type: instant, status: confirmed, task: T45,
+                    note: "T45 (2026-07-27) corrects T37, and corrects a first correction that
+                      overshot. T37 recorded SP2's `t` as 2 m air temperature; it is SKIN
+                      temperature - `t` exceeds that same file's own `max_2t` (the 2 m maximum
+                      over a window containing the step) at 76.7% of gridpoints, peaking 64.3 C
+                      against 49.8 C, impossible for an instantaneous 2 m value bounded by its
+                      own windowed maximum. The first correction then marked this height: skin,
+                      i.e. no 2 m temperature at all. Also wrong, and it should have been an
+                      obvious red flag: an NWP model that does not output 2 m temperature would
+                      be extraordinary. SP2 is the ADDITIONAL-parameters package (Parametres
+                      additionnels a la surface), fetched only because the low/mid/high cloud
+                      fields live there. The PRIMARY surface package SP1 carries `2t` at
+                      heightAboveGround level 2, stepType instant, 13 messages per group file -
+                      verified 2026-07-27 by a ranged read of the live bucket file, which also
+                      shows 2r, 10u/10v, prmsl and the real precipitation tp/cp/lsp/tirf. The gap
+                      was always which package this project downloads, never what the model
+                      produces. COST: SP1 is a new fetch, not the free ride T37 assumed - about
+                      72 MB per group file, ~620 MB per run for ARPEGE - but it is the SAME
+                      package this model's rain needs, so temperature and rain arrive together
+                      for one download. Until a fetcher pulls SP1, availability is gated by the
+                      reader registry in frame_renderer, not by this entry - same precedent as
+                      _PROB_CAPABLE_READERS: models.yaml describes the upstream product, the
+                      reader dict describes what this codebase can actually read."}
     rain: {package: "SP1", cfgrib_shortname: tirf,
            grib2: {discipline: 0, category: 1, parameterNumber: 65}, step_type: accum,
            accumulation: since_run_start, units: kg_m2,
@@ -830,25 +835,30 @@ models:
                             France's official glossary PDF gives ONE shared NEBBAS/NEBMOY/NEBHAU boundary set
                             for both models, no AROME-specific split published. Altitudes are height above
                             model terrain ('relief modele'), not sea level or real terrain."}}
-    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, height: skin, units: K,
-                    status: confirmed, task: T37, corrected: T45,
-                    correction: "T45 (2026-07-27): this is SKIN (surface) temperature, NOT 2 m air
-                      temperature, and T37 recorded it as the latter. Proven against a real archived
-                      SP2 file: `t` EXCEEDS the same file's own `max_2t` (the 2 m maximum over a window
-                      containing the step) at 76.7% of gridpoints, mean excess +2.12 K, domain max
-                      64.3 C vs max_2t's 49.8 C - impossible for an instantaneous 2 m value bounded by
-                      its own windowed maximum. Full inventory of SP2 shows only t(surface), 2d(2m
-                      dewpoint) and the WINDOWED max_2t/min_2t: there is NO instantaneous 2 m
-                      temperature in SP2 at all. Skin temperature has ~2x the diurnal amplitude of 2 m
-                      air temperature, so plotting it on a shared 2 m colour scale with the other
-                      models would exaggerate this model's apparent eclipse cooling and mislead.
-                      height: skin is what excludes it from the temperature layer by config rather
-                      than by a model name in code. Real 2 m temperature requires package SP1, which
-                      is a genuinely new fetch (~600 MB/run for ARPEGE), not the free ride T37
-                      assumed.",
-                    note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
-                      (00H06H) with cfgrib.open_datasets() - zero new fetch needed. Also present in the same file
-                      but not used here: d2m (2m dewpoint), mn2t/mx2t (windowed min/max 2m temp)."}
+    surface_temp: {package: "SP1", param: 2t, cfgrib_var: t2m, level: heightAboveGround,
+                    height: 2m, units: K, step_type: instant, status: confirmed, task: T45,
+                    note: "T45 (2026-07-27) corrects T37, and corrects a first correction that
+                      overshot. T37 recorded SP2's `t` as 2 m air temperature; it is SKIN
+                      temperature - `t` exceeds that same file's own `max_2t` (the 2 m maximum
+                      over a window containing the step) at 76.7% of gridpoints, peaking 64.3 C
+                      against 49.8 C, impossible for an instantaneous 2 m value bounded by its
+                      own windowed maximum. The first correction then marked this height: skin,
+                      i.e. no 2 m temperature at all. Also wrong, and it should have been an
+                      obvious red flag: an NWP model that does not output 2 m temperature would
+                      be extraordinary. SP2 is the ADDITIONAL-parameters package (Parametres
+                      additionnels a la surface), fetched only because the low/mid/high cloud
+                      fields live there. The PRIMARY surface package SP1 carries `2t` at
+                      heightAboveGround level 2, stepType instant, 13 messages per group file -
+                      verified 2026-07-27 by a ranged read of the live bucket file, which also
+                      shows 2r, 10u/10v, prmsl and the real precipitation tp/cp/lsp/tirf. The gap
+                      was always which package this project downloads, never what the model
+                      produces. COST: SP1 is a new fetch, not the free ride T37 assumed - about
+                      72 MB per group file, ~620 MB per run for ARPEGE - but it is the SAME
+                      package this model's rain needs, so temperature and rain arrive together
+                      for one download. Until a fetcher pulls SP1, availability is gated by the
+                      reader registry in frame_renderer, not by this entry - same precedent as
+                      _PROB_CAPABLE_READERS: models.yaml describes the upstream product, the
+                      reader dict describes what this codebase can actually read."}
     rain: {package: "SP2", cfgrib_shortname: tirf, level: surface, units: kg_m2, step_type: accum,
            status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed by inspecting the same already-downloaded group file - tirf
