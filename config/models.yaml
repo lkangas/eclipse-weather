@@ -46,6 +46,11 @@ models:
     cycles: {"00": 840, "06": 384, "12": 384, "18": 384}   # hours
     steps: [{to_h: 240, every_h: 3}, {to_h: 840, every_h: 6}]
     publication_lag_h: [4, 6]
+    # The 385-840h block lands 25-27h after init, long after the lag above,
+    # which only covers the first 384h. Anything judging completeness needs
+    # this or a 20h-old run looks like work outstanding when every published
+    # step is already rendered. Verified 2026-07-27 against live idx files.
+    full_range_published_by_h: 27
     first_covering: "2026-07-09T00Z"   # ALREADY LIVE (extended run)
     status: confirmed   # T03
     cloud:
@@ -109,13 +114,21 @@ models:
                    real upper pressure bound). km figures are our own ICAO-standard-atmosphere conversion -
                    NCEP's own docs/code only state pressure, never altitude. Classifies by cloud-BASE pressure
                    (PCLDBASE), not cloud top."}
-    rain: {params: [APCP, PRATE], level: surface, status: confirmed, task: T37,
-           note: "T37 (2026-07-23): confirmed live via herbie inventory at f006 - THREE real messages:
-             ':PRATE:surface:6 hour fcst:' (instantaneous rate), ':PRATE:surface:0-6 hour ave fcst:' (windowed
-             average rate), ':APCP:surface:0-6 hour acc fcst:' (accumulated total, published TWICE - same
-             duplicate-message pattern the existing TCDC fetch already has to filter, see herbie_fetcher.py's
-             'N hour fcst' vs 'ave' regex discipline). APCP (accumulated) is the natural default; PRATE available
-             if an instantaneous-rate view is ever wanted."}
+    rain: {param: PRATE, level: surface, step_type: instant, rate: true,
+           search: ':PRATE:surface:(?:\d+ hour fcst|anl):', units: "kg m**-2 s**-1", to_mm_h: 3600,
+           status: confirmed, task: T37,
+           note: "VERIFIED 2026-07-27 by decoding real messages; supersedes T37's note, which was wrong.
+             Rain is rendered from the INSTANTANEOUS rate PRATE, never from APCP - see rain_rate_available
+             on every other model. Three traps, all confirmed live. (1) PRATE is published TWICE per step,
+             instantaneous and interval-average, sharing shortName, level, units AND paramId (0,1,7); only
+             stepType separates them, and cfgrib currently picks the instantaneous one BY LUCK (byte order,
+             msg 593 vs 595 at f006), so the search regex here is load-bearing. (2) At step 0 the message is
+             labelled 'anl', not '0 hour fcst' - the identical bug that made f000 cloud fail on every run
+             until 2026-07-27. This regex returns exactly one hit at f000/001/003/006/012/119/120/123/240/384;
+             the same pattern without the 'anl' alternative returns ZERO at f000. (3) T37 claimed the two APCP messages were
+             the same instant-vs-ave pattern as TCDC. They are not: they are a 6-hourly BUCKET and a
+             SINCE-RUN-START accumulation (f009: 6-9 vs 0-9), byte-identical at f<=6, and past f006 they switch
+             to DAY units (0-1 day, 0-5 day, 0-16 day), so no '0-N hour' selector can address them."}
     surface_temp: {param: TMP, level: "2 m above ground", height: 2m, step_type: instant,
                     status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed live - ':TMP:2 m above ground:6 hour fcst:'. Clean single

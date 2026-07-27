@@ -94,6 +94,11 @@
      this box has ever processed the run. */
   .st-seeded    { background:transparent; border-color:#7fae8c !important;
                   color:var(--dim); --sc:#7fae8c; }
+  /* Blue, not amber: this is NOT work outstanding. Every step the model has
+     published is rendered; the run is short only because upstream has not
+     released the rest yet, and it completes itself. Distinct from `fetched`,
+     which does mean we still owe rendering. */
+  .st-partial-upstream { background:#bcd3e2; color:#12303f; --sc:#7fa8c9; }
   .st-gone      { background:#b06a5f; color:#fff;         --sc:#b06a5f; }
   /* Unfetchable, not actionable - muted so it cannot be mistaken for overdue. */
   .st-missed    { background:#e0d8cc; color:var(--faint); text-decoration:line-through;
@@ -166,6 +171,7 @@
     <span class="key st-available"></span>available
     <span class="key st-fetching"></span>fetching
     <span class="key st-fetched"></span>fetched
+    <span class="key st-partial-upstream"></span>awaiting upstream
     <span class="key st-rendering"></span>rendering
     <span class="key st-ready"></span>ready
     <span class="key st-done"></span>done
@@ -245,7 +251,7 @@ function render(status, activity, cov, hist, fails, events) {
     (status ? ` · last completed pass ${ago(status.finished_at || status.started_at)}` : "");
 
   verdict(status, activity, cov);
-  live(activity);
+  live(activity, cov);
   // Everything below is derived from COMPLETED passes. A first pass takes
   // hours, so rendering empty boxes labelled "needs 2+ passes" for that whole
   // time is just noise obscuring the panels that do have data. Hide until real.
@@ -277,6 +283,7 @@ function verdict(status, activity, cov) {
   const overdue = all.filter(r => r.state === "overdue");
   const gone    = all.filter(r => r.state === "gone");
   const stuck   = all.filter(r => r.state === "fetched" && r.age_h > 6);
+  const upstream = all.filter(r => r.state === "partial-upstream").length;
 
   if (!cov && !activity) {
     el.className = "verdict bad";
@@ -309,7 +316,8 @@ function verdict(status, activity, cov) {
   if (stuck.length) {
     el.className = "verdict warn";
     el.innerHTML = `${stuck.length} RUN(S) FETCHED BUT NOT RENDERED <span class='why'>` +
-      `${stuck.slice(0,4).map(r=>r.model+" "+r.hour).join(", ")}. Raw is on disk and cannot be reclaimed until rendered.</span>`;
+      `${stuck.slice(0,4).map(r=>r.model+" "+r.hour).join(", ")}. Raw is on disk and cannot be reclaimed until rendered. ` +
+      `(A run whose model has not published its full range yet reads as "awaiting upstream", not this.)</span>`;
     return;
   }
   const done = all.filter(r => r.state === "done").length;
@@ -317,15 +325,34 @@ function verdict(status, activity, cov) {
   const seeded = all.filter(r => r.state === "seeded").length;
   el.className = "verdict ok";
   el.innerHTML = `KEEPING UP <span class='why'>Every published run is fetched and rendered` +
+    (upstream ? `, ${upstream} still filling as upstream publishes` : "") +
     ` — ${done} reclaimed, ${ready} awaiting reclaim, ${seeded} seeded` +
     (free != null ? `, ${free.toFixed(1)} GB free` : "") + `.</span>`;
 }
 
-function live(a) {
+function live(a, cov) {
   const el = $("live");
   if (!a) { el.innerHTML = '<span class="dot idle"></span><span class="muted">no activity published yet</span>'; return; }
   const age = secsSince(a.updated_at);
   const stale = age > 900;
+
+  // "SLEEPING" on its own invites the question it should be answering. Say
+  // what it is waiting FOR, from the lifecycle: work outstanding, runs the
+  // model has not finished publishing, or genuinely nothing.
+  if (a.phase === "sleeping") {
+    const all = cov ? Object.values(cov.models).flat() : [];
+    const owed = all.filter(r => ["available", "overdue", "fetched"].includes(r.state)).length;
+    const upstream = all.filter(r => r.state === "partial-upstream").length;
+    const why = owed
+      ? `${owed} run(s) due — next pass shortly`
+      : upstream
+        ? `nothing to fetch. ${upstream} run(s) still filling as their model publishes the rest`
+        : "nothing due — every published run is fetched and rendered";
+    el.innerHTML = `<span class="dot idle"></span><span class="phase">idle</span> ` +
+      `<span class="muted">${why} · checked ${ago(a.updated_at)}</span>`;
+    return;
+  }
+
   let what = `<span class="phase">${a.phase}</span>`;
   if (a.model) what += ` ${a.model}`;
   if (a.run_init) what += ` <span class="muted">${String(a.run_init).slice(0,13)}Z</span>`;

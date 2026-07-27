@@ -61,6 +61,19 @@ def _latest_only(cfg: dict) -> bool:
                 .get("serves_latest_run_only"))
 
 
+def _publish_complete_h(cfg: dict) -> float:
+    """Hours after init by which this model has published its whole range.
+
+    Read from models.yaml rather than guessed: publication_lag_h's upper bound
+    covers the ordinary case, and a model that releases part of its range much
+    later declares that separately - gefs_extended's extended 385-840h block
+    lands 25-27h after init, long after the lag that covers its first 384h.
+    """
+    lag = cfg.get("publication_lag_h") or [0, 0]
+    base = float(lag[1] if len(lag) > 1 else lag[0])
+    return float(cfg.get("full_range_published_by_h", base))
+
+
 def _raw_state(model_id: str, run_init: datetime) -> tuple[int, bool]:
     """(count of real raw files, tombstoned?) for this run.
 
@@ -100,6 +113,10 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
       missed    - past, and unfetchable: the source serves only its current
                   run, so this cycle can never be retrieved. Not actionable.
       fetched   - raw on disk, not yet rendered (or only partly)
+      partial-upstream
+                - every step the model has PUBLISHED is rendered, but the run
+                  is not complete because the rest does not exist yet. Nothing
+                  to do; it completes itself when upstream catches up.
       ready     - every supported field rendered, raw still on disk to reclaim
       done      - fetched, rendered and reclaimed by THIS box. Terminal.
       seeded    - frames present but raw never was: migrated in from the
@@ -142,6 +159,16 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
                 renderable and n_fields and len(per_field) == n_fields
                 and min(per_field.values()) >= expected * COMPLETE_FRACTION
             )
+            # Incomplete for a reason that is not ours: the model has not
+            # published the rest yet. gefs_extended is the case that keeps
+            # surfacing - NOAA releases its 385-840h range 25-27h after init,
+            # so a 20h-old run legitimately sits at 104/121 with every
+            # PUBLISHED step already rendered, and reporting that as "fetched"
+            # reads as work outstanding when there is nothing to fetch.
+            waiting_upstream = (
+                renderable and not complete and per_field
+                and (now - run_init).total_seconds() / 3600 < _publish_complete_h(cfg)
+            )
 
             if now < due:
                 state = "future"
@@ -169,6 +196,8 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
                     state = "ready"        # rendered here, awaiting first reclaim
                 else:
                     state = "seeded"       # frames arrived from elsewhere
+            elif waiting_upstream:
+                state = "partial-upstream"
             elif raw_n:
                 state = "fetched"
             elif tombstoned:
