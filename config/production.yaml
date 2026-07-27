@@ -87,7 +87,16 @@ chunking:
   # fetched is recoverable, a run never fetched is not, and the sources with
   # the shortest retention (DWD ~24h, AEMET latest-only) are the ones sitting
   # furthest down the list.
-  max_chunks_per_pass: 4
+  # Was 4 for a few hours on 2026-07-27 to stop gefs_extended and gfs starving
+  # the other thirteen models. Reverted to null the same day: that starvation
+  # was caused by the f000 retry storm and by processing each model's OLDEST
+  # runs first, both since fixed, and the cap then became the bottleneck it was
+  # meant to relieve. record_fetch_attempt() stamps a run on every visit and
+  # FETCH_RETRY_INTERVAL_H blocks re-fetching it for an hour, so capping a run
+  # at 4 windows meant a 17-chunk run needed 4-5 HOURS to fill, one hour per
+  # four windows, while the pass itself reported nothing to do and slept.
+  # Uncapped, a run completes in the pass that starts it.
+  max_chunks_per_pass: null
 
 # Models production skips entirely.
 #
