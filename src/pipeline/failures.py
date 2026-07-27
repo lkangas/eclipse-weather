@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 LEDGER_FILENAME = "fetch_failures.jsonl"
@@ -72,9 +72,24 @@ def parse_step_failures(error: str | None) -> dict[int, list[str]]:
     return out
 
 
-def record(model_id: str, run_init: datetime, error: str | None, now: datetime) -> None:
+def record(model_id: str, run_init: datetime, error: str | None,
+           now: datetime | None = None) -> None:
     """Note this pass's per-step failures against the run, and append the new
-    ones to the ledger the dashboard reads."""
+    ones to the ledger the dashboard reads.
+
+    `now` defaults to the moment of the call, and callers should leave it that
+    way: these are EVENT timestamps. The pass-level `now` that
+    orchestrator.run_once() stamps once at the top of a pass used to be
+    threaded in here, so every failure of a pass carried the same timestamp to
+    the microsecond - and a pass that fetches and renders a dozen models runs
+    for tens of minutes, so the dashboard's failure table read as one
+    instantaneous burst and every entry was already stamped as however long the
+    pass had been running when it happened. That same skew went into
+    DEAD_RETRY_AFTER_H's 24h clock below, always in the direction of calling a
+    dead step retryable early. The parameter survives only so tests can pin the
+    clock.
+    """
+    now = now or datetime.now(UTC)
     failures = parse_step_failures(error)
     if not failures:
         return

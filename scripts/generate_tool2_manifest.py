@@ -133,7 +133,7 @@ def _step_entries(model_id: str, run_init: datetime, by_step: dict[int, dict[str
     architecture is built to be able to delete).
 
     Why it's the right call anyway:
-      - The browser (tool2_real.html) only ever uses the flag as
+      - The browser (compare_runs.html) only ever uses the flag as
         `has_data[field] !== false` to decide whether to show images[field]
         at all; a missing field key and has_data:false take the identical
         "not available" code path, so file-existence is exactly the question
@@ -141,7 +141,7 @@ def _step_entries(model_id: str, run_init: datetime, by_step: dict[int, dict[str
       - supported_fields() above already excludes every PERMANENT per-model
         field gap (arome_france/arpege_europe total, ecmwf_ens hml_composite,
         prob_hml_composite for everything but aifs_ens) - i.e. the cases that
-        matter, the ones tool2_real.html's KNOWN_FIELD_GAPS explains in prose.
+        matter, the ones compare_runs.html's KNOWN_FIELD_GAPS explains in prose.
       - The renderer is intended (agreed, not yet implemented) to stop writing
         a placeholder PNG at all when there's no real data, at which point
         "file exists" == "has real data" exactly.
@@ -175,7 +175,7 @@ def main() -> None:
     manifest_models = []
     for model_id, label in MODELS:
         index = _rendered_frames(model_id)
-        # Ascending (oldest-first) - the order tool2_real.html's own row
+        # Ascending (oldest-first) - the order compare_runs.html's own row
         # building depends on.
         run_inits = sorted(index)
         if MAX_RUNS_PER_MODEL is not None:
@@ -184,7 +184,7 @@ def main() -> None:
         if not run_inits:
             # Skipped rather than emitted with an empty runs list - a model
             # with nothing rendered is only a dead "(0 runs archived)" entry
-            # in tool2_real.html's model picker.
+            # in compare_runs.html's model picker.
             log.info("%s: no rendered frames on disk, skipping", model_id)
             continue
 
@@ -209,7 +209,7 @@ def main() -> None:
     # overwrite a complete one.
     # eclipse_t() (ECLIPSE_T env var, src/fetchers/base.py) rather than a
     # literal - CLAUDE.md's "never hardcode T" rule applies to the UI too, and
-    # the browser has no other way to learn it. Consumed by tool2_real.html to
+    # the browser has no other way to learn it. Consumed by compare_runs.html to
     # place its eclipse marker on the time axis; that marker is simply not
     # drawn if this key is absent (an older manifest).
     manifest = {

@@ -27,8 +27,8 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 _NO_CACHE_NAMES = {
     "manifest.json", "index.html",
-    "tool2_manifest.json", "tool2_index.html",
-    "tool3_manifest.json", "tool3_index.html",
+    "tool2_manifest.json", "compare-runs.html",
+    "tool3_manifest.json", "at-eclipse.html",
     "backfill_progress.json", "backfill_progress.html", "rendered_index.json",
     "render_status.html", "rendered_history.jsonl",
     # Production pipeline dashboard - all of these are rewritten in place every

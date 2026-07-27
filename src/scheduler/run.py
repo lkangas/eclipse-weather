@@ -532,6 +532,14 @@ def run_once() -> None:
             continue  # aggregator/reference entries (open_meteo, climatology): no direct fetch
         for run_init in cycle_run_inits(model_config["cycles"], now):
             already_have_files = already_fetched(model_name, run_init)
+            # The init the data actually landed under, which is not always the
+            # one asked for: aemet_harmonie's endpoint serves whichever run is
+            # current no matter what the caller requests, and its fetcher files
+            # the bundle under the init the bundle itself declares, returning
+            # that init in FetchResult.run_init (see aemet_geotiff_fetcher's
+            # docstring, consequence 1). Every other fetcher returns the
+            # requested init unchanged, so this is a no-op for them.
+            fetched_init = run_init
             # Not just "have we fetched this run at all" - a run keeps gaining
             # steps after its first fetch (see should_attempt_fetch's note on
             # GEFS's extended range publishing ~25-27h after init), so it stays
@@ -543,8 +551,19 @@ def run_once() -> None:
                     continue
                 try:
                     fetcher = fetch_registry.get_fetcher(model_config["fetch"])
+                    # Stamped against the REQUESTED run: this marker is the
+                    # per-run fetch throttle, and what was throttled is the
+                    # request, whatever run came back.
                     record_fetch_attempt(model_name, run_init, now)
                     result = fetcher(model_name, model_config, run_init)
+                    if result.run_init is not None and result.run_init != run_init:
+                        log.info(
+                            "%s: asked for %s but the fetcher delivered the %s run - "
+                            "extraction follows the data",
+                            model_name, run_init.isoformat(), result.run_init.isoformat(),
+                        )
+                        fetched_init = result.run_init
+                        already_have_files = already_fetched(model_name, fetched_init)
                     n_new = len(result.files_written)
                     if already_have_files:
                         log.info(
@@ -564,21 +583,31 @@ def run_once() -> None:
             # both a fresh fetch just above AND a run fetched on an earlier tick
             # whose extraction failed or was never attempted (e.g. this module
             # was added after the fetch already happened).
-            if not already_have_files or already_extracted(model_name, run_init):
+            if already_extracted(model_name, fetched_init):
+                continue
+            # raw_data_files(), not already_fetched(): the latter counts this
+            # module's own dot-markers, so a run whose directory holds nothing
+            # but a .last_fetch_attempt looked "fetched", extracted to 0 rows,
+            # and got mark_extracted()ed - which then bars it from extraction
+            # FOREVER, including once its data finally lands (upstream running
+            # late, a transient 404, aemet's endpoint still serving the previous
+            # bundle). Marking a run extracted is irreversible, so it must only
+            # ever happen to a run that actually had data to extract.
+            if not raw_data_files(model_name, fetched_init):
                 continue
             try:
                 extractor = extract_registry.get_extractor(model_config["fetch"])
-                rows = extractor(model_name, model_config, run_init)
+                rows = extractor(model_name, model_config, fetched_init)
                 append_points(rows)
-                mark_extracted(model_name, run_init)
+                mark_extracted(model_name, fetched_init)
                 log.info(
                     "extracted %s %s: %d points.parquet rows",
                     model_name,
-                    run_init.isoformat(),
+                    fetched_init.isoformat(),
                     len(rows),
                 )
             except Exception as e:
-                log.error("extract failed for %s %s: %s", model_name, run_init.isoformat(), e)
+                log.error("extract failed for %s %s: %s", model_name, fetched_init.isoformat(), e)
     ping_healthcheck()
 
 

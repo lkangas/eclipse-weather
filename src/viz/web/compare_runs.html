@@ -31,7 +31,7 @@
     flex-direction: column;
     overflow: hidden; /* #mapArea below is the one flexible element that
       absorbs whatever room is left after controls+slider+legend - see its
-      own comment. Same layout approach as tool1_real.html. */
+      own comment. Same layout approach as newest_runs.html. */
   }
   .controls {
     display: flex;
@@ -57,7 +57,7 @@
     letter-spacing: 0.05em;
     font-size: 9.5px;
   }
-  /* Quantity control - byte-for-byte the same look as tool1_real.html's, so
+  /* Quantity control - byte-for-byte the same look as newest_runs.html's, so
      the three tools read as one product. Three mutually-exclusive radios plus
      an INDEPENDENT rain checkbox (rain is an overlay, not a quantity). */
   .quantityGroup {
@@ -279,7 +279,7 @@
     background: #fff;
     flex: 1;    /* absorbs whatever vertical room is left below the
       fixed-size controls/slider/legend above - same layout approach as
-      tool1_real.html. */
+      newest_runs.html. */
     min-height: 80px; /* just enough for the placeholder/error text to stay
       legible on a very cramped viewport - not a target size. */
     display: flex;
@@ -321,8 +321,9 @@
 
 <div class="toolbar">
   <a href="index.html">Newest runs</a>
-  <a href="tool2_index.html" class="here">Compare runs</a>
-  <a href="tool3_index.html">At eclipse</a>
+  <a href="compare-runs.html" class="here">Compare runs</a>
+  <a href="at-eclipse.html">At eclipse</a>
+  <a href="pipeline.html">Pipeline</a>
 </div>
 
 <div class="controls">
@@ -400,7 +401,7 @@ function axisEndFloor() {
 }
 
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
-// documented in tool1_real.html/tool3_real.html.
+// documented in newest_runs.html/at_eclipse.html.
 // Cloud probability (per-pixel, not the pooled point metric T32 uses for
 // site ranking) is a per-grid-cell ensemble spread metric - only meaningful
 // for a model with genuine multi-member native low/mid/high data. Right now
@@ -447,7 +448,7 @@ let AXIS_START = NOW, AXIS_END = NOW; // full span for the current model
 let axisRightMs = 0;       // current right edge, narrowed by the extent slider
 
 // Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent rain
-// overlay checkbox - identical control to tool1_real.html's. NOT a field name:
+// overlay checkbox - identical control to newest_runs.html's. NOT a field name:
 // which field backs cloudCover differs per model (see resolveField). Temp and
 // the rain overlay are both placeholders (no real data path yet).
 let quantityMode = "cloudCover";
@@ -527,7 +528,7 @@ function fieldHasData(images, hasData, f) {
 // native low/mid/high to build a composite from (ecmwf_hres/ecmwf_ens). Cloud
 // prob has no fallback: prob_total is deliberately never rendered, and only
 // aifs_ens has prob data at all (see PROB_ONLY_MODEL/applyQuantityMode).
-// Same resolution as tool1_real.html's resolveField().
+// Same resolution as newest_runs.html's resolveField().
 function resolveField(images, hasData, mode) {
   if (mode === "cloudCover") {
     if (fieldHasData(images, hasData, "hml_composite")) return "hml_composite";

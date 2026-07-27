@@ -31,13 +31,13 @@
     flex-direction: column;
     overflow: hidden; /* #mapArea / #gallery below are the flexible elements
       that absorb whatever room is left after controls+slider+legend - see
-      their own comments. Same layout approach as tool1_real.html /
-      tool2_real.html. */
+      their own comments. Same layout approach as newest_runs.html /
+      compare_runs.html. */
   }
   .controls {
     display: flex;
     align-items: center;
-    /* Wrap, unlike tool1_real.html's single-line bar: this row now carries the
+    /* Wrap, unlike newest_runs.html's single-line bar: this row now carries the
        quantity radios AND the target radios AND the view toggle, which is
        wider than a 1280px viewport - without wrapping, #cursorReadout (pushed
        right by its margin-left:auto) is simply clipped by body's
@@ -68,7 +68,7 @@
     font-family: inherit;
     font-size: 11.5px;
   }
-  /* tool1_real.html's .quantityGroup look, shared with Tool 3's own target
+  /* newest_runs.html's .quantityGroup look, shared with Tool 3's own target
      switch - both are the same kind of "pick one of N modes" control, so they
      share one rule set rather than inventing a second control style. */
   .quantityGroup, .targetGroup { display: flex; align-items: center; gap: 10px; }
@@ -97,7 +97,7 @@
   .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
   .placeholderNote { font-size: 9.5px; color: #a8a498; font-style: italic; }
   /* Cloud prob. mode: rows here ARE models, and only one model has prob data,
-     so every other row is greyed and unclickable - exactly tool1_real.html's
+     so every other row is greyed and unclickable - exactly newest_runs.html's
      .row.disabled. pointer-events:none also lets a drag started over a greyed
      row fall through to #stackWrap, so time-scrubbing still works there. */
   .row.disabled { pointer-events: none; opacity: 0.35; }
@@ -217,7 +217,7 @@
     margin-top: 2px; border: 1px solid #232320; background: #fff;
     flex: 1;    /* absorbs whatever vertical room is left below the
       fixed-size controls/slider/legend above - same layout approach as
-      tool1_real.html / tool2_real.html. */
+      newest_runs.html / compare_runs.html. */
     min-height: 80px; /* just enough for the placeholder/error text to stay
       legible on a very cramped viewport - not a target size. */
     display: flex; align-items: center; justify-content: center;
@@ -300,8 +300,9 @@
 
 <div class="toolbar">
   <a href="index.html">Newest runs</a>
-  <a href="tool2_index.html">Compare runs</a>
-  <a href="tool3_index.html" class="here">At eclipse</a>
+  <a href="compare-runs.html">Compare runs</a>
+  <a href="at-eclipse.html" class="here">At eclipse</a>
+  <a href="pipeline.html">Pipeline</a>
 </div>
 
 <div class="controls">
@@ -371,7 +372,7 @@ let TARGET_VALID_TIME = new Date(); // == currentTargetInfo().validTime, kept in
 let MODELS = []; // [{id, label, runs: [{runInit, byTarget: {key: {covers, step, ...}}}]}]
 
 // Known, permanent (not-a-bug) field gap - same fact already documented in
-// tool1_real.html/tool2_real.html.
+// newest_runs.html/compare_runs.html.
 // Cloud probability (per-pixel, not the pooled point metric T32 uses for
 // site ranking) is a per-grid-cell ensemble spread metric - only meaningful
 // for a model with genuine multi-member native low/mid/high data. Right now
@@ -453,7 +454,7 @@ function fieldHasData(images, hasData, f) {
 // NOT a user-selectable quantity - it's the FALLBACK for the models with no
 // native low/mid/high to build a composite from (ecmwf_hres/ecmwf_ens). Cloud
 // prob has no fallback: prob_total is deliberately never rendered, and only
-// aifs_ens has prob data at all. Same resolution as tool1_real.html's
+// aifs_ens has prob data at all. Same resolution as newest_runs.html's
 // resolveField(); the images/hasData it works on always come from
 // targetData(run), so it composes with the target toggle for free.
 function resolveField(images, hasData, mode) {
@@ -485,13 +486,13 @@ let clickedRowIdx = null;
 let viewMode = "gallery"; // "gallery" | "single"
 
 // Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent rain
-// overlay checkbox - identical control to tool1_real.html's. NOT a field name:
+// overlay checkbox - identical control to newest_runs.html's. NOT a field name:
 // which field backs cloudCover differs per model (see resolveField). Temp and
 // the rain overlay are both placeholders (no real data path yet).
 let quantityMode = "cloudCover";
 let rainOn = false;
 // Rows here ARE models (the horizontal axis is run-init time), so Cloud prob
-// locks the selection the same way tool1_real.html does: grey every row but
+// locks the selection the same way newest_runs.html does: grey every row but
 // the prob-capable one and force-select it. This remembers which row was
 // clicked before, so leaving Cloud prob restores it instead of stranding you
 // on AIFS ENS.

@@ -161,7 +161,7 @@ def main() -> None:
             # id is the ROW KEY (unique per manifest entry); model_id is the
             # real model. They differ only for the long-range companion entry
             # below, where one model contributes two rows - consumers keying
-            # per-model behaviour (tool1_real.html's ensemble-only cloud
+            # per-model behaviour (newest_runs.html's ensemble-only cloud
             # probability lock) must use model_id, not id.
             "id": model_id,
             "model_id": model_id,
@@ -193,7 +193,7 @@ def main() -> None:
         "generated_at": _iso_z(datetime.now(UTC)),
         # eclipse_t() (ECLIPSE_T env var) rather than a literal - CLAUDE.md's
         # "never hardcode T" rule applies to the UI too, and the browser has
-        # no other way to learn it. tool1_real.html places its eclipse marker
+        # no other way to learn it. newest_runs.html places its eclipse marker
         # and its axis floor from this; both are simply absent without it.
         "eclipse_t": _iso_z(eclipse_t()),
         "models": manifest_models,

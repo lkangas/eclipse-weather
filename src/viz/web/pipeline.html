@@ -10,6 +10,15 @@
   :root { --ink:#232320; --dim:#7a776c; --faint:#a8a498; --rule:#d8d4c8;
           --done:#2f6f3f; --pend:#c9c4b4; --warn:#8b3a2f; --accent:#8a5a20;
           --panel:#fffdf8; }
+  /* Same ribbon as the three tools - this page is part of the same product,
+     and was previously reachable only by knowing its URL. */
+  .toolbar { display:flex; gap:0; margin:0 0 10px; border-bottom:1px solid var(--rule); }
+  .toolbar a { font-size:11px; text-decoration:none; color:var(--dim); padding:7px 13px;
+               border:1px solid transparent; border-bottom:none; letter-spacing:.03em; }
+  .toolbar a:hover { color:var(--ink); background:#efece3; }
+  .toolbar a.here { color:var(--ink); font-weight:700; background:var(--panel);
+                    border-color:var(--rule); border-bottom:1px solid var(--panel);
+                    margin-bottom:-1px; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
     background: #f6f4ef; color: var(--ink); margin: 0; padding: 14px 16px 24px;
@@ -127,6 +136,13 @@
 </style>
 </head>
 <body>
+
+<div class="toolbar">
+  <a href="index.html">Newest runs</a>
+  <a href="compare-runs.html">Compare runs</a>
+  <a href="at-eclipse.html">At eclipse</a>
+  <a href="pipeline.html" class="here">Pipeline</a>
+</div>
 
 <h1>eclipse-weather · pipeline</h1>
 <div class="sub" id="sub">loading…</div>

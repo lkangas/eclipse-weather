@@ -157,7 +157,7 @@ def _run_entry(
     architecture is built to be able to delete).
 
     Why it's the right call anyway:
-      - The browser (tool3_real.html) only ever uses the flag as
+      - The browser (at_eclipse.html) only ever uses the flag as
         `has_data[field] !== false` to decide whether to show images[field]
         at all; a missing field key and has_data:false take the identical
         "not available" code path, so file-existence is exactly the question
@@ -165,7 +165,7 @@ def _run_entry(
       - supported_fields() above already excludes every PERMANENT per-model
         field gap (arome_france/arpege_europe total, ecmwf_ens low/mid/high,
         prob for everything but aifs_ens) - i.e. the cases that matter, the
-        ones tool3_real.html's KNOWN_FIELD_GAPS explains in prose.
+        ones at_eclipse.html's KNOWN_FIELD_GAPS explains in prose.
       - The renderer is intended (agreed, not yet implemented) to stop writing
         a placeholder PNG at all when there's no real data, at which point
         "file exists" == "has real data" exactly.
@@ -247,7 +247,7 @@ def main() -> None:
 
         if not run_inits:
             # Skipped rather than emitted with an empty runs list: every run
-            # of a listed model is a row/gallery cell in tool3_real.html, and
+            # of a listed model is a row/gallery cell in at_eclipse.html, and
             # a model with nothing rendered has no row to draw.
             log.info("%s: no rendered frames on disk, skipping", model_id)
             continue

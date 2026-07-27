@@ -272,7 +272,10 @@ def process_run(
             result = fetcher(model_id, narrowed, run_init)
             # Partial failures carry status "ok" but a populated .error, so
             # record unconditionally rather than only on status == "error".
-            failures.record(model_id, run_init, result.error, now)
+            # NOT the pass-level `now`: the ledger wants the time this window
+            # actually failed, and a pass reaches this line for hours after it
+            # started (see failures.record's own note).
+            failures.record(model_id, run_init, result.error)
             if result.status == "error":
                 outcome.errors.append(f"fetch <=+{cap}h: {result.error}")
         except Exception as e:
