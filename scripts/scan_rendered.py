@@ -46,9 +46,26 @@ HISTORY_MAX_ROWS = 2880  # 24h at one scan per 30s
 _FRAME_RE = re.compile(r"^(\d{10})_(\d+)\.png$")
 _RUN_DIR_RE = re.compile(r"^\d{10}$")
 
+# The render worker drops this in a run directory once it has processed the run
+# (src/scheduler/run.py's _RENDER_MARKER). Counting it is what distinguishes
+# "the worker is stuck" from "the worker is working through runs that were
+# already rendered, so the completed-runs total cannot move yet" - the second
+# looks identical to the first if you only watch frame counts.
+_WORKER_MARKER = ".last_render"
+
 
 def _iso_z(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
+
+
+def _worker_checked_count(model_id: str) -> int:
+    d = DATA_RAW / model_id
+    if not d.is_dir():
+        return 0
+    return sum(
+        1 for p in d.iterdir()
+        if p.is_dir() and _RUN_DIR_RE.match(p.name) and (p / _WORKER_MARKER).exists()
+    )
 
 
 def _archived_run_count(model_id: str) -> int:
@@ -88,6 +105,7 @@ def _scan_model(model_id: str) -> dict:
 
     return {
         "archived_runs": _archived_run_count(model_id),
+        "worker_checked_runs": _worker_checked_count(model_id),
         "rendered_runs": len(runs),
         "complete_runs": complete,
         "png_count": png_count,
@@ -101,6 +119,7 @@ def scan_once() -> dict:
         "updated_at": _iso_z(datetime.now(UTC)),
         "totals": {
             "archived_runs": sum(v["archived_runs"] for v in models.values()),
+            "worker_checked_runs": sum(v["worker_checked_runs"] for v in models.values()),
             "rendered_runs": sum(v["rendered_runs"] for v in models.values()),
             "complete_runs": sum(v["complete_runs"] for v in models.values()),
             "png_count": sum(v["png_count"] for v in models.values()),
@@ -121,6 +140,7 @@ def _append_history(index: dict) -> None:
         "archived": t["archived_runs"],
         "rendered": t["rendered_runs"],
         "complete": t["complete_runs"],
+        "checked": t["worker_checked_runs"],
         "pngs": t["png_count"],
     }
     try:

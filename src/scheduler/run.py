@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import subprocess
@@ -152,6 +153,38 @@ def _runs_needing_render(renderable: set[str]) -> list[tuple[str, datetime, int]
     return [(model_id, run_init, raw_count) for _, run_init, model_id, raw_count in ranked]
 
 
+# What the worker is doing RIGHT NOW. rendered_index.json is a disk scan and
+# rendered_history.jsonl is a totals series - neither can express "currently
+# rendering icon_global 2026-07-26 12Z, 40 s in", which is the first thing
+# anyone looks for when they think a backfill has stalled. Written on entering
+# and leaving each run, so a reader can also tell a long render from a wedged
+# one by how old started_at is.
+def _live_status_path():
+    from src.viz.frame_renderer import OUTPUT_DIR
+    return OUTPUT_DIR / "render_worker_status.json"
+
+
+def _publish_live(current: dict | None, last: dict | None, pending: int | None = None) -> None:
+    try:
+        path = _live_status_path()
+        prev = {}
+        if path.exists():
+            try:
+                prev = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                prev = {}
+        payload = {
+            "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "current": current,
+            "last_completed": last if last is not None else prev.get("last_completed"),
+            "pending_runs": pending if pending is not None else prev.get("pending_runs"),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:  # never let status reporting break rendering
+        log.exception("could not publish render worker status")
+
+
 def render_worker_main() -> None:
     """Entry point for the child process (see the note above). Renders every
     archived run that needs it, forever, one at a time. Never exits on a
@@ -169,10 +202,18 @@ def render_worker_main() -> None:
     while True:
         pending = _runs_needing_render(renderable)
         if not pending:
+            _publish_live(None, None, pending=0)
             time.sleep(RENDER_IDLE_SLEEP_SECONDS)
             continue
         rendered_any = False
+        _publish_live(None, None, pending=len(pending))
         for model_id, run_init, raw_count in pending:
+            started = datetime.now(UTC)
+            _publish_live(
+                {"model": model_id, "run_init": run_init.isoformat().replace("+00:00", "Z"),
+                 "started_at": started.isoformat().replace("+00:00", "Z")},
+                None, pending=len(pending),
+            )
             # raw_count was sampled BEFORE this render: files landing while it
             # runs must still leave the run looking "grown" afterwards, or
             # those steps would wait for the next arrival to be noticed.
@@ -187,6 +228,14 @@ def render_worker_main() -> None:
             n_with_data = sum(1 for fields in result.values() if any(fields.values()))
             _record_render(model_id, run_init, raw_count)
             rendered_any = True
+            _publish_live(None, {
+                "model": model_id,
+                "run_init": run_init.isoformat().replace("+00:00", "Z"),
+                "steps": n_steps,
+                "steps_with_data": n_with_data,
+                "seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
+                "finished_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            })
             log.info(
                 "rendered %s %s: %d step(s), %d with real data",
                 model_id, run_init.isoformat(), n_steps, n_with_data,

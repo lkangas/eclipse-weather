@@ -5,7 +5,10 @@ research record (T01–T45) that `config/models.yaml` and code comments cite by
 task number, so it stays where it is and keeps those references working. Look
 there for *why* something is the way it is; look here for what's left.
 
-Eclipse: **2026-08-12, totality ~18:25–18:33 UTC.**
+Eclipse: 2026-08-12, totality ~18:25–18:33 UTC — but that is not the planning
+horizon. The intent is to have everything important **built in the next few
+days**; the archiver has been collecting since Jul 27, so data capture is
+already handled and nothing below is paced by the eclipse date.
 
 ---
 
@@ -27,9 +30,9 @@ is finished ahead of time.
 - [ ] **Reserve the VPS** (TASKS.md T25). Box decided 2026-07-22; nothing
       provisioned. Everything below under "VPS migration" waits on this.
 - [ ] **Healthcheck service account.** `src/scheduler/run.py` already pings
-      `HEALTHCHECK_URL` every tick; without an account a stalled archiver in
-      the Aug 5–12 window is silent, which CLAUDE.md calls the worst failure
-      mode. Minutes of work, disproportionate payoff.
+      `HEALTHCHECK_URL` every tick; without an account a *stalled* archiver is
+      silent. Reboots are covered (Task Scheduler), a hang is not. Minutes of
+      work.
 - [ ] **Sign off on how renderings look** (TASKS.md rollout step 2). The plan
       gates production migration on this, explicitly on judgement rather than
       a date.
@@ -48,11 +51,14 @@ list nor T44 gates deployment any more.
 
 Three things the insurance depends on, or it is not insurance:
 - The desktop must not delete runs that matter. Routine bulk cleanup is fine,
-  but exempt anything reaching 2026-08-12 and everything in the Aug 5–12
-  window.
-- The desktop must stay up. Today it does not survive a reboot without someone
-  opening a terminal (WSL has no autostart) — tolerable for a dev box, a real
-  liability once it holds the only copy of raw.
+  but exempt anything whose forecast reaches the eclipse valid time — those are
+  the runs the whole archive exists for.
+- The desktop must stay up. It does: Task Scheduler task `\WSL Autostart -
+  eclipse-weather` fires **at system startup** (not at logon, deliberately),
+  boots the distro, and Docker's `restart: unless-stopped` brings the archiver
+  back. Verified 2026-07-27, last result 0. A *stalled* archiver is still
+  silent though — that is the healthcheck item above, and it matters more now
+  that this box holds the only copy of raw.
 - Both instances write `points.parquet` and they will diverge. Treat the
   desktop's as authoritative (it is strictly more complete) and the VPS's as
   disposable.

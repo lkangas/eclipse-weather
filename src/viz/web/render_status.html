@@ -24,6 +24,16 @@
   .bar { height: 16px; background: var(--pend); border: 1px solid var(--ink); position: relative; margin: 10px 0 4px; }
   .bar > i { display: block; height: 100%; background: var(--done); }
   .bar > span { position: absolute; right: 4px; top: 1px; font-size: 10px; color: var(--ink); }
+  .now { padding: 8px 11px; background: #fff; border: 1px solid var(--ink);
+         margin: 12px 0 0; line-height: 1.55; }
+  .now .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+              background: var(--done); margin-right: 7px; vertical-align: 1px;
+              animation: pulse 1.6s ease-in-out infinite; }
+  .now.idle .dot { background: var(--faint); animation: none; }
+  .now.stuck .dot { background: var(--warn); animation: none; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+  .now .what { font-weight: 700; }
+  .now .meta { color: var(--dim); font-size: 10.5px; }
   .verdict { padding: 7px 10px; border-left: 3px solid var(--accent); background: #fff;
              margin: 12px 0 18px; line-height: 1.5; }
   .verdict.good { border-left-color: var(--done); }
@@ -55,9 +65,11 @@
   <div class="metric">frames on disk<b id="hPngs">–</b></div>
   <div class="metric">runs archived<b id="hArch">–</b></div>
   <div class="metric">still to do<b id="hLeft">–</b></div>
+  <div class="metric">worker checked<b id="hChecked">–</b></div>
 </div>
 <div class="bar"><i id="bar"></i><span id="barTxt"></span></div>
 
+<div class="now" id="now">…</div>
 <div class="verdict" id="verdict">…</div>
 
 <svg id="chart" viewBox="0 0 1000 150" preserveAspectRatio="none"></svg>
@@ -95,9 +107,10 @@ const fmtN = n => n.toLocaleString();
 
 async function poll() {
   try {
-    const [idxR, histR] = await Promise.all([
+    const [idxR, histR, liveR] = await Promise.all([
       fetch("rendered_index.json?_=" + Date.now()),
       fetch("rendered_history.jsonl?_=" + Date.now()),
+      fetch("render_worker_status.json?_=" + Date.now()),
     ]);
     if (!idxR.ok) throw new Error("rendered_index.json HTTP " + idxR.status);
     const index = await idxR.json();
@@ -105,8 +118,10 @@ async function poll() {
     if (histR.ok) {
       hist = (await histR.text()).trim().split("\n").filter(Boolean).map(JSON.parse);
     }
+    let live = null;
+    if (liveR.ok) { try { live = await liveR.json(); } catch (e) { live = null; } }
     $("err").style.display = "none";
-    render(index, hist);
+    render(index, hist, live);
   } catch (e) {
     $("err").style.display = "block";
     $("err").textContent = "Couldn't load status: " + e.message +
@@ -114,7 +129,8 @@ async function poll() {
   }
 }
 
-function render(index, hist) {
+function render(index, hist, live) {
+  liveNow(live);
   const t = index.totals;
   const ageS = (Date.now() - new Date(index.updated_at).getTime()) / 1000;
   $("sub").innerHTML = "on-disk scan, " + fmtAgo(index.updated_at) +
@@ -124,6 +140,8 @@ function render(index, hist) {
   $("hPngs").textContent = fmtN(t.png_count);
   $("hArch").textContent = fmtN(t.archived_runs);
   $("hLeft").textContent = fmtN(t.archived_runs - t.complete_runs);
+  $("hChecked").textContent = t.worker_checked_runs != null
+    ? fmtN(t.worker_checked_runs) + " / " + fmtN(t.archived_runs) : "–";
 
   const pct = t.archived_runs ? (t.complete_runs / t.archived_runs) * 100 : 0;
   $("bar").style.width = pct.toFixed(1) + "%";
@@ -155,6 +173,41 @@ function render(index, hist) {
     "probability only where an ensemble genuinely has native low/mid/high.";
 }
 
+// The worker writes render_worker_status.json on entering and leaving each run.
+// started_at is what separates "this run is just slow" (aifs_ens is a 50-member
+// ensemble) from "the worker is wedged": a current run older than STUCK_MIN
+// minutes is worth looking at.
+const STUCK_MIN = 20;
+
+function liveNow(live) {
+  const el = $("now");
+  if (!live) {
+    el.className = "now idle";
+    el.innerHTML = '<span class="dot"></span>No worker status yet — ' +
+      "the render worker publishes this on its next run.";
+    return;
+  }
+  const last = live.last_completed;
+  const lastTxt = last
+    ? `<div class="meta">last finished <b>${last.model}</b> ${String(last.run_init).slice(0, 13)}Z — ` +
+      `${last.steps} steps, ${last.steps_with_data} with data, ${last.seconds}s, ${fmtAgo(last.finished_at)}</div>`
+    : "";
+  if (!live.current) {
+    el.className = "now idle";
+    el.innerHTML = '<span class="dot"></span><span class="what">Idle</span> — ' +
+      (live.pending_runs ? `${live.pending_runs} run(s) queued, next sweep shortly.`
+                         : "nothing left to render; waiting for new runs.") + lastTxt;
+    return;
+  }
+  const mins = (Date.now() - new Date(live.current.started_at).getTime()) / 60000;
+  el.className = "now" + (mins > STUCK_MIN ? " stuck" : "");
+  el.innerHTML = '<span class="dot"></span><span class="what">Rendering ' +
+    live.current.model + " " + String(live.current.run_init).slice(0, 13) + "Z</span> " +
+    `<span class="meta">— ${mins < 1 ? Math.round(mins * 60) + "s" : mins.toFixed(1) + " min"} in` +
+    (live.pending_runs ? `, ${live.pending_runs} queued` : "") +
+    (mins > STUCK_MIN ? " — longer than expected, worth a look" : "") + "</span>" + lastTxt;
+}
+
 // Rate is measured over the trailing window rather than since the beginning:
 // the first minutes after a restart are spent re-walking already-rendered runs,
 // which would otherwise flatter the average and produce a wildly optimistic ETA.
@@ -176,20 +229,39 @@ function verdict(t, hist) {
   }
   const a = win[0], b = win[win.length - 1];
   const hours = (new Date(b.at) - new Date(a.at)) / 3.6e6;
-  const doneRate = (b.complete - a.complete) / hours;      // runs rendered per hour
-  const arriveRate = (b.archived - a.archived) / hours;    // runs fetched per hour
+  const doneRate = (b.complete - a.complete) / hours;
+  const arriveRate = (b.archived - a.archived) / hours;
+  // The worker confirms already-rendered runs before it reaches unrendered
+  // ones, and those confirmations produce no new frames - so completed-runs
+  // can sit flat for a long time while the worker is in fact moving. Without
+  // this, that phase reports "0.0 runs/h, backlog not shrinking", which reads
+  // as a stall and is what sent us hunting a non-existent bug.
+  const checkRate = (b.checked != null && a.checked != null)
+    ? (b.checked - a.checked) / hours : null;
   const net = doneRate - arriveRate;
+
+  if (doneRate === 0 && checkRate > 0.5) {
+    const ahead = Math.max(0, t.complete_runs - (b.checked || 0));
+    el.className = "verdict";
+    el.innerHTML = `Working, but the completed count cannot move yet. The worker is confirming ` +
+      `runs that were <b>already rendered</b> at <b>${checkRate.toFixed(0)}</b> runs/h ` +
+      `(<b>${b.checked}</b> of <b>${t.archived_runs}</b> checked so far). New frames start ` +
+      `appearing once it passes the ~<b>${t.complete_runs}</b> already-complete runs` +
+      (ahead > 0 ? `, about <b>${(ahead / checkRate * 60).toFixed(0)} min</b> away` : "") + ".";
+    return;
+  }
   if (net > 0.05) {
     const eta = left / net;
     el.className = "verdict good";
     el.innerHTML = `Catching up. Rendering <b>${doneRate.toFixed(1)}</b> runs/h against ` +
       `<b>${arriveRate.toFixed(1)}</b> arriving — net <b>${net.toFixed(1)}</b>/h. ` +
-      `<b>${left}</b> left, so the backlog clears in about <b>${eta < 1 ? Math.round(eta * 60) + " min" : eta.toFixed(1) + " h"}</b> ` +
-      "if nothing changes.";
+      `<b>${left}</b> left, so the backlog clears in about ` +
+      `<b>${eta < 1 ? Math.round(eta * 60) + " min" : eta.toFixed(1) + " h"}</b> if nothing changes.`;
   } else if (net > -0.05) {
     el.className = "verdict";
     el.innerHTML = `Holding level. Rendering <b>${doneRate.toFixed(1)}</b> runs/h, ` +
-      `<b>${arriveRate.toFixed(1)}</b> arriving. The <b>${left}</b>-run backlog is not shrinking.`;
+      `<b>${arriveRate.toFixed(1)}</b> arriving. The <b>${left}</b>-run backlog is not shrinking` +
+      (checkRate ? ` (worker is checking <b>${checkRate.toFixed(0)}</b> runs/h).` : ".");
   } else {
     el.className = "verdict bad";
     el.innerHTML = `<b>Falling behind.</b> Rendering <b>${doneRate.toFixed(1)}</b> runs/h against ` +
