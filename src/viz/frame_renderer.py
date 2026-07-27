@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -1018,11 +1019,32 @@ def render_frame(
     )
     fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=100)
+    _savefig_atomic(fig, output_path, dpi=100)
     plt.close(fig)
     return output_path, result is not None
 
+
+def _savefig_atomic(fig, output_path, **kwargs) -> None:
+    """savefig to a sibling temp file, then os.replace onto the final name.
+
+    render_frame() treats ANY existing frame file as already drawn, so a
+    partially-written PNG is not merely a bad frame - it is a permanently bad
+    frame, never redrawn. A plain savefig to the final path leaves exactly that
+    behind whenever a worker is killed mid-write, which made restarting the
+    render workers to pick up new code an unattractive move on the archive of
+    record. os.replace within one directory is atomic, so the final name only
+    ever refers to a complete file and a killed worker leaves at most a stray
+    .tmp for the next pass to overwrite.
+    """
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output_path.with_name(
+        f".{output_path.stem}.{os.getpid()}.tmp{output_path.suffix}")
+    try:
+        fig.savefig(tmp, **kwargs)
+        os.replace(tmp, output_path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 def _render_rain_overlay(model_name, run_init, step, lats, lons, values, bbox, output_path):
     """Rain as a TRANSPARENT overlay, drawn alone with no basemap or title.
@@ -1069,8 +1091,7 @@ def _render_rain_overlay(model_name, run_init, step, lats, lons, values, bbox, o
     # for its title. Same layout call, same margins, minus the title band.
     fig.subplots_adjust(left=0, right=1, bottom=0, top=_figure_layout(bbox)[2])
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=100, transparent=True)
+    _savefig_atomic(fig, output_path, dpi=100, transparent=True)
     plt.close(fig)
     return output_path, True
 
@@ -1110,8 +1131,7 @@ def _render_temp_frame(model_name, run_init, step, lats, lons, values, bbox, out
     ax.set_title(f"{label} · {_fmt_dm_z(run_init)} → {_fmt_dm_z(valid)} (+{step}h)", fontsize=10)
     fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=100)
+    _savefig_atomic(fig, output_path, dpi=100)
     plt.close(fig)
     return output_path, True
 
@@ -1210,7 +1230,6 @@ def _render_composite_frame(
     )
     fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path, dpi=100)
+    _savefig_atomic(fig, output_path, dpi=100)
     plt.close(fig)
     return output_path, has_data
