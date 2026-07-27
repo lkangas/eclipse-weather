@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MODELS_YAML = REPO_ROOT / "config" / "models.yaml"
 SITES_YAML = REPO_ROOT / "config" / "sites.yaml"
+PLACENAMES_JSON = REPO_ROOT / "config" / "placenames.json"
 
 # Defaults to <repo>/data (also what's baked into the Docker image as /app/data,
 # via docker-compose.yml's own ./data:/app/data bind mount - production has no
@@ -31,8 +33,41 @@ def load_models() -> dict:
 
 
 def load_sites() -> dict:
+    """Extraction sites + the WNW-sightline geometry, from two files.
+
+    WHICH places: config/placenames.json - the frozen, hand-curated list
+    (T41, 2026-07-24: GeoNames ES filtered to admin_rank<=3 and
+    population>=34000, metro clusters collapsed to their largest member,
+    Madrid injected). That file is the single source for the place list and
+    is deliberately NOT mirrored into sites.yaml - duplicating it is exactly
+    how the two would drift.
+
+    HOW each place is sampled toward the sun: config/sites.yaml's top-level
+    wnw_strip:, which is geometry, not a place list.
+
+    This replaced sites.yaml's original 7-site placeholder shortlist on
+    2026-07-27 per explicit direction ("Not union, replace"). Four of those
+    seven (Luarca, Leon, Logrono, Castellon) are not in the curated 29 and
+    stop accumulating from that date; their existing points.parquet rows are
+    left alone as historical data. This is a one-way decision once production
+    starts discarding raw GRIB: a place absent from this list can never be
+    back-filled for a run whose raw is gone (TASKS.md rollout step 4).
+    """
     with open(SITES_YAML, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    with open(PLACENAMES_JSON, encoding="utf-8") as f:
+        places = json.load(f)["places"]
+    config["sites"] = [
+        {
+            "name": p["name"],
+            "lat": p["lat"],
+            "lon": p["lon"],
+            "population": p["population"],
+            "admin_rank": p["admin_rank"],
+        }
+        for p in places
+    ]
+    return config
 
 
 def get_model(name: str) -> dict:
