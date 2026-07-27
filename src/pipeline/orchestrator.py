@@ -138,6 +138,28 @@ def _reclaim_run(
                      c.path, c.bytes / 1024**2, c.steps)
 
 
+def _frames_complete(model_id: str, run_init: datetime) -> bool:
+    """Does this run already have frames for every field, across essentially
+    all its declared steps? Cheap: directory listings only, no raw touched."""
+    from src.config import get_model
+    from src.fetchers.base import full_range_steps
+    from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
+
+    fields = supported_fields(model_id)
+    if not fields:
+        return False
+    expected = len(full_range_steps(get_model(model_id), run_init)) or 1
+    stamp = f"{run_init:%Y%m%d%H}_"
+    for fld in fields:
+        d = OUTPUT_DIR / model_id / fld
+        if not d.is_dir():
+            return False
+        n = sum(1 for p in d.iterdir() if p.name.startswith(stamp))
+        if n < expected * 0.9:
+            return False
+    return True
+
+
 def _maybe_extract(
     model_id: str, model_config: dict, run_init: datetime, outcome: RunOutcome
 ) -> None:
@@ -365,13 +387,34 @@ def run_once(
                          errors_so_far=len(result.errors) + sum(
                              len(o.errors) for o in result.outcomes))
 
+        # NEWEST FIRST. cycle_run_inits() returns ascending, so the pass was
+        # working through a model's oldest runs first and reaching the newest
+        # last - exactly backwards while catching up. The newest run is the one
+        # the tools actually show, the one most likely to still be missing, and
+        # the one that will age out of upstream retention first (DWD ~24h,
+        # AEMET latest-only). A two-day-old run whose frames already exist can
+        # wait; a run published an hour ago cannot.
         due_runs = set()
-        for run_init in cycle_run_inits(model_config["cycles"], now):
+        for run_init in sorted(cycle_run_inits(model_config["cycles"], now), reverse=True):
             if now < due_time(model_config.get("publication_lag_h", [0, 0]), run_init):
                 continue
             if not should_attempt_fetch(model_id, run_init, now):
                 continue
             due_runs.add(run_init)
+            # Frames already complete -> nothing to fetch. This is the whole
+            # seeded-archive case: 53 runs whose frames were migrated from the
+            # desktop had no raw here, so already_fetched() said "never
+            # fetched" and the pass re-downloaded entire runs - including
+            # ~16 GB aifs_ens runs - to produce frames that already existed.
+            # The only thing that re-fetch could add is point extraction, and
+            # per the agreed split that is the DESKTOP's job: anything needing
+            # raw (point series, line-of-sight) is developed there, where raw
+            # is kept, and backfilled to the VPS. Production renders maps.
+            if _frames_complete(model_id, run_init):
+                outcome = process_run(model_id, model_config, run_init, settings,
+                                      apply=apply, now=now, fetch=False)
+                result.outcomes.append(outcome)
+                continue
             try:
                 outcome = process_run(model_id, model_config, run_init, settings,
                                       apply=apply, now=now)

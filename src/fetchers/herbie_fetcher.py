@@ -50,6 +50,12 @@ class _Fetch:
     suffix: str
     product: str
     search: str
+    # Lowest forecast hour this unit actually exists at. GEFS publishes no
+    # cloud layer or entire-atmosphere TCDC at f000 - pgrb2a has none at all
+    # and pgrb2b carries only TCDC:475 mb - so requesting it is a guaranteed
+    # miss rather than a gap that might fill in later. Verified against
+    # gec00.t00z.pgrb2{a,b}.0p50.f000.idx.
+    first_step: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +80,20 @@ _MODEL_SPECS = {
             _Fetch(
                 suffix="cloud",
                 product="pgrb2.0p25",
+                # "\d+ hour fcst" excludes the time-averaged "0-3 hour ave
+                # fcst" twins (the "ave" breaks the contiguity, so no explicit
+                # exclusion is needed). "anl" is the SAME instantaneous field
+                # at step 0: GFS labels analysis-time messages "anl" rather
+                # than "0 hour fcst", so a forecast-only regex could never
+                # match f000 and every f000 fetch failed by construction -
+                # 2 doomed HTTP attempt cycles per window, ~17 windows per run,
+                # every run, forever. Verified against the live idx
+                # (gfs.t00z.pgrb2.0p25.f000.idx): exactly the four wanted
+                # messages, all "anl", no averaged variants at step 0.
                 search=(
-                    r":(?:LCDC:low|MCDC:middle|HCDC:high) cloud layer:\d+ hour fcst:"
-                    r"|:TCDC:entire atmosphere:\d+ hour fcst:"
+                    r":(?:LCDC:low|MCDC:middle|HCDC:high) cloud layer:"
+                    r"(?:\d+ hour fcst|anl):"
+                    r"|:TCDC:entire atmosphere:(?:\d+ hour fcst|anl):"
                 ),
             ),
         ),
@@ -90,7 +107,8 @@ _MODEL_SPECS = {
         "fetches": (
             # pgrb2a ("atmos.5" in herbie's gefs template) carries ONLY
             # TCDC:entire atmosphere at any lead time (models.yaml T03 note).
-            _Fetch(suffix="total", product="atmos.5", search=r":TCDC:entire atmosphere:"),
+            _Fetch(suffix="total", product="atmos.5",
+                   search=r":TCDC:entire atmosphere:", first_step=3),
             # pgrb2b ("atmos.5b") carries low/middle/high TCDC, always as a
             # time-window average -- confirmed no instantaneous variant
             # exists at any lead time, so no "ave" exclusion is needed here.
@@ -98,6 +116,7 @@ _MODEL_SPECS = {
                 suffix="levels",
                 product="atmos.5b",
                 search=r":TCDC:(?:low|middle|high) cloud layer:",
+                first_step=3,
             ),
         ),
     },
@@ -239,6 +258,12 @@ def _download_steps(
         staging_dir = Path(staging)
         for step in steps:
             for f in spec["fetches"]:
+                if step < f.first_step:
+                    # Structurally absent upstream, not a gap that may fill in
+                    # later - see _Fetch.first_step. Skipping silently rather
+                    # than logging: it is expected every run, and an error per
+                    # run per window is what buried the real failures.
+                    continue
                 dest_path = out_dir / _output_filename(model_name, member, step, f.suffix)
 
                 if have_usable_file(dest_path):
