@@ -31,6 +31,11 @@ _NO_CACHE_NAMES = {
     "tool3_manifest.json", "tool3_index.html",
     "backfill_progress.json", "backfill_progress.html", "rendered_index.json",
     "render_status.html", "rendered_history.jsonl",
+    # Production pipeline dashboard - all of these are rewritten in place every
+    # pass, so none may be served immutable like the frames are.
+    "pipeline.html", "pipeline_status.json", "pipeline_status.dryrun.json",
+    "pipeline_activity.json", "pipeline_coverage.json", "pipeline_history.jsonl",
+    "fetch_failures.jsonl",
     # Review/experiment pages are re-rendered in place while a design is being
     # iterated on, so they must never be served immutable like the frames are.
     "review.html", "review_grid.json",
@@ -53,9 +58,12 @@ class FrameRequestHandler(SimpleHTTPRequestHandler):
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8137
     directory = sys.argv[2] if len(sys.argv) > 2 else "."
-    handler = lambda *args, **kwargs: FrameRequestHandler(*args, directory=directory, **kwargs)
+    def handler(*args, **kwargs):
+        return FrameRequestHandler(*args, directory=directory, **kwargs)
+
     server = ThreadingHTTPServer(("0.0.0.0", port), handler)
-    print(f"serving {directory!r} on 0.0.0.0:{port} (HTTP/1.1 keep-alive, immutable cache for frames)")
+    print(f"serving {directory!r} on 0.0.0.0:{port} "
+          "(HTTP/1.1 keep-alive, immutable cache for frames)")
     server.serve_forever()
 
 

@@ -50,7 +50,7 @@ import httpx
 
 from src import config
 from src.config import load_models
-from src.pipeline import chunking, reclaim, render, verify
+from src.pipeline import chunking, failures, reclaim, render, verify
 from src.pipeline.settings import Settings
 
 log = logging.getLogger("pipeline")
@@ -205,10 +205,22 @@ def process_run(
     per_step = chunking.bytes_per_step(model_id, settings.fallback_bytes_per_step)
     record_fetch_attempt(model_id, run_init, now)
 
+    # Steps upstream has repeatedly refused to serve. Narrowing here rather
+    # than inside the fetcher keeps src/fetchers/ - the desktop archiver's
+    # critical path - completely untouched by this.
+    skip_steps = failures.dead_steps(model_id, run_init, now)
+
     previous_cap: int | None = None
     for cap in caps:
         wanted = chunking.steps_in_chunk(model_config, run_init, cap, previous_cap)
         previous_cap = cap
+        if skip_steps:
+            dropped = [s for s in wanted if s in skip_steps]
+            wanted = [s for s in wanted if s not in skip_steps]
+            if dropped:
+                log.info("%s %s window <=+%dh: skipping %d step(s) upstream keeps "
+                         "refusing: %s", model_id, run_init.isoformat(), cap,
+                         len(dropped), dropped[:6])
         if not wanted:
             continue
 
@@ -230,10 +242,15 @@ def process_run(
                 log.error("%s %s: %s", model_id, run_init.isoformat(), outcome.skipped)
                 break
 
+        publish_activity("fetching", model=model_id, run_init=run_init,
+                         window_cap_h=cap, chunk=caps.index(cap) + 1, chunks=len(caps))
         narrowed = chunking.narrow_config(model_config, run_init, cap)
         try:
             fetcher = fetch_registry.get_fetcher(model_config["fetch"])
             result = fetcher(model_id, narrowed, run_init)
+            # Partial failures carry status "ok" but a populated .error, so
+            # record unconditionally rather than only on status == "error".
+            failures.record(model_id, run_init, result.error, now)
             if result.status == "error":
                 outcome.errors.append(f"fetch <=+{cap}h: {result.error}")
         except Exception as e:
@@ -243,6 +260,8 @@ def process_run(
             break
         outcome.chunks += 1
 
+        publish_activity("rendering", model=model_id, run_init=run_init,
+                         window_cap_h=cap, chunk=caps.index(cap) + 1, chunks=len(caps))
         try:
             rendered = render.render_steps(model_id, run_init, wanted)
             outcome.steps_rendered += sum(1 for f in rendered.values() if any(f.values()))
@@ -254,7 +273,9 @@ def process_run(
             # window, leaving this one's raw on disk for the retry.
             continue
 
+        publish_activity("extracting", model=model_id, run_init=run_init)
         _maybe_extract(model_id, model_config, run_init, outcome)
+        publish_activity("reclaiming", model=model_id, run_init=run_init)
         _reclaim_run(model_id, model_config, run_init, settings, outcome,
                      apply=apply, now=now)
 
@@ -323,12 +344,19 @@ def run_once(
     result = PassResult(started_at=now, applied=apply, free_bytes_before=free_bytes())
     all_models = load_models()["models"]
     rendered_anything = False
+    _fetchable = [m for m, c in all_models.items() if "cycles" in c and "fetch" in c]
+    _pass_started = now
 
     for model_id, model_config in all_models.items():
         if models and model_id not in models:
             continue
         if "cycles" not in model_config or "fetch" not in model_config:
             continue  # aggregator/reference entries carry no fetch path
+
+        publish_activity("model", model=model_id,
+                         model_index=_fetchable.index(model_id) + 1,
+                         models_total=len(_fetchable),
+                         pass_started_at=_pass_started)
 
         due_runs = set()
         for run_init in cycle_run_inits(model_config["cycles"], now):
@@ -365,10 +393,13 @@ def run_once(
     # Manifests describe the rendered tree, so they are regenerated whenever
     # rendering happened - dry-run means "delete nothing", not "do nothing".
     if rendered_anything:
+        publish_activity("manifests", pass_started_at=_pass_started)
         result.manifests = render.regenerate_manifests()
 
     result.finished_at = datetime.now(UTC)
     result.free_bytes_after = free_bytes()
+    publish_activity("sleeping", pass_started_at=_pass_started,
+                     pass_finished_at=result.finished_at)
     return result
 
 
@@ -377,14 +408,87 @@ def run_once(
 # --------------------------------------------------------------------------
 
 STATUS_FILENAME = "pipeline_status.json"
+# A read-only --sweep used to overwrite the live status, so the dashboard would
+# confidently describe a diagnostic dry run as the state of production. Dry runs
+# get their own file.
+DRYRUN_STATUS_FILENAME = "pipeline_status.dryrun.json"
+ACTIVITY_FILENAME = "pipeline_activity.json"
+HISTORY_FILENAME = "pipeline_history.jsonl"
+
+
+def _out_dir():
+    from src.viz import frame_renderer
+    return frame_renderer.OUTPUT_DIR
+
+
+def publish_activity(phase: str, **fields) -> None:
+    """What the pipeline is doing RIGHT NOW.
+
+    A pass takes minutes and writes its status only at the end, so without this
+    a running pipeline and a wedged one look identical from outside - the exact
+    ambiguity that made a stalled render worker hard to spot on the desktop.
+    Written at model/run/window granularity, never per file, so it costs
+    nothing measurable.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    payload = {"phase": phase,
+               "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}
+    for k, v in fields.items():
+        payload[k] = v.isoformat().replace("+00:00", "Z") if hasattr(v, "isoformat") else v
+    try:
+        path = _out_dir() / ACTIVITY_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        tmp.replace(path)   # atomic: a reader never sees a half-written file
+    except OSError:
+        pass
+
+
+def append_history(result: PassResult) -> None:
+    """One line per completed pass. Unlocks every trend on the dashboard -
+    disk-free against the floor, GB reclaimed per pass, and pass duration
+    against the interval, which is what shows the box falling behind BEFORE
+    it stalls outright."""
+    import json
+
+    d = status_dict(result)
+    row = {
+        "at": d["finished_at"] or d["started_at"],
+        "mode": d["mode"],
+        "duration_s": None,
+        "free_gb_before": d["free_gb_before"],
+        "free_gb_after": d["free_gb_after"],
+        "gb_reclaimed": d["gb_reclaimed"],
+        "gb_held": d["gb_held"],
+        "runs": len(d["runs"]),
+        "steps_rendered": sum(r["steps_rendered"] or 0 for r in d["runs"]),
+        "files_reclaimed": sum(r["files_reclaimed"] or 0 for r in d["runs"]),
+        "n_errors": len(d["errors"]) + sum(len(r["errors"]) for r in d["runs"]),
+        "n_attention": len(d["needs_attention"]),
+    }
+    if result.finished_at and result.started_at:
+        row["duration_s"] = round((result.finished_at - result.started_at).total_seconds(), 1)
+    try:
+        path = _out_dir() / HISTORY_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(row) + "\n")
+    except OSError:
+        pass
 
 
 def _iso_z(dt: datetime) -> str:
     return dt.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def status_dict(result: PassResult) -> dict:
+def status_dict(result: PassResult, settings=None) -> dict:
     return {
+        # The dashboard draws the disk floor as a fixed reference line; without
+        # it "41 GB free" is a number with no meaning attached.
+        "min_free_gb": getattr(settings, "min_free_gb", None),
         "started_at": _iso_z(result.started_at),
         "finished_at": _iso_z(result.finished_at) if result.finished_at else None,
         "mode": "apply" if result.applied else "dry-run",
@@ -413,7 +517,7 @@ def status_dict(result: PassResult) -> dict:
     }
 
 
-def write_status(result: PassResult) -> None:
+def write_status(result: PassResult, settings=None) -> None:
     """Machine-readable pass status next to rendered_index.json /
     backfill_progress.json, so rollout step 5's status page has one more
     thing to read and a stalled pipeline is visible without shell access."""
@@ -421,10 +525,11 @@ def write_status(result: PassResult) -> None:
 
     from src.viz import frame_renderer
 
-    path = frame_renderer.OUTPUT_DIR / STATUS_FILENAME
+    path = frame_renderer.OUTPUT_DIR / (
+        STATUS_FILENAME if result.applied else DRYRUN_STATUS_FILENAME)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(status_dict(result), indent=2), encoding="utf-8")
+        path.write_text(json.dumps(status_dict(result, settings), indent=2), encoding="utf-8")
     except OSError as e:
         # A dry-run against a read-only mount is a legitimate way to inspect
         # a production box; not being able to write the status file must not

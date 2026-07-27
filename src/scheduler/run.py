@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import pathlib
 import subprocess
 import sys
 import threading
@@ -186,18 +187,20 @@ def _claim_path(model_id: str, run_init: datetime):
     return d / f"{model_id}_{run_init:%Y%m%d%H}.json"
 
 
-def _pid_alive(pid: int) -> bool:
+def _owner_is_live_worker(pid: int) -> bool:
+    """Is `pid` still a running render worker?
+
+    Checking the CMDLINE, not just liveness: pids get reused, and a recycled
+    pid that happens to belong to some unrelated process would otherwise keep a
+    dead worker's claim alive forever, stranding that run permanently.
+    """
     if pid <= 0:
         return False
     try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True  # exists, owned by someone else
+        cmdline = pathlib.Path(f"/proc/{pid}/cmdline").read_bytes().decode(errors="replace")
     except OSError:
-        return False
-    return True
+        return False  # no such process
+    return RENDER_WORKER_FLAG in cmdline.replace("\0", " ")
 
 
 def _write_claim(path) -> bool:
@@ -218,19 +221,36 @@ def _try_claim(model_id: str, run_init: datetime) -> bool:
     path = _claim_path(model_id, run_init)
     if _write_claim(path):
         return True
-    # Someone holds it. Take it over only if that someone is gone or the claim
-    # is ancient - a worker SIGKILLed mid-render leaves its claim behind, and
-    # without this the run would never be retried.
+    # Someone holds it. Take it over ONLY if that someone is gone - a worker
+    # SIGKILLed mid-render leaves its claim behind, and without this the run
+    # would never be retried.
+    #
+    # Age must NOT be part of that test. It was, joined by `and`, and the
+    # result was that a worker still rendering had its claim stolen the moment
+    # it passed the staleness threshold: observed live with two workers on
+    # arpege_europe 2026-07-23T00Z, one 147 min in and one 44 min in, which is
+    # precisely the concurrent-writer case claims exist to prevent. Slow is not
+    # dead. A 50-member ensemble on a cold NTFS mount can legitimately take
+    # hours, and there is no upper bound worth guessing at.
+    #
+    # Age survives only as a fallback for a claim whose owner cannot be
+    # determined at all (corrupt or truncated file) - otherwise such a claim
+    # would strand its run forever.
     try:
         info = json.loads(path.read_text(encoding="utf-8"))
         owner = int(info.get("pid", -1))
-        age = time.time() - path.stat().st_mtime
+        readable = True
     except (OSError, ValueError, TypeError):
-        owner, age = -1, CLAIM_STALE_SECONDS + 1
-    if _pid_alive(owner) and age < CLAIM_STALE_SECONDS:
-        return False
-    log.warning("stealing stale render claim for %s %s (pid %s, %.0fs old)",
-                model_id, run_init.isoformat(), owner, age)
+        owner, readable = -1, False
+    age = time.time() - path.stat().st_mtime if path.exists() else CLAIM_STALE_SECONDS + 1
+
+    if readable:
+        if _owner_is_live_worker(owner):
+            return False          # alive and working - hands off, however slow
+    elif age < CLAIM_STALE_SECONDS:
+        return False              # unreadable but recent; give it time to settle
+    log.warning("stealing render claim for %s %s - owner pid %s is not a live "
+                "worker (claim %.0fs old)", model_id, run_init.isoformat(), owner, age)
     try:
         path.unlink()
     except FileNotFoundError:

@@ -1,0 +1,309 @@
+<title>eclipse-weather · pipeline</title>
+<style>
+  :root {
+    --bg:#12141a; --panel:#1a1d26; --rule:#2c313d; --ink:#e6e9f0; --dim:#9aa3b5;
+    --faint:#6b7488; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#58a6ff;
+    --pend:#2c313d;
+  }
+  body { margin:0; padding:14px; background:var(--bg); color:var(--ink);
+         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  h1 { font-size:14px; margin:0 0 2px; letter-spacing:.06em; text-transform:uppercase; }
+  .sub { color:var(--faint); font-size:11px; margin-bottom:12px; }
+  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:5px;
+           padding:10px 12px; margin-bottom:10px; }
+  /* Verdict is the whole point of the page: one line, readable on a phone,
+     answering "do I need to do something right now". */
+  .verdict { font-size:15px; font-weight:700; padding:12px 14px; border-radius:5px;
+             border-left:5px solid var(--faint); background:var(--panel); margin-bottom:10px; }
+  .verdict.ok   { border-left-color:var(--ok); }
+  .verdict.warn { border-left-color:var(--warn); color:#f0d48a; }
+  .verdict.bad  { border-left-color:var(--bad); color:#ffb3ad; }
+  .verdict .why { display:block; font-size:11px; font-weight:400; color:var(--dim); margin-top:4px; }
+  .live { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none;
+         animation:pulse 1.8s ease-in-out infinite; }
+  .dot.idle { background:var(--faint); animation:none; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
+  .phase { color:var(--accent); font-weight:700; text-transform:uppercase; font-size:11px;
+           letter-spacing:.05em; }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px;
+           margin-bottom:10px; }
+  .card { background:var(--panel); border:1px solid var(--rule); border-radius:5px; padding:9px 11px; }
+  .card b { display:block; font-size:20px; font-variant-numeric:tabular-nums; margin-bottom:1px; }
+  .card span { color:var(--faint); font-size:10px; text-transform:uppercase; letter-spacing:.05em; }
+  .card.bad b { color:var(--bad); } .card.warn b { color:var(--warn); }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:760px){ .charts{grid-template-columns:1fr} }
+  figure { margin:0; } figcaption { font-size:10px; color:var(--dim); margin-bottom:4px;
+           text-transform:uppercase; letter-spacing:.05em; }
+  figcaption i { font-style:normal; color:var(--faint); text-transform:none; letter-spacing:0; }
+  svg { width:100%; height:110px; display:block; background:#0e1015; border:1px solid var(--rule);
+        border-radius:4px; }
+  table { border-collapse:collapse; width:100%; font-size:11.5px; }
+  th,td { padding:3px 7px; text-align:left; border-bottom:1px solid var(--rule);
+          white-space:nowrap; font-variant-numeric:tabular-nums; }
+  th { color:var(--faint); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em;
+       font-weight:600; }
+  td.n { text-align:right; }
+  /* Coverage matrix: one cell per expected cycle slot, newest at the left. */
+  .cov { display:flex; gap:2px; }
+  .cov i { width:13px; height:13px; border-radius:2px; background:var(--pend); flex:none; }
+  .cov i.ok{background:var(--ok)} .cov i.partial{background:var(--warn)}
+  .cov i.missing{background:var(--bad)} .cov i.pending{background:var(--pend);
+    border:1px dashed var(--faint); box-sizing:border-box}
+  .cov i.no-render{background:transparent;border:1px solid var(--rule);box-sizing:border-box}
+  .legend { color:var(--faint); font-size:10px; margin-top:6px; }
+  .legend b { color:var(--dim); font-weight:400; }
+  .key { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:-1px;
+         margin:0 3px 0 9px; }
+  .muted { color:var(--faint); }
+  .err { color:var(--bad); }
+  #stale { display:none; }
+</style>
+
+<h1>eclipse-weather · pipeline</h1>
+<div class="sub" id="sub">loading…</div>
+
+<div class="verdict" id="verdict">…</div>
+
+<div class="panel live" id="live"><span class="dot idle"></span><span class="muted">no activity yet</span></div>
+
+<div class="cards" id="cards"></div>
+
+<div class="charts">
+  <figure><figcaption>Free disk <i id="capDisk"></i></figcaption><svg id="chDisk" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
+  <figure><figcaption>Pass duration <i id="capDur"></i></figcaption><svg id="chDur" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
+</div>
+
+<div class="panel">
+  <table><thead><tr><th>Model</th><th>Coverage — newest first ◀</th><th class="n">ok</th><th class="n">missing</th><th class="n">frames</th></tr></thead>
+  <tbody id="cov"></tbody></table>
+  <div class="legend">
+    One cell per expected cycle slot in the last 48 h, newest at the left, judged on
+    <b>rendered frames</b> (production deletes raw once rendered, so raw presence would report
+    every processed run as missing).
+    <span class="key" style="background:var(--ok)"></span>ok
+    <span class="key" style="background:var(--warn)"></span>partial
+    <span class="key" style="background:var(--bad)"></span>missing
+    <span class="key" style="border:1px dashed var(--faint)"></span>not due yet
+    <span class="key" style="border:1px solid var(--rule)"></span>no renderer
+  </div>
+</div>
+
+<div class="panel">
+  <table><thead><tr><th>Fetch failures</th><th>Run</th><th class="n">Step</th><th>Products</th><th class="n">First seen</th></tr></thead>
+  <tbody id="fails"></tbody></table>
+  <div class="legend">Steps upstream refused. After 3 attempts a step is skipped in later windows
+    (it earns one retry a day), so a permanently-absent product stops costing a retry storm.</div>
+</div>
+
+<div class="panel" id="attnPanel" style="display:none">
+  <table><thead><tr><th>Needs attention</th></tr></thead><tbody id="attn"></tbody></table>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const PASS_INTERVAL_S = 300;
+
+const ago = ts => {
+  if (!ts) return "never";
+  const s = (Date.now() - new Date(ts).getTime()) / 1000;
+  if (s < 90) return Math.round(s) + "s ago";
+  if (s < 5400) return (s/60).toFixed(0) + "m ago";
+  return (s/3600).toFixed(1) + "h ago";
+};
+const secsSince = ts => ts ? (Date.now() - new Date(ts).getTime())/1000 : Infinity;
+
+async function jget(name, asText) {
+  try {
+    const r = await fetch(name + "?_=" + Date.now());
+    if (!r.ok) return null;
+    return asText ? await r.text() : await r.json();
+  } catch (e) { return null; }
+}
+
+async function poll() {
+  const [status, activity, cov, histTxt, failTxt] = await Promise.all([
+    jget("pipeline_status.json"), jget("pipeline_activity.json"),
+    jget("pipeline_coverage.json"), jget("pipeline_history.jsonl", true),
+    jget("fetch_failures.jsonl", true),
+  ]);
+  const hist = (histTxt||"").trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean);
+  const fails = (failTxt||"").trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean).reverse();
+  render(status, activity, cov, hist, fails);
+}
+
+function render(status, activity, cov, hist, fails) {
+  $("sub").textContent = status
+    ? `last pass ${ago(status.finished_at || status.started_at)} · mode ${status.mode} · ${hist.length} pass(es) recorded`
+    : "no pass has completed yet";
+
+  verdict(status, activity, cov);
+  live(activity);
+  cards(status, hist, cov);
+  chartDisk(hist, status);
+  chartDur(hist);
+  coverage(cov);
+  failures(fails);
+  attention(status);
+}
+
+// The single line that decides whether you need to do anything. Ordered by
+// severity: a stalled pipeline outranks a disk warning outranks missing runs.
+function verdict(status, activity, cov) {
+  const el = $("verdict");
+  const passAge = secsSince(status && (status.finished_at || status.started_at));
+  const actAge  = secsSince(activity && activity.updated_at);
+  const free = status ? status.free_gb_after : null;
+  const floor = status && status.min_free_gb;
+  const missing = cov ? Object.values(cov.models).flat().filter(r => r.state === "missing").length : 0;
+  const errs = status ? (status.errors||[]).length + (status.runs||[]).reduce((a,r)=>a+(r.errors||[]).length,0) : 0;
+
+  // A pass can legitimately run long; what proves life is the ACTIVITY file,
+  // which updates per model/run/window. Both stale = genuinely wedged.
+  if (!status && !activity) {
+    el.className = "verdict bad";
+    el.innerHTML = "NO DATA <span class='why'>Neither a completed pass nor live activity has been published. Is the pipeline container running?</span>";
+    return;
+  }
+  if (actAge > 900 && passAge > PASS_INTERVAL_S * 4) {
+    el.className = "verdict bad";
+    el.innerHTML = `STALLED <span class='why'>No activity for ${(actAge/60).toFixed(0)} min and no completed pass for ${(passAge/60).toFixed(0)} min (expected every ${PASS_INTERVAL_S/60} min).</span>`;
+    return;
+  }
+  if (floor && free != null && free < floor) {
+    el.className = "verdict bad";
+    el.innerHTML = `DISK BELOW FLOOR <span class='why'>${free.toFixed(1)} GB free against a ${floor} GB floor — models are being skipped rather than fetched.</span>`;
+    return;
+  }
+  if (floor && free != null && free < floor * 1.5) {
+    el.className = "verdict warn";
+    el.innerHTML = `DISK LOW <span class='why'>${free.toFixed(1)} GB free, floor is ${floor} GB. Reclaim is not keeping up with fetch.</span>`;
+    return;
+  }
+  if (missing) {
+    el.className = "verdict warn";
+    el.innerHTML = `${missing} RUN(S) MISSING <span class='why'>Past their publication deadline with no frames. Upstream retention is short — see the coverage matrix.</span>`;
+    return;
+  }
+  if (errs) {
+    el.className = "verdict warn";
+    el.innerHTML = `${errs} ERROR(S) LAST PASS <span class='why'>Fetching or rendering failed for at least one run; the pipeline itself is alive.</span>`;
+    return;
+  }
+  el.className = "verdict ok";
+  el.innerHTML = `HEALTHY <span class='why'>Pass ${ago(status && (status.finished_at||status.started_at))}, ${free != null ? free.toFixed(1)+" GB free" : "disk unknown"}, full coverage, no errors.</span>`;
+}
+
+function live(a) {
+  const el = $("live");
+  if (!a) { el.innerHTML = '<span class="dot idle"></span><span class="muted">no activity published yet</span>'; return; }
+  const age = secsSince(a.updated_at);
+  const stale = age > 900;
+  let what = `<span class="phase">${a.phase}</span>`;
+  if (a.model) what += ` ${a.model}`;
+  if (a.run_init) what += ` <span class="muted">${String(a.run_init).slice(0,13)}Z</span>`;
+  if (a.window_cap_h != null) what += ` <span class="muted">≤+${a.window_cap_h}h</span>`;
+  if (a.chunk) what += ` <span class="muted">chunk ${a.chunk}/${a.chunks}</span>`;
+  if (a.model_index) what += ` <span class="muted">· model ${a.model_index}/${a.models_total}</span>`;
+  el.innerHTML = `<span class="dot${stale?" idle":""}"></span>${what}` +
+    `<span class="muted">· ${ago(a.updated_at)}${stale?" — stale":""}</span>`;
+}
+
+function cards(status, hist, cov) {
+  const free = status ? status.free_gb_after : null;
+  const floor = status && status.min_free_gb;
+  const lastDur = hist.length ? hist[hist.length-1].duration_s : null;
+  // Reclaim rate over the recorded history, which is what tells you whether
+  // delete-after-render is actually keeping pace with fetching.
+  let gbPerH = null;
+  if (hist.length >= 2) {
+    const h0 = hist[0], h1 = hist[hist.length-1];
+    const hrs = (new Date(h1.at) - new Date(h0.at)) / 3.6e6;
+    if (hrs > 0) gbPerH = hist.reduce((a,r)=>a+(r.gb_reclaimed||0),0) / hrs;
+  }
+  const missing = cov ? Object.values(cov.models).flat().filter(r=>r.state==="missing").length : 0;
+  const card = (v, label, cls) => `<div class="card ${cls||""}"><b>${v}</b><span>${label}</span></div>`;
+  $("cards").innerHTML =
+    card(free!=null ? free.toFixed(1)+" GB" : "–", "free disk" + (floor?` · floor ${floor}`:""),
+         floor && free!=null && free<floor ? "bad" : (floor && free!=null && free<floor*1.5 ? "warn" : "")) +
+    card(lastDur!=null ? lastDur.toFixed(0)+"s" : "–", `pass duration · interval ${PASS_INTERVAL_S}s`,
+         lastDur > PASS_INTERVAL_S ? "warn" : "") +
+    card(gbPerH!=null ? gbPerH.toFixed(2) : "–", "GB reclaimed / h") +
+    card(missing, "runs missing", missing ? "bad" : "");
+}
+
+// Disk is NOT autoscaled: the floor is the meaning, so it stays in frame.
+function chartDisk(hist, status) {
+  const svg = $("chDisk"), cap = $("capDisk");
+  if (hist.length < 2) { svg.innerHTML = ""; cap.textContent = "(needs 2+ passes)"; return; }
+  const W=340,H=110,P=6, floor = status && status.min_free_gb;
+  const vals = hist.map(h=>h.free_gb_after);
+  let lo = Math.min(...vals, floor!=null?floor:Infinity), hi = Math.max(...vals);
+  if (hi===lo) { hi=lo+1; lo=Math.max(0,lo-1); }
+  const pad=(hi-lo)*0.12; lo-=pad; hi+=pad;
+  const t0=new Date(hist[0].at).getTime(), span=Math.max(1,new Date(hist[hist.length-1].at).getTime()-t0);
+  const x=h=>((new Date(h.at).getTime()-t0)/span)*(W-2*P)+P;
+  const y=v=>H-P-((v-lo)/(hi-lo))*(H-2*P);
+  let out = `<path d="${hist.map((h,i)=>(i?"L":"M")+x(h).toFixed(1)+" "+y(h.free_gb_after).toFixed(1)).join(" ")}" fill="none" stroke="#58a6ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  if (floor!=null && floor>=lo && floor<=hi)
+    out += `<line x1="${P}" y1="${y(floor)}" x2="${W-P}" y2="${y(floor)}" stroke="#f85149" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+  svg.innerHTML = out;
+  cap.textContent = `${vals[vals.length-1].toFixed(1)} GB · range ${lo.toFixed(0)}–${hi.toFixed(0)}${floor!=null?` · floor ${floor}`:""}`;
+}
+
+// Duration against the interval: creeping toward the line is the early warning
+// that the box is falling behind, well before it visibly stalls.
+function chartDur(hist) {
+  const svg=$("chDur"), cap=$("capDur");
+  const rows = hist.filter(h=>h.duration_s!=null);
+  if (rows.length < 2) { svg.innerHTML=""; cap.textContent="(needs 2+ passes)"; return; }
+  const W=340,H=110,P=6;
+  const vals=rows.map(r=>r.duration_s);
+  let hi=Math.max(...vals, PASS_INTERVAL_S)*1.1, lo=0;
+  const t0=new Date(rows[0].at).getTime(), span=Math.max(1,new Date(rows[rows.length-1].at).getTime()-t0);
+  const x=r=>((new Date(r.at).getTime()-t0)/span)*(W-2*P)+P;
+  const y=v=>H-P-((v-lo)/(hi-lo))*(H-2*P);
+  let out = rows.map(r=>{
+    const over = r.duration_s > PASS_INTERVAL_S;
+    return `<rect x="${(x(r)-1.5).toFixed(1)}" y="${y(r.duration_s).toFixed(1)}" width="3" height="${(H-P-y(r.duration_s)).toFixed(1)}" fill="${over?"#d29922":"#3fb950"}"/>`;
+  }).join("");
+  out += `<line x1="${P}" y1="${y(PASS_INTERVAL_S)}" x2="${W-P}" y2="${y(PASS_INTERVAL_S)}" stroke="#f85149" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+  svg.innerHTML=out;
+  cap.textContent = `${vals[vals.length-1].toFixed(0)}s · interval ${PASS_INTERVAL_S}s`;
+}
+
+function coverage(cov) {
+  if (!cov) { $("cov").innerHTML = '<tr><td class="muted">no coverage data yet</td></tr>'; return; }
+  const rows = Object.entries(cov.models).sort((a,b)=>{
+    const m = r => r[1].filter(x=>x.state==="missing").length;
+    return m(b)-m(a) || a[0].localeCompare(b[0]);
+  });
+  $("cov").innerHTML = rows.map(([mid, rs]) => {
+    const ok = rs.filter(r=>r.state==="ok").length;
+    const miss = rs.filter(r=>r.state==="missing").length;
+    const frames = rs.reduce((a,r)=>a+(r.frames||0),0);
+    const cells = rs.map(r=>`<i class="${r.state}" title="${String(r.run_init).slice(0,13)}Z — ${r.state}, ${r.frames} frame(s), ${r.age_h}h old"></i>`).join("");
+    return `<tr><td>${mid}</td><td><div class="cov">${cells}</div></td>` +
+           `<td class="n">${ok}</td><td class="n ${miss?"err":""}">${miss||""}</td>` +
+           `<td class="n muted">${frames.toLocaleString()}</td></tr>`;
+  }).join("");
+}
+
+function failures(fails) {
+  if (!fails.length) { $("fails").innerHTML = '<tr><td class="muted">none recorded</td></tr>'; return; }
+  $("fails").innerHTML = fails.slice(0,25).map(f =>
+    `<tr><td>${f.model}</td><td class="muted">${String(f.run_init).slice(0,13)}Z</td>` +
+    `<td class="n">f${String(f.step).padStart(3,"0")}</td><td class="muted">${(f.products||[]).join(", ")}</td>` +
+    `<td class="n muted">${ago(f.at)}</td></tr>`).join("");
+}
+
+function attention(status) {
+  const items = status ? (status.needs_attention||[]).concat(status.errors||[]) : [];
+  $("attnPanel").style.display = items.length ? "" : "none";
+  $("attn").innerHTML = items.map(i=>`<tr><td class="err">${i}</td></tr>`).join("");
+}
+
+poll();
+setInterval(poll, 10000);
+</script>

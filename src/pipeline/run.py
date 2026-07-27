@@ -23,7 +23,7 @@ import time
 from datetime import UTC, datetime
 
 from src.config import get_model, load_models
-from src.pipeline import chunking, orchestrator, reclaim, verify
+from src.pipeline import chunking, coverage, orchestrator, reclaim, verify
 from src.pipeline.settings import load_settings
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -191,7 +191,9 @@ def main() -> None:
                 result = orchestrator.run_once(settings, apply=args.apply, now=now,
                                                models=args.models)
             print_pass(result, verbose=args.verbose)
-            orchestrator.write_status(result)
+            orchestrator.write_status(result, settings)
+            orchestrator.append_history(result)
+            coverage.write(now)
             orchestrator.ping_healthcheck("" if not result.errors else "/fail")
         except Exception:
             log.exception("pass failed")
