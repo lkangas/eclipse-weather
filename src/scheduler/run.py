@@ -2,8 +2,8 @@ import json
 import logging
 import os
 import subprocess
-import threading
 import sys
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -84,7 +84,6 @@ def ping_healthcheck() -> None:
 # any existing file as done, so a torn PNG would never be redrawn).
 RENDER_IN_SCHEDULER = os.environ.get("ECLIPSE_SCHEDULER_RENDER", "1") != "0"
 
-RENDER_WORKER_FLAG = "--render-worker"
 RENDER_IDLE_SLEEP_SECONDS = 120  # nothing to render: how long before rescanning disk
 
 # Raw-file count at this run's last completed render. A dotfile, so
@@ -233,12 +232,11 @@ def render_worker_main() -> None:
             n_with_data = sum(1 for fields in result.values() if any(fields.values()))
             _record_render(model_id, run_init, raw_count)
             rendered_any = True
-            # Between runs the worker regenerates manifests, which takes long
-            # enough to be visible. Publishing current=None here made the page
-            # say "Idle" with a full queue - two things that cannot both be
-            # true. Name the phase instead.
+            # current stays on this run until the next iteration overwrites it,
+            # a fraction of a second later. There is no between-runs work left
+            # to report: manifests moved to their own process.
             _publish_live(
-                {"phase": "manifests", "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")},
+                None,
                 {
                     "model": model_id,
                     "run_init": run_init.isoformat().replace("+00:00", "Z"),
@@ -252,16 +250,7 @@ def render_worker_main() -> None:
                 "rendered %s %s: %d step(s), %d with real data",
                 model_id, run_init.isoformat(), n_steps, n_with_data,
             )
-            # New frames are useless to the tools until the manifests describe
-            # them, so publish as we go rather than only at the end of what may
-            # be an hours-long catch-up sweep.
-            regenerate_manifests()
-        if rendered_any:
-            # Unconditional final pass: the rate limiter may have skipped the
-            # last run's regeneration, and that is exactly the one the tools
-            # need.
-            regenerate_manifests(force=True)
-        else:
+        if not rendered_any:
             # Every run in the sweep raised. A failed run records no marker, so
             # it is still pending on the next scan - without this sleep a
             # permanently-broken run (or model) would be retried as fast as the
@@ -329,64 +318,91 @@ def regenerate_manifests(force: bool = False) -> None:
     _last_manifest_regen = time.monotonic()
 
 
-_render_proc: subprocess.Popen | None = None
-# ensure_render_worker() is called from both the supervisor thread and (once at
-# startup) the main thread, so the poll-then-spawn has to be atomic or a death
-# noticed by both would spawn two workers - and two renderers writing the same
-# frame paths is the one thing frame_renderer cannot survive, since a torn PNG
-# from a concurrent savefig would then count as rendered forever.
-_render_lock = threading.Lock()
-RENDER_SUPERVISE_SECONDS = 20
+RENDER_WORKER_FLAG = "--render-worker"
+MANIFEST_WORKER_FLAG = "--manifest-worker"
+
+# Each worker is a separate PROCESS, not a thread: eccodes and matplotlib are
+# the reason - neither survives being driven concurrently from one interpreter.
+# Separate processes also mean one worker wedging on a bad GRIB cannot stall the
+# others, which is the whole point of the split.
+_WORKERS: dict[str, list] = {
+    RENDER_WORKER_FLAG: [None],    # [Popen | None]
+    MANIFEST_WORKER_FLAG: [None],
+}
+# poll-then-spawn must be atomic: supervision and startup both call
+# ensure_workers(), and a death noticed by both would otherwise start two of the
+# same worker. Two renderers writing the same frame paths is the one thing
+# frame_renderer cannot survive - a torn PNG from a concurrent savefig counts as
+# rendered forever, since a frame's existence is what "has data" means now.
+_worker_lock = threading.Lock()
+SUPERVISE_SECONDS = 20
 
 
-def ensure_render_worker() -> None:
-    """Start the render child if it isn't running, restart it if it died.
-    Costs a poll() when all is well. Deliberately does NOT wait for or
-    communicate with the child - see the note above."""
-    global _render_proc
+def ensure_workers() -> None:
+    """Start each child that isn't running; restart any that died. Costs one
+    poll() per worker when all is well."""
     if not RENDER_IN_SCHEDULER:
         return
-    # Poll AND spawn under the lock: the supervisor thread and the main thread
-    # both call this, and a death spotted by both would otherwise start two
-    # workers. Two renderers writing the same frame paths is the one thing
-    # frame_renderer cannot survive - a torn PNG from a concurrent savefig
-    # counts as rendered forever, since existence is what "has data" means now.
-    with _render_lock:
-        if _render_proc is not None and _render_proc.poll() is None:
-            return
-        if _render_proc is not None:
-            log.error(
-                "render worker exited with code %s - restarting it",
-                _render_proc.returncode,
+    with _worker_lock:
+        for flag, slot in _WORKERS.items():
+            proc = slot[0]
+            if proc is not None and proc.poll() is None:
+                continue
+            if proc is not None:
+                log.error("%s exited with code %s - restarting it", flag, proc.returncode)
+            slot[0] = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
+                [sys.executable, "-m", "src.scheduler.run", flag]
             )
-        _render_proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
-            [sys.executable, "-m", "src.scheduler.run", RENDER_WORKER_FLAG]
-        )
-        log.info("render worker running as pid %d", _render_proc.pid)
+            log.info("%s running as pid %d", flag, slot[0].pid)
 
 
-def _supervise_render_worker_forever() -> None:
-    """Keep the render child alive on its OWN cadence, independent of the fetch
+def _supervise_workers_forever() -> None:
+    """Keep the children alive on their OWN cadence, independent of the fetch
     loop.
 
-    Rendering was already independent of fetching - it is a separate process -
-    but RECOVERY was not: ensure_render_worker() used to be called once per
-    tick, so a worker that died early in a tick stayed dead until run_once()
-    returned. That is minutes at best and 20+ at worst, because a tick that
-    pulls a 50-member ensemble spends a long time downloading. Observed exactly
-    that: a killed worker sat as a zombie through several ticks while the
-    parent was busy fetching ecmwf_ens.
-
-    A thread is safe here where it would not be for rendering itself: this only
-    ever calls poll()/Popen and touches no eccodes or matplotlib state, which is
-    the reason rendering is a child process in the first place.
+    Recovery used to run once per tick, at the top of a loop whose body is
+    run_once(), so a worker that died early in a tick stayed dead until that
+    tick's fetching finished - 20+ minutes when the tick is pulling a 50-member
+    ensemble. Observed exactly that. A thread is safe here where it is not for
+    the work itself: this only calls poll()/Popen and touches no eccodes or
+    matplotlib state.
     """
     while True:
         try:
-            ensure_render_worker()
+            ensure_workers()
         except Exception:
-            log.exception("render worker supervision failed; will retry")
-        time.sleep(RENDER_SUPERVISE_SECONDS)
+            log.exception("worker supervision failed; will retry")
+        time.sleep(SUPERVISE_SECONDS)
+
+
+MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "300"))
+
+
+def manifest_worker_main() -> None:
+    """Rebuild the tool manifests on a fixed cadence, forever, in its own
+    process.
+
+    This used to run inline in the render worker after every run, and it
+    dominated it: rendering a 209-step GFS run measured 17s while regenerating
+    the three manifests measured ~45s, because each generator rescans every
+    frame on disk. A backfill therefore spent most of its time republishing
+    manifests instead of rendering - and the rate limiter meant to contain that
+    stamped its clock before the work, so a render was enough to clear the
+    interval and trigger the next regeneration anyway.
+
+    Manifests are pure derived state: they describe whatever frames happen to be
+    on disk at the moment they run. Nothing about rendering depends on them, so
+    there is no ordering to preserve and no reason for either job to wait on the
+    other. Being a tick behind costs a tool one cycle of freshness; blocking the
+    backfill costs hours.
+    """
+    log.info("manifest worker started, regenerating every %.0fs", MANIFEST_INTERVAL_S)
+    while True:
+        try:
+            regenerate_manifests(force=True)
+        except Exception:
+            log.exception("manifest regeneration failed; will retry")
+        time.sleep(MANIFEST_INTERVAL_S)
 
 
 def run_once() -> None:
@@ -459,11 +475,11 @@ def main() -> None:
         "enabled" if RENDER_IN_SCHEDULER else "disabled (ECLIPSE_SCHEDULER_RENDER=0)",
     )
     # Supervision runs on its own thread so a dead worker is noticed within
-    # RENDER_SUPERVISE_SECONDS regardless of how long the current fetch takes.
+    # SUPERVISE_SECONDS regardless of how long the current fetch takes.
     if RENDER_IN_SCHEDULER:
-        ensure_render_worker()
+        ensure_workers()
         threading.Thread(
-            target=_supervise_render_worker_forever, name="render-supervisor", daemon=True
+            target=_supervise_workers_forever, name="worker-supervisor", daemon=True
         ).start()
 
     while True:
@@ -477,7 +493,11 @@ def main() -> None:
 if __name__ == "__main__":
     # Same module, two roles - see the automatic-rendering note above for why
     # rendering is a child process rather than part of the archiver's own.
+    # One module, three roles. Fetching, rendering and manifest generation each
+    # run as their own process so none of them can block the others.
     if RENDER_WORKER_FLAG in sys.argv[1:]:
         render_worker_main()
+    elif MANIFEST_WORKER_FLAG in sys.argv[1:]:
+        manifest_worker_main()
     else:
         main()
