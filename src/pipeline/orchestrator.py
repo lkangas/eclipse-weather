@@ -380,6 +380,16 @@ def run_once(
     _fetchable = [m for m, c in all_models.items() if "cycles" in c and "fetch" in c]
     _pass_started = now
 
+    # INIT-MAJOR, not model-major. The pass used to walk models.yaml in order
+    # and drain each model's due runs before moving on, so gefs_extended
+    # (entry 1) got even its OLDEST due run before gfs, ecmwf or icon were
+    # touched at all - and a freshly published 12Z run sat waiting behind a
+    # stale 00Z one from a different model. Sorting the whole candidate set by
+    # init time instead means every model's newest run is fetched before any
+    # model's second-newest, which is what "newest first" has to mean when the
+    # tools show all models side by side. Model order now only breaks ties
+    # between runs sharing an init hour.
+    candidates: list[tuple[datetime, str, dict]] = []
     for model_id, model_config in all_models.items():
         if models and model_id not in models:
             continue
@@ -387,55 +397,60 @@ def run_once(
             continue  # see config/production.yaml exclude_models
         if "cycles" not in model_config or "fetch" not in model_config:
             continue  # aggregator/reference entries carry no fetch path
+        for run_init in cycle_run_inits(model_config["cycles"], now):
+            if now < due_time(model_config.get("publication_lag_h", [0, 0]), run_init):
+                continue
+            if not should_attempt_fetch(model_id, run_init, now):
+                continue
+            candidates.append((run_init, model_id, model_config))
 
-        # Running totals so a pass in flight is visible as progress rather
-        # than as nothing-until-it-finishes.
+    # Newest init first; models.yaml order preserved within an init by the
+    # stable sort, so a shared cycle hour still goes in the documented order.
+    candidates.sort(key=lambda c: c[0], reverse=True)
+
+    due_by_model: dict[str, set] = {}
+    for idx, (run_init, model_id, model_config) in enumerate(candidates, 1):
+        due_by_model.setdefault(model_id, set()).add(run_init)
         publish_activity("model", model=model_id,
-                         model_index=_fetchable.index(model_id) + 1,
-                         models_total=len(_fetchable),
+                         model_index=idx, models_total=len(candidates),
                          pass_started_at=_pass_started,
                          runs_done=len(result.outcomes),
                          gb_reclaimed_so_far=round(result.bytes_reclaimed / 1024**3, 3),
                          errors_so_far=len(result.errors) + sum(
                              len(o.errors) for o in result.outcomes))
 
-        # NEWEST FIRST. cycle_run_inits() returns ascending, so the pass was
-        # working through a model's oldest runs first and reaching the newest
-        # last - exactly backwards while catching up. The newest run is the one
-        # the tools actually show, the one most likely to still be missing, and
-        # the one that will age out of upstream retention first (DWD ~24h,
-        # AEMET latest-only). A two-day-old run whose frames already exist can
-        # wait; a run published an hour ago cannot.
-        due_runs = set()
-        for run_init in sorted(cycle_run_inits(model_config["cycles"], now), reverse=True):
-            if now < due_time(model_config.get("publication_lag_h", [0, 0]), run_init):
-                continue
-            if not should_attempt_fetch(model_id, run_init, now):
-                continue
-            due_runs.add(run_init)
-            # Frames already complete -> nothing to fetch. This is the whole
-            # seeded-archive case: 53 runs whose frames were migrated from the
-            # desktop had no raw here, so already_fetched() said "never
-            # fetched" and the pass re-downloaded entire runs - including
-            # ~16 GB aifs_ens runs - to produce frames that already existed.
-            # The only thing that re-fetch could add is point extraction, and
-            # per the agreed split that is the DESKTOP's job: anything needing
-            # raw (point series, line-of-sight) is developed there, where raw
-            # is kept, and backfilled to the VPS. Production renders maps.
-            if _frames_complete(model_id, run_init):
-                outcome = process_run(model_id, model_config, run_init, settings,
-                                      apply=apply, now=now, fetch=False)
-                result.outcomes.append(outcome)
-                continue
-            try:
-                outcome = process_run(model_id, model_config, run_init, settings,
-                                      apply=apply, now=now)
-            except Exception as e:
-                result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
-                log.exception("process_run failed for %s %s", model_id, run_init.isoformat())
-                continue
-            rendered_anything = rendered_anything or bool(outcome.steps_rendered)
+        # Frames already complete -> nothing to fetch. This is the whole
+        # seeded-archive case: 53 runs whose frames were migrated from the
+        # desktop had no raw here, so already_fetched() said "never fetched"
+        # and the pass re-downloaded entire runs - including ~16 GB aifs_ens
+        # runs - to produce frames that already existed. The only thing that
+        # re-fetch could add is point extraction, and per the agreed split that
+        # is the DESKTOP's job: anything needing raw (point series,
+        # line-of-sight) is developed there, where raw is kept, and backfilled
+        # to the VPS. Production renders maps.
+        if _frames_complete(model_id, run_init):
+            outcome = process_run(model_id, model_config, run_init, settings,
+                                  apply=apply, now=now, fetch=False)
             result.outcomes.append(outcome)
+            continue
+        try:
+            outcome = process_run(model_id, model_config, run_init, settings,
+                                  apply=apply, now=now)
+        except Exception as e:
+            result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
+            log.exception("process_run failed for %s %s", model_id, run_init.isoformat())
+            continue
+        rendered_anything = rendered_anything or bool(outcome.steps_rendered)
+        result.outcomes.append(outcome)
+
+    for model_id, model_config in all_models.items():
+        if models and model_id not in models:
+            continue
+        if model_id in settings.exclude_models:
+            continue
+        if "cycles" not in model_config or "fetch" not in model_config:
+            continue
+        due_runs = due_by_model.get(model_id, set())
 
         # Runs not due a fetch this tick still deserve a reclaim visit: their
         # frames may have been rendered by an earlier pass (or migrated from
