@@ -41,28 +41,24 @@ is finished ahead of time.
 
 ## VPS migration
 
-**Shape (decided 2026-07-27):** the VPS runs fetch → render → delete with a
-bounded disk; the desktop keeps running the archiver with its keep-forever
-behaviour, as the raw archive of record. Anything that needs raw data — the
-29-place series, line-of-sight from the full grids, pressure-level work — gets
-developed and back-filled against the desktop, then shipped. That is what makes
-deletion on the VPS safe: it stops being a one-way door, so neither the site
-list nor T44 gates deployment any more.
+**Shape (decided 2026-07-27):** the VPS runs fetch → render → delete on a
+bounded disk and is **fully self-sufficient** — it fetches, renders, extracts
+the 29 places into its own `points.parquet`, and serves the tools without
+needing anything from the desktop. The desktop keeps archiving raw purely as a
+convenience for the occasional "what if I plotted X" that needs the full grids
+back (line-of-sight from pressure levels, a new derived field). That is a rare
+path, not an operational dependency.
 
-Three things the insurance depends on, or it is not insurance:
-- The desktop must not delete runs that matter. Routine bulk cleanup is fine,
-  but exempt anything whose forecast reaches the eclipse valid time — those are
-  the runs the whole archive exists for.
-- The desktop must stay up. It does: Task Scheduler task `\WSL Autostart -
-  eclipse-weather` fires **at system startup** (not at logon, deliberately),
-  boots the distro, and Docker's `restart: unless-stopped` brings the archiver
-  back. Verified 2026-07-27, last result 0. A *stalled* archiver is still
-  silent though — that is the healthcheck item above, and it matters more now
-  that this box holds the only copy of raw.
-- Both instances write `points.parquet` and they will diverge. Treat the
-  desktop's as authoritative (it is strictly more complete) and the VPS's as
-  disposable.
-
+What follows from that:
+- Anything the tools show routinely must be computable on the VPS alone. If a
+  feature needs raw data at serving time, it belongs in the render/extract
+  step, not in a downstream consumer.
+- The VPS's `points.parquet` is the operational one. The desktop's is only for
+  ad-hoc work.
+- Desktop uptime and desktop retention are convenience concerns, not
+  reliability ones. Bulk-clean it whenever; the only thing worth keeping
+  deliberately is runs whose forecasts reach the eclipse valid time, since
+  those are the ones a late idea would most likely want.
 
 - [ ] **Deploy the pipeline in dry-run** and watch it. Built and verified:
       `src/pipeline/`, `docker-compose.prod.yml`, `config/production.yaml`,
