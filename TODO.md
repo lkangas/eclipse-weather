@@ -44,8 +44,17 @@ is finished ahead of time.
       Never deletes without `--apply` **and** `reclaim.enabled`.
 - [ ] **Seed production with existing renders** (~11k PNGs, ~540 MB). Decide:
       everything, or a recent window?
-- [ ] **Enable `--apply`.** The site-list blocker is cleared — extraction now
-      uses the curated 29 places (145 series incl. WNW strips).
+- [ ] **Let it delete for real.** Not a code or config change: it means
+      starting the production container with the command
+      `docker-compose.prod.yml` already carries —
+      `python -m src.pipeline.run --loop --apply` — after reading a `--sweep`
+      on that box and believing it. Without `--apply` every pass is plan-only:
+      it works out exactly what it would delete, logs each file with a reason,
+      and removes nothing. Two gates must both be open (`--apply` on the
+      command line *and* `reclaim.enabled` in `config/production.yaml`, already
+      true), so a box can be locked read-only from config alone.
+      The site-list blocker is cleared — extraction now uses the curated 29
+      places (145 series incl. WNW strips).
 - [ ] **Status/monitoring page.** `rendered_index.json` and
       `pipeline_status.json` already exist as the data; this is mostly a page.
       Matters once the box is unattended.
