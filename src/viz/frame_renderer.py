@@ -1115,8 +1115,16 @@ def _render_temp_frame(model_name, run_init, step, lats, lons, values, bbox, out
                colors="#333333", linewidths=0.5, alpha=0.7)
 
     draw_basemap(ax, bbox)
-    ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "r-", linewidth=0.8, alpha=0.6, zorder=7)
-    ax.plot(_TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "r--", linewidth=1, alpha=0.8, zorder=7)
+    # BLACK here, red on every cloud frame - matching the reviewed prototype
+    # (scripts/render_temp_panels.py), not the cloud convention. Red is right
+    # over Blues/composite backgrounds, but RdYlBu_r spends its hot end on
+    # exactly that red, so the band and the hottest ground it crosses come out
+    # nearly the same colour - and the hottest ground is central Iberia, which
+    # is precisely where the band runs.
+    ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "-", color="k",
+            linewidth=0.8, alpha=0.85, zorder=7)
+    ax.plot(_TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "--", color="k",
+            linewidth=1.1, alpha=0.95, zorder=7)
 
     ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
     ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
