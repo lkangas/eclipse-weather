@@ -394,14 +394,12 @@ function coverage(cov, activity) {
     return m < 90 ? Math.round(m) + "m" : (m/60).toFixed(1) + "h";
   };
 
-  // Most urgent first: a model with runs going unfetched matters more than one
-  // that is simply idle, and alphabetical order buries it.
-  const rows = Object.entries(cov.models).sort((a, b) => {
-    const score = r => r[1].filter(x => x.state === "gone").length * 100
-                     + r[1].filter(x => x.state === "overdue").length * 10
-                     + r[1].filter(x => x.state === "fetched").length;
-    return score(b) - score(a) || a[0].localeCompare(b[0]);
-  });
+  // Alphabetical, always. Sorting by urgency meant rows physically moved every
+  // time a state changed, so the model you were reading jumped somewhere else
+  // mid-glance and you had to re-find it. A stable position is worth more than
+  // putting problems at the top - the verdict banner already names them, and
+  // colour makes them findable in place.
+  const rows = Object.entries(cov.models).sort((a, b) => a[0].localeCompare(b[0]));
 
   $("cov").innerHTML = rows.map(([mid, rs]) => {
     let done = 0, prevDay = null, dividerDone = false;
