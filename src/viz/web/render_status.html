@@ -43,9 +43,18 @@
            font-variant-numeric: tabular-nums; white-space: nowrap; }
   th { background: #f0e8d2; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; }
   td.n { text-align: right; }
-  .mini { height: 9px; background: var(--pend); position: relative; min-width: 90px; }
-  .mini > i { display: block; height: 100%; background: var(--done); }
-  .mini.partial > i { background: var(--accent); }
+  .strip { display: flex; gap: 1px; min-width: 150px; height: 11px; }
+  .strip > i { flex: 1 1 0; min-width: 2px; background: var(--pend); }
+  .strip > i.s-complete { background: var(--done); }
+  .strip > i.s-partial  { background: var(--accent); }
+  .strip > i.s-none     { background: var(--pend); }
+  /* Newest is leftmost, so mark that edge - without it the strip reads
+     left-to-right as "oldest first", which is the opposite of the truth. */
+  .strip > i:first-child { box-shadow: inset 2px 0 0 0 var(--ink); }
+  .strip.empty { background: var(--pend); }
+  .freshnote { display: block; font-size: 9px; color: var(--faint); margin-top: 2px; }
+  .freshnote.bad { color: var(--warn); font-weight: 700; }
+  tr.behind td { background: #fff6f4; }
   svg { background: #fff; border: 1px solid var(--rule); display: block; width: 100%; height: 150px; }
   .charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 4px; }
   .charts figure { margin: 0; }
@@ -98,7 +107,7 @@
 
 <table>
   <thead><tr>
-    <th>Model</th><th>Progress</th><th class="n">Complete</th><th class="n">Archived</th>
+    <th>Model</th><th>Runs — newest first &#9664;</th><th class="n">Complete</th><th class="n">Archived</th>
     <th class="n">Started</th><th class="n">Frames</th><th>Fields</th>
   </tr></thead>
   <tbody id="rows"></tbody>
@@ -177,11 +186,28 @@ function render(index, hist, live) {
   const rows = Object.entries(index.models).sort((a, b) =>
     (b[1].archived_runs - b[1].complete_runs) - (a[1].archived_runs - a[1].complete_runs));
   $("rows").innerHTML = rows.map(([id, m]) => {
-    const p = m.archived_runs ? (m.complete_runs / m.archived_runs) * 100 : 0;
-    const partial = m.rendered_runs > m.complete_runs;
-    return `<tr>
+    // One segment per archived run, NEWEST AT THE LEFT - the order the workers
+    // consume the queue in. A percentage cannot distinguish "newest rendered,
+    // old tail missing" (fine) from "grinding through old runs while fresh ones
+    // wait" (not fine), and it is the newest runs the tools actually show.
+    const runs = m.runs || [];
+    const strip = runs.length
+      ? `<div class="strip">` + runs.map(r =>
+          `<i class="s-${r.state}" title="${r.init.slice(0,4)}-${r.init.slice(4,6)}-${r.init.slice(6,8)} ${r.init.slice(8,10)}Z — ${r.state}"></i>`
+        ).join("") + `</div>`
+      : `<div class="strip empty"></div>`;
+    // How deep the unbroken run of rendered newest runs goes: the headline
+    // "are the runs anyone will look at actually done?" number.
+    let fresh = 0;
+    while (fresh < runs.length && runs[fresh].state === "complete") fresh++;
+    const behind = fresh === 0 && runs.length > 0;
+    return `<tr${behind ? ' class="behind"' : ''}>
       <td>${id}</td>
-      <td><div class="mini${partial ? " partial" : ""}"><i style="width:${p.toFixed(1)}%"></i></div></td>
+      <td>${strip}<span class="freshnote${behind ? " bad" : ""}">${
+        runs.length === 0 ? "" :
+        behind ? "newest run NOT rendered" :
+        fresh === runs.length ? "all rendered" :
+        `newest ${fresh} rendered`}</span></td>
       <td class="n">${m.complete_runs}</td>
       <td class="n">${m.archived_runs}</td>
       <td class="n">${m.rendered_runs}</td>
@@ -194,7 +220,11 @@ function render(index, hist, live) {
     "&quot;Complete&quot; means every field this model supports has a frame for every step that " +
     "produced one; &quot;started&quot; counts runs with at least one frame, so started &gt; complete " +
     "is a run mid-render. Fields come from supported_fields() — one cloud field per model, plus " +
-    "probability only where an ensemble genuinely has native low/mid/high.";
+    "probability only where an ensemble genuinely has native low/mid/high. " +
+    "Each segment in the runs column is one archived run, <b>newest at the left</b> " +
+    "(marked edge): green complete, amber part-rendered, pale not yet started. " +
+    "Workers claim newest-first, so a green left edge with a pale tail is the " +
+    "expected shape mid-backfill; pale at the left means fresh runs are waiting.";
 }
 
 // The worker writes render_worker_status.json on entering and leaving each run.

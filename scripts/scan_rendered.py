@@ -22,6 +22,7 @@ import json
 import re
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 
 from src.config import DATA_RAW
 from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
@@ -68,14 +69,36 @@ def _worker_checked_count(model_id: str) -> int:
     )
 
 
-def _archived_run_count(model_id: str) -> int:
+def _has_raw_data(run_dir: Path) -> bool:
+    """At least one real data file - not just bookkeeping dotfiles.
+
+    A failed fetch still leaves the run directory behind holding .extracted /
+    .last_fetch_attempt markers, so "the directory is non-empty" counted those
+    as archived. The render worker skips them (raw_count == 0), so they were
+    permanently-unrenderable backlog: the gap could never reach zero and the
+    newest-first strip showed holes that no amount of rendering would fill.
+    Two such runs exist in the renderable set today - icon_eu and icon_global
+    2026-07-25 12Z, whose DWD fetch errored and which are now past DWD's ~24h
+    retention, so they are unrecoverable rather than pending.
+    """
+    return any(p.is_file() and not p.name.startswith(".") for p in run_dir.iterdir())
+
+
+def _archived_run_names(model_id: str) -> list[str]:
+    """Archived run directories, NEWEST FIRST - the order the render workers
+    themselves consume the queue in."""
     d = DATA_RAW / model_id
     if not d.is_dir():
-        return 0
-    return sum(
-        1 for p in d.iterdir()
-        if p.is_dir() and _RUN_DIR_RE.match(p.name) and any(p.iterdir())
+        return []
+    return sorted(
+        (p.name for p in d.iterdir()
+         if p.is_dir() and _RUN_DIR_RE.match(p.name) and _has_raw_data(p)),
+        reverse=True,
     )
+
+
+def _archived_run_count(model_id: str) -> int:
+    return len(_archived_run_names(model_id))
 
 
 def _scan_model(model_id: str) -> dict:
@@ -98,13 +121,30 @@ def _scan_model(model_id: str) -> dict:
             runs.setdefault(match.group(1), {})
             runs[match.group(1)][field] = runs[match.group(1)].get(field, 0) + 1
 
+    def _state(name: str) -> str:
+        per_field = runs.get(name)
+        if not per_field:
+            return "none"
+        if len(per_field) == len(fields) and len(set(per_field.values())) == 1:
+            return "complete"
+        return "partial"
+
     complete = 0
     for per_field in runs.values():
         if len(per_field) == len(fields) and len(set(per_field.values())) == 1:
             complete += 1
 
+    # Per-run state, newest first. A single percentage cannot tell "the newest
+    # run is rendered and the tail is missing" from the reverse, and the newest
+    # runs are the ones the tools actually show - so the progress bar has to be
+    # ordered, not aggregated.
+    archived = _archived_run_names(model_id)
     return {
-        "archived_runs": _archived_run_count(model_id),
+        "runs": [{"init": name, "state": _state(name)} for name in archived],
+        "newest_unrendered": next(
+            (name for name in archived if _state(name) != "complete"), None
+        ),
+        "archived_runs": len(archived),
         "worker_checked_runs": _worker_checked_count(model_id),
         "rendered_runs": len(runs),
         "complete_runs": complete,
@@ -144,7 +184,8 @@ def _append_history(index: dict) -> None:
         "pngs": t["png_count"],
     }
     try:
-        rows = HISTORY_PATH.read_text(encoding="utf-8").splitlines() if HISTORY_PATH.exists() else []
+        rows = (HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+                if HISTORY_PATH.exists() else [])
     except OSError:
         rows = []
     rows.append(json.dumps(row, separators=(",", ":")))
