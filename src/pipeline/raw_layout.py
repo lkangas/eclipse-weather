@@ -22,7 +22,7 @@ deleting something unrenderable (silent, unrecoverable).
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 
 from src.fetchers.base import full_range_steps
 
@@ -51,6 +51,14 @@ _MF_GROUP_RE = re.compile(r"_(\d{2,3})H(\d{2,3})H\.grib2$")
 # leaves these all over data/raw/. They are pure derivatives of their parent
 # and must go with it (and may go alone, once the parent already has).
 _IDX_RE = re.compile(r"^(?P<parent>.+\.grib2)\.[0-9a-z]+\.idx$")
+
+# aemet_harmonie names its rasters by VALID TIME, not by forecast step - it is
+# the only source here that does, because the bundle is a set of map images
+# rather than a stepped model output. Without this the step is unknowable, so
+# steps_in_file() returned None, every raster was "never reclaim", and each
+# pass reported all 48 of them as "unknown raw filename" - 48 of the 48 entries
+# in needs_attention, which buries anything real.
+_AEMET_RE = re.compile(r"_nubosidad_(\d{8}T\d{6})Z\.tif$")
 
 # Written by the archiver/pipeline itself, never by a fetcher. These are the
 # run's bookkeeping and are what keeps already_fetched() true after every
@@ -93,6 +101,19 @@ def steps_in_file(
         lo, hi = int(m.group(1)), int(m.group(2))
         published = full_range_steps(model_config, run_init)
         return frozenset(s for s in published if lo <= s <= hi)
+
+    m = _AEMET_RE.search(filename)
+    if m:
+        valid = datetime.strptime(m.group(1), "%Y%m%dT%H%M%S").replace(tzinfo=UTC)
+        delta = (valid - run_init).total_seconds() / 3600
+        # A raster valid BEFORE its own run_init means the file is filed under
+        # the wrong run. Return None (never reclaim) rather than a negative or
+        # rounded step - that misfiling is exactly what the AEMET fetcher fix
+        # addresses, and silently reclaiming on a guessed step would destroy
+        # the evidence.
+        if delta < 0 or not float(delta).is_integer():
+            return None
+        return frozenset({int(delta)})
 
     return None
 
