@@ -33,6 +33,14 @@ MODELS = [
 
 INDEX_PATH = OUTPUT_DIR / "rendered_index.json"
 
+# A snapshot cannot answer "are we catching up or falling behind", which is the
+# only question that matters while a backlog is draining - so each scan also
+# appends one compact line here. JSONL rather than a rewritten array so a
+# concurrent reader can never catch a half-written file, and trimmed to the
+# most recent HISTORY_MAX_ROWS so it stays a small, servable file forever.
+HISTORY_PATH = OUTPUT_DIR / "rendered_history.jsonl"
+HISTORY_MAX_ROWS = 2880  # 24h at one scan per 30s
+
 # Same convention as render_frame()'s output_path:
 #   OUTPUT_DIR/{model}/{field}/{YYYYMMDDHH}_{step:03d}.png
 _FRAME_RE = re.compile(r"^(\d{10})_(\d+)\.png$")
@@ -101,7 +109,26 @@ def scan_once() -> dict:
     }
     INDEX_PATH.parent.mkdir(parents=True, exist_ok=True)
     INDEX_PATH.write_text(json.dumps(index, indent=2), encoding="utf-8")
+    _append_history(index)
     return index
+
+
+def _append_history(index: dict) -> None:
+    """One line per scan: just the totals, which is all a trend needs."""
+    t = index["totals"]
+    row = {
+        "at": index["updated_at"],
+        "archived": t["archived_runs"],
+        "rendered": t["rendered_runs"],
+        "complete": t["complete_runs"],
+        "pngs": t["png_count"],
+    }
+    try:
+        rows = HISTORY_PATH.read_text(encoding="utf-8").splitlines() if HISTORY_PATH.exists() else []
+    except OSError:
+        rows = []
+    rows.append(json.dumps(row, separators=(",", ":")))
+    HISTORY_PATH.write_text("\n".join(rows[-HISTORY_MAX_ROWS:]) + "\n", encoding="utf-8")
 
 
 def main() -> None:

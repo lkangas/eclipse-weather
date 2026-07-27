@@ -38,6 +38,26 @@ is finished ahead of time.
 
 ## VPS migration
 
+**Shape (decided 2026-07-27):** the VPS runs fetch → render → delete with a
+bounded disk; the desktop keeps running the archiver with its keep-forever
+behaviour, as the raw archive of record. Anything that needs raw data — the
+29-place series, line-of-sight from the full grids, pressure-level work — gets
+developed and back-filled against the desktop, then shipped. That is what makes
+deletion on the VPS safe: it stops being a one-way door, so neither the site
+list nor T44 gates deployment any more.
+
+Three things the insurance depends on, or it is not insurance:
+- The desktop must not delete runs that matter. Routine bulk cleanup is fine,
+  but exempt anything reaching 2026-08-12 and everything in the Aug 5–12
+  window.
+- The desktop must stay up. Today it does not survive a reboot without someone
+  opening a terminal (WSL has no autostart) — tolerable for a dev box, a real
+  liability once it holds the only copy of raw.
+- Both instances write `points.parquet` and they will diverge. Treat the
+  desktop's as authoritative (it is strictly more complete) and the VPS's as
+  disposable.
+
+
 - [ ] **Deploy the pipeline in dry-run** and watch it. Built and verified:
       `src/pipeline/`, `docker-compose.prod.yml`, `config/production.yaml`,
       55 fixture checks, peak in-flight raw 0.26 GB vs 16 GB per aifs_ens run.
