@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import argparse
 import logging
+import threading
 import time
 from datetime import UTC, datetime
 
 from src.config import get_model, load_models
 from src.pipeline import chunking, coverage, orchestrator, reclaim, verify
 from src.pipeline.settings import load_settings
+
+# How often the coverage matrix is rebuilt, independent of the pass loop.
+COVERAGE_INTERVAL_S = 60.0
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pipeline.run")
@@ -200,8 +204,25 @@ def main() -> None:
             orchestrator.ping_healthcheck("/fail")
 
     if not args.loop:
+        coverage.write()
         one_pass()
         return
+
+    # Coverage is a disk scan (~3 s) and says nothing about the pass in flight,
+    # so tying it to pass completion made the dashboard blank for exactly as
+    # long as a first pass takes - which is when you most want to look at it.
+    # It runs on its own clock instead. A thread is fine here: it only reads
+    # directory listings and writes one small file, touching no eccodes or
+    # matplotlib state.
+    def _coverage_forever() -> None:
+        while True:
+            try:
+                coverage.write()
+            except Exception:
+                log.exception("coverage refresh failed; will retry")
+            time.sleep(COVERAGE_INTERVAL_S)
+
+    threading.Thread(target=_coverage_forever, name="coverage", daemon=True).start()
 
     log.info("production pipeline starting (mode=%s, interval=%ds)",
              "apply" if args.apply else "dry-run", args.interval)

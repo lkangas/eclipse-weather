@@ -146,11 +146,13 @@ async function poll() {
 function render(status, activity, cov, hist, fails) {
   $("sub").textContent = status
     ? `last pass ${ago(status.finished_at || status.started_at)} · mode ${status.mode} · ${hist.length} pass(es) recorded`
-    : "no pass has completed yet";
+    : (activity && activity.pass_started_at
+        ? `first pass in progress, started ${ago(activity.pass_started_at)} — coverage below is live and does not wait for it`
+        : "no pass has completed yet");
 
   verdict(status, activity, cov);
   live(activity);
-  cards(status, hist, cov);
+  cards(status, hist, cov, activity);
   chartDisk(hist, status);
   chartDur(hist);
   coverage(cov);
@@ -216,11 +218,13 @@ function live(a) {
   if (a.window_cap_h != null) what += ` <span class="muted">≤+${a.window_cap_h}h</span>`;
   if (a.chunk) what += ` <span class="muted">chunk ${a.chunk}/${a.chunks}</span>`;
   if (a.model_index) what += ` <span class="muted">· model ${a.model_index}/${a.models_total}</span>`;
+  if (a.runs_done != null) what += ` <span class="muted">· ${a.runs_done} run(s) done this pass</span>`;
+  if (a.gb_reclaimed_so_far) what += ` <span class="muted">· ${a.gb_reclaimed_so_far} GB freed</span>`;
   el.innerHTML = `<span class="dot${stale?" idle":""}"></span>${what}` +
     `<span class="muted">· ${ago(a.updated_at)}${stale?" — stale":""}</span>`;
 }
 
-function cards(status, hist, cov) {
+function cards(status, hist, cov, activity) {
   const free = status ? status.free_gb_after : null;
   const floor = status && status.min_free_gb;
   const lastDur = hist.length ? hist[hist.length-1].duration_s : null;
@@ -237,7 +241,11 @@ function cards(status, hist, cov) {
   $("cards").innerHTML =
     card(free!=null ? free.toFixed(1)+" GB" : "–", "free disk" + (floor?` · floor ${floor}`:""),
          floor && free!=null && free<floor ? "bad" : (floor && free!=null && free<floor*1.5 ? "warn" : "")) +
-    card(lastDur!=null ? lastDur.toFixed(0)+"s" : "–", `pass duration · interval ${PASS_INTERVAL_S}s`,
+    card(lastDur!=null ? lastDur.toFixed(0)+"s"
+          : (activity && activity.pass_started_at
+             ? ((Date.now()-new Date(activity.pass_started_at).getTime())/60000).toFixed(0)+"m…"
+             : "–"),
+         lastDur!=null ? `pass duration · interval ${PASS_INTERVAL_S}s` : "current pass, still running",
          lastDur > PASS_INTERVAL_S ? "warn" : "") +
     card(gbPerH!=null ? gbPerH.toFixed(2) : "–", "GB reclaimed / h") +
     card(missing, "runs missing", missing ? "bad" : "");

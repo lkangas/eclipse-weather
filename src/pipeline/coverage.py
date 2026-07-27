@@ -21,20 +21,28 @@ from datetime import UTC, datetime
 LOOKBACK_H = 48
 
 
-def _has_frames(model_id: str, run_init: datetime) -> tuple[bool, int]:
+def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
+    """{run_stamp: {field: n_frames}} from ONE listing per field directory.
+
+    The obvious implementation - ask "does this run have frames?" per run, per
+    field - re-lists a directory holding thousands of files once per question,
+    which made building the matrix slow enough that it was only worth doing at
+    the end of a pass. That is precisely backwards: this is the panel you want
+    while a long pass is still running.
+    """
     from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
-    stamp = f"{run_init:%Y%m%d%H}_"
-    total = 0
-    fields_hit = 0
+    idx: dict[str, dict[str, int]] = {}
     for field in supported_fields(model_id):
         d = OUTPUT_DIR / model_id / field
         if not d.is_dir():
             continue
-        n = sum(1 for p in d.iterdir() if p.name.startswith(stamp) and p.suffix == ".png")
-        if n:
-            fields_hit += 1
-            total += n
-    return fields_hit > 0, total
+        for p in d.iterdir():
+            if p.suffix != ".png":
+                continue
+            stamp = p.name.split("_", 1)[0]
+            idx.setdefault(stamp, {})
+            idx[stamp][field] = idx[stamp].get(field, 0) + 1
+    return idx
 
 
 def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
@@ -58,6 +66,7 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
             continue
         renderable = model_id in _MODEL_READERS
         n_fields = len(supported_fields(model_id)) if renderable else 0
+        index = _frame_index(model_id) if renderable else {}
         rows = []
         for run_init in cycle_run_inits(cfg["cycles"], now, lookback_hours=lookback_h):
             due = due_time(cfg.get("publication_lag_h", [0, 0]), run_init)
@@ -66,15 +75,12 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
             elif now < due:
                 state, frames = "pending", 0
             else:
-                any_frames, frames = _has_frames(model_id, run_init)
-                if not any_frames:
+                per_field = index.get(f"{run_init:%Y%m%d%H}", {})
+                frames = sum(per_field.values())
+                if not per_field:
                     state = "missing"
                 else:
-                    hit = sum(
-                        1 for f in supported_fields(model_id)
-                        if _field_has(model_id, f, run_init)
-                    )
-                    state = "ok" if hit == n_fields else "partial"
+                    state = "ok" if len(per_field) == n_fields else "partial"
             rows.append({
                 "run_init": run_init.isoformat().replace("+00:00", "Z"),
                 "state": state,
@@ -89,15 +95,6 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         "lookback_h": lookback_h,
         "models": out,
     }
-
-
-def _field_has(model_id: str, field: str, run_init: datetime) -> bool:
-    from src.viz.frame_renderer import OUTPUT_DIR
-    d = OUTPUT_DIR / model_id / field
-    if not d.is_dir():
-        return False
-    stamp = f"{run_init:%Y%m%d%H}_"
-    return any(p.name.startswith(stamp) for p in d.iterdir())
 
 
 def write(now: datetime | None = None) -> None:

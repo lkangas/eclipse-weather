@@ -353,10 +353,16 @@ def run_once(
         if "cycles" not in model_config or "fetch" not in model_config:
             continue  # aggregator/reference entries carry no fetch path
 
+        # Running totals so a pass in flight is visible as progress rather
+        # than as nothing-until-it-finishes.
         publish_activity("model", model=model_id,
                          model_index=_fetchable.index(model_id) + 1,
                          models_total=len(_fetchable),
-                         pass_started_at=_pass_started)
+                         pass_started_at=_pass_started,
+                         runs_done=len(result.outcomes),
+                         gb_reclaimed_so_far=round(result.bytes_reclaimed / 1024**3, 3),
+                         errors_so_far=len(result.errors) + sum(
+                             len(o.errors) for o in result.outcomes))
 
         due_runs = set()
         for run_init in cycle_run_inits(model_config["cycles"], now):
