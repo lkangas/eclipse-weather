@@ -231,9 +231,9 @@ mtimes answer it. So the safe repair is a re-file, not a delete:
      to runs that never produced them. Those rows need deleting and
      re-extracting too - re-filing raw alone does not fix points.parquet.
 
-The alternative - delete the 9 contaminated and mislabelled directories and
-keep only what is unambiguous - throws away the 07-22 12Z, 07-23 12Z and
-07-25/07-26 runs entirely for no benefit, since the data in them is fine.
+The alternative - delete every contaminated and mislabelled directory and
+keep only what is unambiguous - throws away whole runs (07-23 12Z, 07-25 and
+07-26) for no benefit, since the data inside them is fine.
 
 NOT proposed: any automatic repair inside the fetcher. It now refuses to
 write outside the run a bundle declares, so the archive stops getting worse

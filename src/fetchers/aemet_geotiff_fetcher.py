@@ -449,11 +449,14 @@ def fetch(
     # foreign run's frames left behind by a top-up (see the module docstring);
     # reported, never deleted - see scripts/aemet_harmonie.py audit.
     bundle_valid = {vt for vt, _ in cloud_rasters}
-    strays = [
-        p for p in out_dir.glob(f"{model_name}_nubosidad_*.tif")
-        if datetime.strptime(p.stem.split("_")[-1], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
-        not in bundle_valid
-    ]
+    strays = []
+    for p in out_dir.glob(f"{model_name}_nubosidad_*.tif"):
+        try:
+            valid = datetime.strptime(p.stem.split("_")[-1], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        except ValueError:
+            continue  # not one of ours to have an opinion about
+        if valid not in bundle_valid:
+            strays.append(p)
     if strays:
         log.warning(
             "aemet_harmonie %s: %d raster(s) in this directory are not part of the run's "
@@ -462,9 +465,20 @@ def fetch(
         )
 
     # Stamped last, so a run interrupted part-way through writing is not
-    # mistaken for a complete archive of this bundle on the next pass.
+    # mistaken for a complete archive of this bundle on the next pass. Failing
+    # to write it costs a redundant download next time and nothing else, so it
+    # must never fail the fetch - a run directory the current process cannot
+    # write into is normal (the archiver container writes as root; a hand-run
+    # fetch from the host does not).
     if body_token and not strays and len(cloud_rasters) >= expected_rasters:
-        (out_dir / _BUNDLE_TOKEN_MARKER).write_text(body_token, encoding="utf-8")
+        try:
+            (out_dir / _BUNDLE_TOKEN_MARKER).write_text(body_token, encoding="utf-8")
+        except OSError as exc:
+            log.warning(
+                "aemet_harmonie %s: could not record the bundle token (%s) - the next "
+                "fetch will re-download this bundle instead of skipping it",
+                format_init_dir(effective_run_init), exc,
+            )
 
     # run_init is the EFFECTIVE one, so callers render, extract and reclaim the
     # run that was actually downloaded rather than the one they asked for.
