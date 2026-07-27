@@ -50,6 +50,9 @@ MODELS = [
     ("aifs_ens", "AIFS ENS"),
     ("icon_eu", "ICON EU"),
     ("icon_global", "ICON Global"),
+    # Last, same as in the other two generators: it is the coarsest source
+    # here (colour-ramp inversion of a rendered map, total_only).
+    ("aemet_harmonie", "AEMET HARMONIE"),
 ]
 
 # render_frame()'s own output_path convention:

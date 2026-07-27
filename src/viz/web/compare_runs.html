@@ -85,6 +85,8 @@
     border-left: 1px solid #d8d4c8;
   }
   .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
+  /* Silent truncation reads as missing data. Say what was cut and why. */
+  .truncNote { font-size: 10px; color: #7a776c; white-space: nowrap; }
   .placeholderNote {
     font-size: 9.5px;
     color: #a8a498;
@@ -339,6 +341,7 @@
   </div>
   <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
   <span class="placeholderNote" id="placeholderNote"></span>
+  <span class="truncNote" id="truncNote"></span>
   <div>
     <label for="extentInput">Extent</label>
     <input type="range" id="extentInput" min="0" max="100" value="100">
@@ -470,6 +473,7 @@ const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
 const rowsEl = document.getElementById("rows");
+let hiddenRunCount = 0;   // runs older than MAX_ROWS, not drawn
 const axisTrack = document.getElementById("axisTrack");
 const stackWrap = document.getElementById("stackWrap");
 const cursorLine = document.getElementById("cursorLine");
@@ -599,13 +603,38 @@ function populateModelSelect() {
   });
 }
 
+// How many run rows the stack shows at most, newest first. The archive keeps
+// growing - arome_france already publishes 8 cycles a day - and every extra
+// row shortens the rest, so a model with 40 runs squeezed the recent ones
+// nobody scrolls past into a few pixels each. Run-over-run evolution is a
+// question about RECENT runs converging or diverging; a fortnight-old run is
+// history, not comparison.
+const MAX_ROWS = 18;
+
 function loadModel(modelId) {
   selectedModelId = modelId;
   const model = MODELS[modelId];
-  const runsNewestFirst = [...model.runs].reverse();
+  // Newest first, then truncated - so the cut always falls on the OLDEST runs.
+  const allRunsNewestFirst = [...model.runs].reverse();
+  const runsNewestFirst = allRunsNewestFirst.slice(0, MAX_ROWS);
+  hiddenRunCount = allRunsNewestFirst.length - runsNewestFirst.length;
+
+  // Axis spans only the runs actually drawn: keeping AXIS_START at the oldest
+  // ARCHIVED run would leave a wide empty band on the left for runs that have
+  // no row, which reads as missing data rather than as deliberate truncation.
+  const truncEl = document.getElementById("truncNote");
+  if (truncEl) {
+    truncEl.textContent = hiddenRunCount
+      ? `newest ${runsNewestFirst.length} of ${allRunsNewestFirst.length} runs`
+      : "";
+    truncEl.title = hiddenRunCount
+      ? `${hiddenRunCount} older run(s) archived but not shown - the stack is capped at `
+        + `${MAX_ROWS} rows so recent runs stay readable`
+      : "";
+  }
 
   AXIS_START = runsNewestFirst[runsNewestFirst.length - 1].runInit;
-  const reaches = model.runs.map(r => stepValidTime(r, Math.max(...r.steps)));
+  const reaches = runsNewestFirst.map(r => stepValidTime(r, Math.max(...r.steps)));
   AXIS_END = new Date(Math.max(...reaches.map(d => d.getTime()), axisEndFloor()));
 
   const fullSpanMs = AXIS_END - AXIS_START;

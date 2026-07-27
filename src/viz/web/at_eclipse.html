@@ -232,17 +232,6 @@
      it every panel below would just say "not yet covering" with no hint that
      this is expected rather than a broken tool. flex:none so it never eats
      the room #gallery/#mapArea need. */
-  #targetEmpty {
-    flex: none;
-    margin-top: 4px;
-    border: 1px solid #c9b98a;
-    background: #fdf8e8;
-    color: #55534c;
-    font-size: 10.5px;
-    line-height: 1.5;
-    padding: 6px 8px;
-  }
-  #targetEmpty b { color: #232320; }
 
   #mapArea {
     margin-top: 2px; border: 1px solid #232320; background: #fff;
@@ -375,8 +364,6 @@
   <span><span class="sw" style="background:#5a4a8b"></span><span id="legendTarget">target T</span></span>
   <span><span class="sw" style="background:#2f6f3f;opacity:.6"></span>now</span>
 </div>
-
-<div id="targetEmpty" style="display:none;"></div>
 
 <div id="mapArea" style="display:none;">
   <div class="placeholder-tag" id="mapAreaTag">click a row</div>
@@ -538,7 +525,6 @@ const eclipseLine = document.getElementById("eclipseLine");
 const eclipseTag = document.getElementById("eclipseTag");
 const nowLine = document.getElementById("nowLine");
 const targetGroup = document.getElementById("targetGroup");
-const targetEmpty = document.getElementById("targetEmpty");
 const legendNoCoverage = document.getElementById("legendNoCoverage");
 const legendTarget = document.getElementById("legendTarget");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
@@ -766,7 +752,7 @@ function placeMarkers() {
     } else {
       // Off the axis entirely - the normal case for the real-eclipse target,
       // which sits weeks past the last archived run. Hiding the line is
-      // right; #targetEmpty below is what explains the situation in words.
+      // right; the per-panel tags below say so in place instead.
       el.style.display = "none";
     }
   };
@@ -909,58 +895,12 @@ function describeRunAtTarget(model, run) {
   };
 }
 
-// How many archived runs reach the selected target at all. Counted over
-// every run, not just the extent slider's visible window: this is a fact
-// about the target, not about the current zoom.
-function coveringRunCount() {
-  let covering = 0, total = 0;
-  MODELS.forEach(m => m.runs.forEach(r => {
-    total += 1;
-    if (targetData(r).covers) covering += 1;
-  }));
-  return { covering, total };
-}
-
-// The banner is what keeps "the real eclipse is still weeks past every
-// model's horizon" from looking like a broken tool: without it the panels
-// below would just say "not yet covering" everywhere with no explanation.
-// Shown whenever nothing on screen has a frame (anyShown === false), with
-// wording that distinguishes "no run reaches this target at all" from "some
-// do, but not the ones nearest the cursor".
-function updateTargetEmpty(anyShown) {
-  if (anyShown) {
-    targetEmpty.style.display = "none";
-    return;
-  }
-  const info = currentTargetInfo();
-  const label = info ? info.label : "this target";
-  const { covering, total } = coveringRunCount();
-  const others = TARGETS.filter(t => t.key !== currentTarget).map(t => t.label);
-  const switchHint = others.length
-    ? "  Switch target to " + others.join(" / ") + " to see current data."
-    : "";
-
-  targetEmpty.style.display = "block";
-  targetEmpty.innerHTML = "";
-  const head = document.createElement("b");
-  const body = document.createElement("div");
-  if (covering === 0) {
-    head.textContent = "No archived run reaches " + label +
-      " (valid " + fmtTime(TARGET_VALID_TIME) + ") yet.";
-    body.textContent =
-      "All " + total + " archived runs fall short of that valid time — each " +
-      "only forecasts as far as its model's horizon from its own init, and " +
-      "short-range models (AROME France, ~51 h) never will." + switchHint;
-  } else {
-    head.textContent = "Nothing to show at the cursor for " + label +
-      " (valid " + fmtTime(TARGET_VALID_TIME) + ").";
-    body.textContent =
-      "Only " + covering + " of " + total + " archived runs reach that valid " +
-      "time (the dark ticks above) — drag the run-init cursor onto one." + switchHint;
-  }
-  targetEmpty.appendChild(head);
-  targetEmpty.appendChild(body);
-}
+// updateTargetEmpty() used to live here: a block between the run stack and the
+// maps that appeared whenever nothing at the cursor had a frame, explaining
+// why. It toggled display, so the map panels below jumped up and down as the
+// cursor moved - and with the eclipse as the default target, where 2 runs of
+// 245 have coverage, it was showing most of the time. The per-panel "not yet
+// covering" tags already say the same thing in place, without moving anything.
 
 function updateUI() {
   const trackRect = axisTrack.getBoundingClientRect();
@@ -975,7 +915,7 @@ function updateUI() {
 
   // Does anything on screen actually have a frame at this cursor position?
   // Collected here because the row loop already resolves every model's
-  // nearest run, and both views need the same answer for #targetEmpty.
+  // nearest run, and both views need the same answer.
   let anyShown = false;
   builtRows.forEach(({ model, track }) => {
     const nearest = nearestRun(model, cursorTime);
@@ -986,8 +926,6 @@ function updateUI() {
       tickEl.classList.toggle("near", parseFloat(tickEl.dataset.runMs) === nearestMs);
     });
   });
-  updateTargetEmpty(anyShown);
-
   if (viewMode === "gallery") {
     galleryCells.forEach(({ model, cell, imgEl, bodyEl }) => {
       const run = nearestRun(model, cursorTime);
