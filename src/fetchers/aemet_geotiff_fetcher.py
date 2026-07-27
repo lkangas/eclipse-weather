@@ -113,7 +113,6 @@ def _infer_run_init(model_config: dict, valid_times: list[datetime]) -> datetime
 @register("geotiff")
 def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResult:
     steps = steps_for_run(model_config, run_init)
-    out_dir = raw_output_dir(model_name, run_init)
 
     url = (
         model_config.get("source", {})
@@ -150,6 +149,19 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
 
     try:
         with tarfile.open(fileobj=BytesIO(resp.content), mode="r:gz") as tar:
+            # Two passes. The first only reads member NAMES, which already
+            # carry the valid times, so the bundle's true run_init is known
+            # before a single byte is written and the files can be filed under
+            # it. Writing first and warning afterwards (what this did before)
+            # produced duplicate archives: this endpoint always serves whatever
+            # run is currently latest, so seven catch-up fetches for seven
+            # missing cycles all received the SAME 2026-07-23 12Z bundle and
+            # stored seven byte-identical copies of it under seven different
+            # init times - one of them wrong by 42 h. Anything reading the
+            # archive then saw seven distinct runs that were one run, which is
+            # actively misleading in a tool whose whole purpose is comparing
+            # runs against each other.
+            cloud_members = []
             for member in tar.getmembers():
                 if not member.isfile():
                     continue
@@ -160,8 +172,22 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                 valid_time = _valid_time_from_filename(name)
                 if valid_time is None:
                     continue
+                cloud_members.append((member, valid_time))
                 valid_times_seen.append(valid_time)
 
+            inferred = _infer_run_init(model_config, valid_times_seen)
+            effective_run_init = inferred or run_init
+            if inferred is not None and inferred != run_init:
+                log.info(
+                    "aemet_harmonie: bundle is the %s run, not the requested %s "
+                    "(this endpoint always serves the current run) - filing under "
+                    "%s. A later cycle receiving this same bundle will land on the "
+                    "same directory and overwrite it rather than duplicating it.",
+                    inferred.isoformat(), run_init.isoformat(), inferred.isoformat(),
+                )
+            out_dir = raw_output_dir(model_name, effective_run_init)
+
+            for member, valid_time in cloud_members:
                 extracted = tar.extractfile(member)
                 if extracted is None:
                     continue
@@ -207,18 +233,9 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                 error=f"{path.name}: failed rasterio validation: {exc!r}",
             )
 
-    inferred_run_init = _infer_run_init(model_config, valid_times_seen)
-    if inferred_run_init is not None and inferred_run_init != run_init:
-        log.warning(
-            "aemet_harmonie: requested run_init %s does not match the run_init inferred "
-            "from the downloaded bundle's earliest valid time (%s). AEMET's endpoint always "
-            "serves whichever run is currently latest, regardless of what run_init is "
-            "requested -- data has been filed under the requested run_init (%s) anyway. "
-            "See models.yaml aemet_harmonie.source.open_endpoint notes.",
-            run_init.isoformat(), inferred_run_init.isoformat(), run_init.isoformat(),
-        )
-
+    # run_init is the EFFECTIVE one, so callers render, extract and reclaim the
+    # run that was actually downloaded rather than the one they asked for.
     return FetchResult(
-        model=model_name, run_init=run_init, steps=steps,
+        model=model_name, run_init=effective_run_init, steps=steps,
         status="ok", files_written=files_written,
     )

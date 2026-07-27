@@ -54,13 +54,63 @@
           font-variant-numeric:tabular-nums; }
   th { background:#f0e8d2; font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; }
   td.n { text-align:right; }
-  /* Coverage matrix: one cell per expected cycle slot, newest at the left. */
-  .cov { display:flex; gap:2px; }
-  .cov i { width:13px; height:13px; flex:none; background:var(--pend); }
-  .cov i.ok{background:var(--done)} .cov i.partial{background:var(--accent)}
-  .cov i.missing{background:var(--warn)}
-  .cov i.pending{background:transparent;border:1px dashed var(--faint);box-sizing:border-box}
-  .cov i.no-render{background:transparent;border:1px solid var(--rule);box-sizing:border-box}
+  /* Lifecycle matrix: one labelled cell per cycle slot, oldest at the left so
+     the row reads left-to-right the way the pipeline actually runs. */
+  .cov { display:flex; gap:2px; flex-wrap:nowrap; }
+  .cov span { font-size:9px; line-height:14px; height:14px; min-width:26px; text-align:center;
+              flex:none; border:1px solid transparent; box-sizing:border-box; letter-spacing:-.02em; }
+  /* Day boundary: a gap, so the hour labels have some time context without a
+     header row that would not line up anyway (models run different cadences). */
+  .cov span.newday { margin-left:7px; }
+  /* NOW. Without it the row is just a list of states with no present moment,
+     and "what happens next" is not answerable from it at all. */
+  .cov b.now { flex:none; width:0; border-left:2px solid var(--warn); height:18px;
+               margin:0 3px; align-self:center; }
+  .nextcol { font-size:10px; white-space:nowrap; }
+  .nextcol .due { color:var(--dim); }
+  .nextcol .late { color:var(--warn); font-weight:700; }
+  :root { --c-fetch:#e8c46a; --c-render:#7fa8c9; }
+  .st-future    { background:transparent; border-color:var(--rule)!important; color:var(--faint); --sc:var(--rule); }
+  .st-available { background:#e9e4d6; color:var(--dim);  --sc:#c9c0a8; }
+  .st-overdue   { background:var(--warn); color:#fff; font-weight:700; --sc:var(--warn); }
+  .st-fetching  { background:var(--c-fetch); color:#3a2c07; font-weight:700; --sc:var(--c-fetch); }
+  .st-fetched   { background:#d8b98a; color:#3a2c07;      --sc:#b8935e; }
+  .st-rendering { background:var(--c-render); color:#0d2333; font-weight:700; --sc:var(--c-render); }
+  .st-ready     { background:#8fc09a; color:#123018;      --sc:#5e9a6d; }
+  .st-done      { background:var(--done); color:#fff;     --sc:var(--done); }
+  /* No fill: seeded is a one-off migration artefact (frames rsynced from the
+     desktop, raw never here), not a state anything will enter from now on.
+     Filled, its green sat right next to ready's and the two were hard to tell
+     apart - which mattered, because they mean opposite things about whether
+     this box has ever processed the run. */
+  .st-seeded    { background:transparent; border-color:#7fae8c !important;
+                  color:var(--dim); --sc:#7fae8c; }
+  .st-gone      { background:#b06a5f; color:#fff;         --sc:#b06a5f; }
+  .st-no-render { background:repeating-linear-gradient(45deg,#e9e4d6,#e9e4d6 3px,#dcd5c2 3px,#dcd5c2 6px); color:var(--dim); }
+  /* A run is processed in ~17 chunks, each of which fetches AND renders, so an
+     in-flight run is genuinely both at once rather than passing through one
+     then the other. Barber pole in the fetch and render colours says exactly
+     that; a single colour would have to pick one and be wrong half the time.
+     The border keeps showing the run's own state, so a busy cell still reads
+     as "ready, and being worked on" rather than losing its identity. */
+  .cov span.working {
+    background-image: repeating-linear-gradient(45deg,
+      var(--c-fetch) 0 5px, var(--c-render) 5px 10px) !important;
+    border:2px solid var(--sc, var(--warn)) !important;
+    color:#1a1a1a; font-weight:700;
+    animation: barber .9s linear infinite;
+  }
+  /* One full period along x for a 45 stripe of 10px is 10/cos45 = 14.14px. */
+  @keyframes barber { from { background-position:0 0 } to { background-position:14.14px 0 } }
+  /* Flat chronological feed - the same lifecycle as a list rather than a grid. */
+  .feed { max-height:280px; overflow-y:auto; }
+  .feed div { display:flex; gap:8px; align-items:baseline; padding:1px 0;
+              border-bottom:1px solid #efeade; }
+  .feed .t { color:var(--faint); font-size:10px; min-width:52px; }
+  .feed .m { min-width:190px; }
+  .feed .m b { font-weight:700; }
+  .feed .s { font-size:10px; padding:0 5px; border:1px solid transparent; }
+  .feed .live { background:#fff6e0; }
   .legend { color:var(--dim); font-size:10px; margin-top:6px; }
   .legend b { color:var(--ink); }
   .key { display:inline-block; width:9px; height:9px; vertical-align:-1px; margin:0 3px 0 9px;
@@ -78,26 +128,35 @@
 
 <div class="panel live" id="live"><span class="dot idle"></span><span class="muted">no activity yet</span></div>
 
-<div class="cards" id="cards"></div>
-
-<div class="charts">
-  <figure><figcaption>Free disk <i id="capDisk"></i></figcaption><svg id="chDisk" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
-  <figure><figcaption>Pass duration <i id="capDur"></i></figcaption><svg id="chDur" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
+<div class="panel">
+  <table><thead><tr><th>Model</th><th>Run lifecycle — oldest ▶ newest, <span style="color:var(--warn)">│</span> = now</th><th>Next</th><th class="n">done</th></tr></thead>
+  <tbody id="cov"></tbody></table>
+  <div class="legend">
+    Cell colour is the run's state <b>on disk</b>: <b>future → available → fetched → ready → done</b>.
+    A <b>barber pole</b> means the pipeline is working on that run <i>right now</i>: work happens in
+    chunks and each chunk both fetches and renders, so an in-flight run is both at once — the stripes
+    are the fetch and render colours. Its border still shows the state it is in.
+    <b>ready</b> = rendered, raw still on disk to reclaim. <b>done</b> = reclaimed by this box.
+    <b>seeded</b> (outline only) = frames migrated in from the desktop, raw never on this box —
+    a one-off from the initial transfer, not something new runs will become.
+    <span class="key st-future"></span>future
+    <span class="key st-available"></span>available
+    <span class="key st-fetching"></span>fetching
+    <span class="key st-fetched"></span>fetched
+    <span class="key st-rendering"></span>rendering
+    <span class="key st-ready"></span>ready
+    <span class="key st-done"></span>done
+    <span class="key st-seeded"></span>seeded
+    <span class="key st-overdue"></span>overdue
+    <span class="key st-no-render"></span>point-API only (no map, never renders)
+  </div>
 </div>
 
 <div class="panel">
-  <table><thead><tr><th>Model</th><th>Coverage — newest first ◀</th><th class="n">ok</th><th class="n">missing</th><th class="n">frames</th></tr></thead>
-  <tbody id="cov"></tbody></table>
-  <div class="legend">
-    One cell per expected cycle slot in the last 48 h, newest at the left, judged on
-    <b>rendered frames</b> (production deletes raw once rendered, so raw presence would report
-    every processed run as missing).
-    <span class="key" style="background:var(--done)"></span>ok
-    <span class="key" style="background:var(--accent)"></span>partial
-    <span class="key" style="background:var(--warn)"></span>missing
-    <span class="key" style="border:1px dashed var(--faint)"></span>not due yet
-    <span class="key" style="border:1px solid var(--rule)"></span>no renderer
-  </div>
+  <table><thead><tr><th>Timeline</th></tr></thead></table>
+  <div class="feed" id="feed"></div>
+  <div class="legend">Newest first. Live actions from the running pass are pinned at the top;
+    the rest are state changes detected on disk.</div>
 </div>
 
 <div class="panel">
@@ -105,6 +164,16 @@
   <tbody id="fails"></tbody></table>
   <div class="legend">Steps upstream refused. After 3 attempts a step is skipped in later windows
     (it earns one retry a day), so a permanently-absent product stops costing a retry storm.</div>
+</div>
+
+<div id="passStats" style="display:none">
+<div class="cards" id="cards"></div>
+
+<div class="charts">
+  <figure><figcaption>Free disk <i id="capDisk"></i></figcaption><svg id="chDisk" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
+  <figure><figcaption>Pass duration <i id="capDur"></i></figcaption><svg id="chDur" viewBox="0 0 340 110" preserveAspectRatio="none"></svg></figure>
+</div>
+
 </div>
 
 <div class="panel" id="attnPanel" style="display:none">
@@ -133,30 +202,39 @@ async function jget(name, asText) {
 }
 
 async function poll() {
-  const [status, activity, cov, histTxt, failTxt] = await Promise.all([
+  const [status, activity, cov, histTxt, failTxt, evTxt] = await Promise.all([
     jget("pipeline_status.json"), jget("pipeline_activity.json"),
     jget("pipeline_coverage.json"), jget("pipeline_history.jsonl", true),
-    jget("fetch_failures.jsonl", true),
+    jget("fetch_failures.jsonl", true), jget("pipeline_events.jsonl", true),
   ]);
   const hist = (histTxt||"").trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean);
   const fails = (failTxt||"").trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean).reverse();
-  render(status, activity, cov, hist, fails);
+  const events = (evTxt||"").trim().split("\n").filter(Boolean).map(l => { try { return JSON.parse(l); } catch(e){ return null; } }).filter(Boolean).reverse();
+  render(status, activity, cov, hist, fails, events);
 }
 
-function render(status, activity, cov, hist, fails) {
-  $("sub").textContent = status
-    ? `last pass ${ago(status.finished_at || status.started_at)} · mode ${status.mode} · ${hist.length} pass(es) recorded`
-    : (activity && activity.pass_started_at
-        ? `first pass in progress, started ${ago(activity.pass_started_at)} — coverage below is live and does not wait for it`
-        : "no pass has completed yet");
+function render(status, activity, cov, hist, fails, events) {
+  const covAge = cov ? ago(cov.updated_at) : null;
+  $("sub").textContent =
+    (covAge ? `lifecycle refreshed ${covAge}` : "waiting for first scan") +
+    (activity && activity.pass_started_at ? ` · pass running ${ago(activity.pass_started_at)}` : "") +
+    (status ? ` · last completed pass ${ago(status.finished_at || status.started_at)}` : "");
 
   verdict(status, activity, cov);
   live(activity);
-  cards(status, hist, cov, activity);
-  chartDisk(hist, status);
-  chartDur(hist);
-  coverage(cov);
+  // Everything below is derived from COMPLETED passes. A first pass takes
+  // hours, so rendering empty boxes labelled "needs 2+ passes" for that whole
+  // time is just noise obscuring the panels that do have data. Hide until real.
+  const havePasses = hist.length >= 1;
+  $("passStats").style.display = havePasses ? "" : "none";
+  if (havePasses) {
+    cards(status, hist, cov, activity);
+    chartDisk(hist, status);
+    chartDur(hist);
+  }
+  coverage(cov, activity);
   failures(fails);
+  timeline(events, activity);
   attention(status);
 }
 
@@ -164,47 +242,59 @@ function render(status, activity, cov, hist, fails) {
 // severity: a stalled pipeline outranks a disk warning outranks missing runs.
 function verdict(status, activity, cov) {
   const el = $("verdict");
-  const passAge = secsSince(status && (status.finished_at || status.started_at));
-  const actAge  = secsSince(activity && activity.updated_at);
+  const actAge = secsSince(activity && activity.updated_at);
   const free = status ? status.free_gb_after : null;
   const floor = status && status.min_free_gb;
-  const missing = cov ? Object.values(cov.models).flat().filter(r => r.state === "missing").length : 0;
-  const errs = status ? (status.errors||[]).length + (status.runs||[]).reduce((a,r)=>a+(r.errors||[]).length,0) : 0;
 
-  // A pass can legitimately run long; what proves life is the ACTIVITY file,
-  // which updates per model/run/window. Both stale = genuinely wedged.
-  if (!status && !activity) {
+  // Judged on the LIFECYCLE, not on completed passes: on this box a pass takes
+  // hours, so anything gated on pass completion says nothing for most of the
+  // time you are looking at it.
+  const all = cov ? Object.entries(cov.models).flatMap(([m, rs]) => rs.map(r => ({...r, model: m}))) : [];
+  const overdue = all.filter(r => r.state === "overdue");
+  const gone    = all.filter(r => r.state === "gone");
+  const stuck   = all.filter(r => r.state === "fetched" && r.age_h > 6);
+
+  if (!cov && !activity) {
     el.className = "verdict bad";
-    el.innerHTML = "NO DATA <span class='why'>Neither a completed pass nor live activity has been published. Is the pipeline container running?</span>";
+    el.innerHTML = "NO DATA <span class='why'>Nothing has published lifecycle or activity. Is the pipeline container running?</span>";
     return;
   }
-  if (actAge > 900 && passAge > PASS_INTERVAL_S * 4) {
+  if (actAge > 900) {
     el.className = "verdict bad";
-    el.innerHTML = `STALLED <span class='why'>No activity for ${(actAge/60).toFixed(0)} min and no completed pass for ${(passAge/60).toFixed(0)} min (expected every ${PASS_INTERVAL_S/60} min).</span>`;
+    el.innerHTML = `NOTHING RUNNING <span class='why'>No pipeline activity for ${(actAge/60).toFixed(0)} min.</span>`;
+    return;
+  }
+  if (gone.length) {
+    el.className = "verdict bad";
+    el.innerHTML = `${gone.length} RUN(S) LOST <span class='why'>Raw reclaimed but frames incomplete — ` +
+      `${gone.slice(0,3).map(r=>r.model+" "+r.hour).join(", ")}. Not recoverable from this box.</span>`;
     return;
   }
   if (floor && free != null && free < floor) {
     el.className = "verdict bad";
-    el.innerHTML = `DISK BELOW FLOOR <span class='why'>${free.toFixed(1)} GB free against a ${floor} GB floor — models are being skipped rather than fetched.</span>`;
+    el.innerHTML = `DISK BELOW FLOOR <span class='why'>${free.toFixed(1)} GB free against a ${floor} GB floor — models are being skipped.</span>`;
     return;
   }
-  if (floor && free != null && free < floor * 1.5) {
+  if (overdue.length) {
     el.className = "verdict warn";
-    el.innerHTML = `DISK LOW <span class='why'>${free.toFixed(1)} GB free, floor is ${floor} GB. Reclaim is not keeping up with fetch.</span>`;
+    el.innerHTML = `${overdue.length} RUN(S) OVERDUE <span class='why'>Published upstream but not fetched: ` +
+      `${overdue.slice(0,4).map(r=>r.model+" "+r.hour).join(", ")}${overdue.length>4?"…":""}. ` +
+      `Upstream retention is short, so these are where data gets lost.</span>`;
     return;
   }
-  if (missing) {
+  if (stuck.length) {
     el.className = "verdict warn";
-    el.innerHTML = `${missing} RUN(S) MISSING <span class='why'>Past their publication deadline with no frames. Upstream retention is short — see the coverage matrix.</span>`;
+    el.innerHTML = `${stuck.length} RUN(S) FETCHED BUT NOT RENDERED <span class='why'>` +
+      `${stuck.slice(0,4).map(r=>r.model+" "+r.hour).join(", ")}. Raw is on disk and cannot be reclaimed until rendered.</span>`;
     return;
   }
-  if (errs) {
-    el.className = "verdict warn";
-    el.innerHTML = `${errs} ERROR(S) LAST PASS <span class='why'>Fetching or rendering failed for at least one run; the pipeline itself is alive.</span>`;
-    return;
-  }
+  const done = all.filter(r => r.state === "done").length;
+  const ready = all.filter(r => r.state === "ready").length;
+  const seeded = all.filter(r => r.state === "seeded").length;
   el.className = "verdict ok";
-  el.innerHTML = `HEALTHY <span class='why'>Pass ${ago(status && (status.finished_at||status.started_at))}, ${free != null ? free.toFixed(1)+" GB free" : "disk unknown"}, full coverage, no errors.</span>`;
+  el.innerHTML = `KEEPING UP <span class='why'>Every published run is fetched and rendered` +
+    ` — ${done} reclaimed, ${ready} awaiting reclaim, ${seeded} seeded` +
+    (free != null ? `, ${free.toFixed(1)} GB free` : "") + `.</span>`;
 }
 
 function live(a) {
@@ -291,21 +381,127 @@ function chartDur(hist) {
   cap.textContent = `${vals[vals.length-1].toFixed(0)}s · interval ${PASS_INTERVAL_S}s`;
 }
 
-function coverage(cov) {
+function coverage(cov, activity) {
   if (!cov) { $("cov").innerHTML = '<tr><td class="muted">no coverage data yet</td></tr>'; return; }
-  const rows = Object.entries(cov.models).sort((a,b)=>{
-    const m = r => r[1].filter(x=>x.state==="missing").length;
-    return m(b)-m(a) || a[0].localeCompare(b[0]);
+  const liveKey = activity && activity.model && activity.run_init
+    ? activity.model + "|" + activity.run_init : null;
+  const livePhase = activity && ["fetching","rendering","extracting","reclaiming"].includes(activity.phase)
+    ? activity.phase : null;
+  const nextUp = cov.next_up || {};
+
+  const mins = ms => {
+    const m = Math.abs(ms) / 60000;
+    return m < 90 ? Math.round(m) + "m" : (m/60).toFixed(1) + "h";
+  };
+
+  // Most urgent first: a model with runs going unfetched matters more than one
+  // that is simply idle, and alphabetical order buries it.
+  const rows = Object.entries(cov.models).sort((a, b) => {
+    const score = r => r[1].filter(x => x.state === "gone").length * 100
+                     + r[1].filter(x => x.state === "overdue").length * 10
+                     + r[1].filter(x => x.state === "fetched").length;
+    return score(b) - score(a) || a[0].localeCompare(b[0]);
   });
+
   $("cov").innerHTML = rows.map(([mid, rs]) => {
-    const ok = rs.filter(r=>r.state==="ok").length;
-    const miss = rs.filter(r=>r.state==="missing").length;
-    const frames = rs.reduce((a,r)=>a+(r.frames||0),0);
-    const cells = rs.map(r=>`<i class="${r.state}" title="${String(r.run_init).slice(0,13)}Z — ${r.state}, ${r.frames} frame(s), ${r.age_h}h old"></i>`).join("");
-    return `<tr><td>${mid}</td><td><div class="cov">${cells}</div></td>` +
-           `<td class="n">${ok}</td><td class="n ${miss?"err":""}">${miss||""}</td>` +
-           `<td class="n muted">${frames.toLocaleString()}</td></tr>`;
+    let done = 0, prevDay = null, dividerDone = false;
+    const cells = [];
+    rs.forEach(r => {
+      const st = r.state;                       // disk state, never overwritten
+      const busy = liveKey === mid + "|" + r.run_init ? livePhase : null;
+      if (st === "done") done++;
+      // The present sits between the last past run and the first future one.
+      if (!dividerDone && st === "future") { cells.push('<b class="now" title="now"></b>'); dividerDone = true; }
+      const tip = `${r.day} ${r.hour} — ${st}` +
+        (busy ? ` · ${busy} NOW` : "") +
+        (r.frames ? `, ${r.frames} frame(s)` : "") +
+        (r.raw_files ? `, ${r.raw_files} raw file(s)` : "");
+      const nd = prevDay && r.day !== prevDay ? " newday" : "";
+      prevDay = r.day;
+      cells.push(`<span class="st-${st}${nd}${busy ? " working" : ""}" title="${tip}">${r.hour}</span>`);
+    });
+    if (!dividerDone) cells.push('<b class="now" title="now"></b>');
+
+    // What this model is waiting on, or when its next run lands.
+    const n = nextUp[mid] || {};
+    let nextTxt = '<span class="muted">—</span>';
+    if (n.waiting) {
+      const late = Date.now() - new Date(n.waiting.due_at).getTime();
+      nextTxt = `<span class="late">${n.waiting.hour} ${n.waiting.state}</span>` +
+                `<span class="due"> ${mins(late)} late</span>`;
+    } else if (n.future) {
+      const until = new Date(n.future.due_at).getTime() - Date.now();
+      nextTxt = `<span class="due">${n.future.hour} in ${mins(until)}</span>`;
+    }
+    return `<tr><td>${mid}</td><td><div class="cov">${cells.join("")}</div></td>` +
+           `<td class="nextcol">${nextTxt}</td><td class="n">${done||""}</td></tr>`;
   }).join("");
+}
+
+// Two kinds of line, one clock. "activity" is the pipeline doing something
+// (fetching gfs chunk 3/17); "state" is a run changing what it IS on disk
+// (gfs 18Z -> done). The first is emitted per phase change by the pass, the
+// second by diffing coverage - neither alone tells the story.
+function timeline(events, activity) {
+  const el = $("feed");
+  const hhmm = ts => { const t = new Date(ts);
+    return String(t.getHours()).padStart(2,"0") + ":" + String(t.getMinutes()).padStart(2,"0") +
+           ":" + String(t.getSeconds()).padStart(2,"0"); };
+  const rows = [];
+
+  if (activity && activity.model && ["fetching","rendering"].includes(activity.phase)) {
+    rows.push(`<div class="live"><span class="t">now</span>` +
+      `<span class="s st-${activity.phase === "rendering" ? "rendering" : "fetching"}">${activity.phase}</span>` +
+      `<span class="m">${activity.model} <b>${String(activity.run_init||"").slice(5,10)} ` +
+      `${String(activity.run_init||"").slice(11,13)}Z</b></span>` +
+      `<span class="muted">` +
+      (activity.chunk ? `chunk ${activity.chunk}/${activity.chunks}` : "") +
+      (activity.window_cap_h != null ? ` · ≤+${activity.window_cap_h}h` : "") + `</span></div>`);
+  }
+
+  // Collapse the chunk churn. A chunked run emits 17 fetch + 17 render lines,
+  // which buries everything else and tells you nothing you cannot read from
+  // the latest of each: chunk 6/17 already implies 1-5 happened. So keep only
+  // the NEWEST fetching and NEWEST rendering line per run - the pair then
+  // updates in place and rises to the top as the run advances, instead of the
+  // feed growing by 34 lines per run.
+  const seenPhase = new Set();
+  // The pinned "now" line OWNS its (run, phase) slot. Matching only on
+  // timestamp left the previous chunk's line in the feed, so a run showed
+  // "fetching 17/21" pinned and "fetching 16/21" below it - two fetching lines
+  // for one run, which is the duplication this collapse exists to remove.
+  if (activity && activity.model && activity.run_init && activity.phase) {
+    seenPhase.add(activity.model + "|" + activity.run_init + "|" + activity.phase);
+  }
+  for (const e of events.slice(0, 1200)) {
+    if (e.kind === "activity") {
+      const key = e.model + "|" + e.run_init + "|" + e.phase;
+      if (seenPhase.has(key)) continue;   // events are newest-first: first wins
+      seenPhase.add(key);
+    }
+    if (e.kind === "activity") {
+      // Date, not just the hour: 07-25T18Z and 07-26T18Z both rendered as
+      // "18Z", so seven consecutive DIFFERENT runs looked like one run being
+      // reprocessed - which is exactly the wrong conclusion to invite.
+      const ri = String(e.run_init || "");
+      const hour = ri.slice(5, 10) + " " + ri.slice(11, 13);
+      const cls = e.phase === "rendering" ? "st-rendering"
+                : e.phase === "fetching"  ? "st-fetching" : "";
+      rows.push(`<div><span class="t">${hhmm(e.at)}</span>` +
+        `<span class="s ${cls}">${e.phase}</span>` +
+        `<span class="m">${e.model} <b>${hour}Z</b></span>` +
+        `<span class="muted">` +
+        (e.chunk ? `chunk ${e.chunk}/${e.chunks}` : "") +
+        (e.window_cap_h != null ? ` · ≤+${e.window_cap_h}h` : "") + `</span></div>`);
+    } else {
+      rows.push(`<div><span class="t">${hhmm(e.at)}</span>` +
+        `<span class="s st-${e.to}">${e.to}</span>` +
+        `<span class="m">${e.model} ${e.hour}</span>` +
+        `<span class="muted">${e.day}${e.from ? " · was " + e.from : ""}</span></div>`);
+    }
+  }
+  el.innerHTML = rows.length ? rows.join("")
+    : '<div class="muted">nothing recorded yet</div>';
 }
 
 function failures(fails) {

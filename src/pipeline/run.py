@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import threading
 import time
 from datetime import UTC, datetime
@@ -29,6 +30,9 @@ from src.pipeline.settings import load_settings
 
 # How often the coverage matrix is rebuilt, independent of the pass loop.
 COVERAGE_INTERVAL_S = 60.0
+
+# How often the tool manifests are rebuilt, independent of the pass loop.
+MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "300"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pipeline.run")
@@ -223,6 +227,23 @@ def main() -> None:
             time.sleep(COVERAGE_INTERVAL_S)
 
     threading.Thread(target=_coverage_forever, name="coverage", daemon=True).start()
+
+    # Manifests are THE product - the tools read them, not the frame tree - yet
+    # they were regenerated only at the end of a pass. A pass on this box has
+    # never once returned, so the manifests sat 4h20m behind frames that were
+    # already on disk: the work was done and invisible. They are a pure disk
+    # scan (~0.5-7 s, reads no raw), so they belong on a clock of their own for
+    # exactly the same reason coverage does.
+    def _manifests_forever() -> None:
+        from src.pipeline import render as pipeline_render
+        while True:
+            time.sleep(MANIFEST_INTERVAL_S)
+            try:
+                pipeline_render.regenerate_manifests()
+            except Exception:
+                log.exception("manifest refresh failed; will retry")
+
+    threading.Thread(target=_manifests_forever, name="manifests", daemon=True).start()
 
     log.info("production pipeline starting (mode=%s, interval=%ds)",
              "apply" if args.apply else "dry-run", args.interval)

@@ -43,6 +43,7 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -205,22 +206,22 @@ def process_run(
     per_step = chunking.bytes_per_step(model_id, settings.fallback_bytes_per_step)
     record_fetch_attempt(model_id, run_init, now)
 
-    # Steps upstream has repeatedly refused to serve. Narrowing here rather
-    # than inside the fetcher keeps src/fetchers/ - the desktop archiver's
-    # critical path - completely untouched by this.
-    skip_steps = failures.dead_steps(model_id, run_init, now)
+    # NO dead-step filtering here. It was added on the belief that narrowing
+    # `wanted` would keep those steps out of the fetch; it does not. `wanted`
+    # only ever reaches render_steps() - the fetcher is handed a cycle CAP and
+    # recomputes its own step list from full_range_steps(), so it re-attempts
+    # every "skipped" step regardless. The filter therefore bought nothing and
+    # cost something real: a step still inside the publication stagger gets
+    # flagged dead, and its flag clears 24 h after the LAST failure (~init+50h)
+    # while the top-up window shuts at init+48h. gefs_extended 2026-07-27T00Z's
+    # eclipse steps (+396/402/408) were on course to be fetched and then never
+    # rendered. The ledger below still records failures for the dashboard;
+    # only the filtering is gone.
 
     previous_cap: int | None = None
     for cap in caps:
         wanted = chunking.steps_in_chunk(model_config, run_init, cap, previous_cap)
         previous_cap = cap
-        if skip_steps:
-            dropped = [s for s in wanted if s in skip_steps]
-            wanted = [s for s in wanted if s not in skip_steps]
-            if dropped:
-                log.info("%s %s window <=+%dh: skipping %d step(s) upstream keeps "
-                         "refusing: %s", model_id, run_init.isoformat(), cap,
-                         len(dropped), dropped[:6])
         if not wanted:
             continue
 
@@ -427,6 +428,31 @@ def _out_dir():
     return frame_renderer.OUTPUT_DIR
 
 
+EVENTS_FILENAME = "pipeline_events.jsonl"
+EVENTS_MAX_ROWS = 6000
+_events_lock = threading.Lock()
+_last_activity_key: tuple | None = None
+
+
+def append_event(payload: dict) -> None:
+    """One line per thing that happened. Appended under a lock and trimmed in
+    the same critical section: the coverage thread and the pass loop both write
+    here, and a read-rewrite trim racing an append would lose lines."""
+    import json
+
+    try:
+        path = _out_dir() / EVENTS_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _events_lock:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload) + "\n")
+            rows = path.read_text(encoding="utf-8").splitlines()
+            if len(rows) > EVENTS_MAX_ROWS:
+                path.write_text("\n".join(rows[-EVENTS_MAX_ROWS:]) + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
 def publish_activity(phase: str, **fields) -> None:
     """What the pipeline is doing RIGHT NOW.
 
@@ -451,6 +477,26 @@ def publish_activity(phase: str, **fields) -> None:
         tmp.replace(path)   # atomic: a reader never sees a half-written file
     except OSError:
         pass
+
+    # ...and append it to the feed, so the timeline shows the actual work
+    # ("fetching gfs chunk 3/17") rather than only the 60 s coverage diffs,
+    # which miss everything that happens between two scans.
+    global _last_activity_key
+    key = (phase, fields.get("model"), str(fields.get("run_init")), fields.get("chunk"))
+    if key != _last_activity_key:
+        _last_activity_key = key
+        # Only fetch and render are worth a timeline line. "model" carries the
+        # models-done counter and has no run at all; extracting and reclaiming
+        # are sub-steps of a chunk that fire between every fetch/render pair
+        # and tripled the feed's length without saying anything you cannot read
+        # off the fetch/render lines around them. They still drive the live
+        # panel and the busy indicator - they are just not events.
+        if fields.get("model") and phase in ("fetching", "rendering"):
+            append_event({"kind": "activity", "at": payload["updated_at"], "phase": phase,
+                          "model": fields.get("model"),
+                          "run_init": payload.get("run_init"),
+                          "chunk": fields.get("chunk"), "chunks": fields.get("chunks"),
+                          "window_cap_h": fields.get("window_cap_h")})
 
 
 def append_history(result: PassResult) -> None:

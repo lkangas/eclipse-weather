@@ -36,7 +36,7 @@ from __future__ import annotations
 import json
 import logging
 import tempfile
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import cfgrib
@@ -214,7 +214,9 @@ _PROB_CLOUD_THRESHOLD_PCT = 10.0  # locked in after comparing 0-30% via the
                                    # report machinery into the render path for one constant.
 
 
-def _read_ecmwf_grid_prob_cloud(path: Path, shortname: str, scale: float, bbox: dict) -> tuple | None:
+def _read_ecmwf_grid_prob_cloud(
+    path: Path, shortname: str, scale: float, bbox: dict
+) -> tuple | None:
     """Like _read_ecmwf_grid, but instead of the ensemble MEAN, computes the
     fraction of members with cloud_low AT OR ABOVE _PROB_CLOUD_THRESHOLD_PCT
     at each grid cell (as a percent 0-100, same scale/rendering convention as
@@ -375,6 +377,76 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     return da.latitude.values, da.longitude.values, da.values
 
 
+
+# AEMET's legend starts at 10%; below it the product draws nothing, so a
+# transparent pixel means "<10% cloud" - or "outside the domain", which this
+# product gives no way to distinguish.
+#
+# 0.0, not the 5.0 bin-midpoint the other bins use. 5.0 is defensible as a
+# number but wrong as a pixel: render_frame applies PowerNorm(gamma=0.4) to
+# make thin cloud visible, which maps 5% to 0.30 of the Blues ramp, and since
+# ~97% of a typical raster is transparent the whole map came out a flat light
+# blue - implying widespread thin cloud AEMET never forecast. 0.0 asserts "0%"
+# where AEMET only says "<10%", understating by at most 10 points in the one
+# region where that distinction matters least.
+_AEMET_UNDRAWN_VALUE = 0.0
+_AEMET_ALPHA_OPAQUE = 128
+
+
+def _aemet_harmonie_field(field: str, run_init: datetime, step: int, bbox: dict):
+    """aemet_harmonie is not scientific data: the archived GeoTIFFs are
+    AEMET's own RENDERED, COLOUR-MAPPED web-map layer (4-band RGBA), with no
+    numeric cloud band to read. Values are recovered by inverting the ramp
+    through the file's own ESCALA legend tag - the same _parse_escala +
+    nearest-RGB-stop + bin-midpoint path src/extract/aemet_extractor.py uses
+    per site, vectorised here because a map needs ~256,000 of those lookups
+    rather than 29.
+
+    Nearest-match rather than exact lookup because the rasters are lossily
+    compressed: one real file held 12,672 distinct opaque colours derived from
+    a 9-colour legend.
+
+    Inherently coarse - 10-point legend bins on top of total_only provenance.
+    See the extractor's module docstring for the full provenance warning; do
+    not read a value here as comparable in precision to a native GRIB field.
+    """
+    if field != "total":
+        return None   # T07(b): AEMET publishes no L/M/H anywhere
+
+    import rasterio
+
+    from src.extract.aemet_extractor import _parse_escala
+
+    valid = run_init + timedelta(hours=step)
+    path = (DATA_RAW / "aemet_harmonie" / format_init_dir(run_init)
+            / f"aemet_harmonie_nubosidad_{valid:%Y%m%dT%H%M%S}Z.tif")
+    if not path.exists():
+        return None
+
+    with rasterio.open(path) as ds:
+        stops = _parse_escala(ds.tags())
+        bands = ds.read()
+        transform, height, width = ds.transform, ds.height, ds.width
+
+    rgb = bands[:3].astype(np.int16).transpose(1, 2, 0)
+    alpha = bands[3] if bands.shape[0] >= 4 else np.full((height, width), 255)
+    stop_rgb = np.array([s[2] for s in stops], np.int16)
+    mids = np.array([(lo + hi) / 2.0 for lo, hi, _ in stops], np.float32)
+
+    d2 = ((rgb[:, :, None, :] - stop_rgb[None, None, :, :]) ** 2).sum(-1)
+    values = mids[d2.argmin(-1)]
+    values = np.where(alpha < _AEMET_ALPHA_OPAQUE, _AEMET_UNDRAWN_VALUE, values).astype(np.float32)
+
+    lons_1d = transform.c + (np.arange(width) + 0.5) * transform.a
+    lats_1d = transform.f + (np.arange(height) + 0.5) * transform.e
+    col = (lons_1d >= bbox["lon_min"]) & (lons_1d <= bbox["lon_max"])
+    row = (lats_1d >= bbox["lat_min"]) & (lats_1d <= bbox["lat_max"])
+    if not col.any() or not row.any():
+        return None
+    lons, lats = np.meshgrid(lons_1d[col], lats_1d[row])
+    return lats, lons, values[np.ix_(row, col)]
+
+
 _MODEL_READERS = {
     "gfs": _gfs_field,
     "arome_france": _arome_field,
@@ -386,6 +458,7 @@ _MODEL_READERS = {
     "aifs_ens": _aifs_ens_field,
     "icon_eu": _icon_eu_field,
     "icon_global": _icon_global_field,
+    "aemet_harmonie": _aemet_harmonie_field,
 }
 
 
@@ -416,10 +489,22 @@ def supported_fields(model_id: str) -> list[str]:
     derived (the humidity-derived estimate this renderer deliberately never
     uses, see _ecmwf_hres_field's own docstring) and ecmwf_ens's are
     status: absent_in_open_data; neither is real hml_composite material
-    despite the key existing in models.yaml for ecmwf_hres."""
+    despite the key existing in models.yaml for ecmwf_hres.
+
+    It must ALSO not be present: false. "confirmed" is about the metadata
+    having been verified, and an entry can perfectly well confirm that a
+    field does NOT exist - aemet_harmonie's levels entry is exactly that,
+    T07(b)'s adversarially double-checked finding that AEMET publishes no
+    L/M/H at all."""
     model_config = get_model(model_id)
     cloud = model_config.get("cloud", {})
-    has_native_levels = cloud.get("levels", {}).get("status") == "confirmed"
+    levels = cloud.get("levels", {})
+    # `status: confirmed` means "this metadata was verified", NOT "this field
+    # exists" - and for aemet_harmonie what T07(b) verified is that AEMET has
+    # no low/mid/high anywhere, recorded as present: false. Reading status
+    # alone gave that model hml_composite, a composite of three fields it can
+    # never supply, instead of the single blended total it actually publishes.
+    has_native_levels = levels.get("status") == "confirmed" and levels.get("present", True)
 
     # total is a FALLBACK, not a parallel quantity: a model with native
     # low/mid/high shows the H/M/L composite, and total is only rendered for
@@ -433,6 +518,35 @@ def supported_fields(model_id: str) -> list[str]:
     if "ensemble" in model_config["kind"] and _MODEL_READERS[model_id] in _PROB_CAPABLE_READERS:
         fields.append("prob_hml_composite")
     return fields
+
+
+def _steps_for_run(model_id: str, model_config: dict, run_init: datetime) -> list[int]:
+    """Which steps to attempt for this run.
+
+    Normally models.yaml's declared schedule. aemet_harmonie is the exception:
+    its files are named by VALID TIME rather than step, and its real run length
+    varies - 48 hourly files on most runs but 90 on 2026-07-25 00Z, against a
+    declared length of 48 h. Config would therefore both miss real hours and
+    invent steps that were never published, so for this model the files on
+    disk ARE the schedule.
+    """
+    if model_id != "aemet_harmonie":
+        return full_range_steps(model_config, run_init)
+
+    run_dir = DATA_RAW / model_id / format_init_dir(run_init)
+    if not run_dir.is_dir():
+        return []
+    steps = []
+    for path in run_dir.glob(f"{model_id}_nubosidad_*.tif"):
+        stamp = path.stem.rsplit("_", 1)[-1]
+        try:
+            valid = datetime.strptime(stamp, "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        delta = (valid - run_init).total_seconds() / 3600
+        if delta >= 0 and float(delta).is_integer():
+            steps.append(int(delta))
+    return sorted(steps)
 
 
 def render_run(model_id: str, run_init: datetime) -> dict[int, dict[str, bool]]:
@@ -454,7 +568,7 @@ def render_run(model_id: str, run_init: datetime) -> dict[int, dict[str, bool]]:
     confirm rendering actually produced something before deleting the
     source."""
     model_config = get_model(model_id)
-    steps = full_range_steps(model_config, run_init)
+    steps = _steps_for_run(model_id, model_config, run_init)
     fields = supported_fields(model_id)
     result: dict[int, dict[str, bool]] = {}
     for step in steps:
@@ -469,6 +583,7 @@ def render_run(model_id: str, run_init: datetime) -> dict[int, dict[str, bool]]:
 # duplicated across scripts/generate_tool{1,2,3}_manifest.py; kept local
 # here too rather than importing a script module into src/.
 _MODEL_LABELS = {
+    "aemet_harmonie": "AEMET HARMONIE",
     "gfs": "GFS",
     "gefs_extended": "GEFS Extended",
     "arome_france": "AROME France",

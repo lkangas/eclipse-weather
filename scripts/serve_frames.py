@@ -35,7 +35,7 @@ _NO_CACHE_NAMES = {
     # pass, so none may be served immutable like the frames are.
     "pipeline.html", "pipeline_status.json", "pipeline_status.dryrun.json",
     "pipeline_activity.json", "pipeline_coverage.json", "pipeline_history.jsonl",
-    "fetch_failures.jsonl",
+    "fetch_failures.jsonl", "pipeline_events.jsonl",
     # Review/experiment pages are re-rendered in place while a design is being
     # iterated on, so they must never be served immutable like the frames are.
     "review.html", "review_grid.json",

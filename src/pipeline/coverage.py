@@ -20,6 +20,16 @@ from datetime import UTC, datetime
 
 LOOKBACK_H = 48
 
+# How long past its publication deadline a run may sit un-fetched before it is
+# a fault rather than a wait. Generous: publication_lag_h is an upper bound
+# already, and a pass can legitimately take a while to reach a given model.
+OVERDUE_AFTER_H = 3.0
+
+# Proportion of a run's declared steps that must have frames before it counts
+# as rendered. Not 1.0: a step that publishes nothing produces no frame by
+# design, so a healthy gfs run lands at 208/209.
+COMPLETE_FRACTION = 0.9
+
 
 def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
     """{run_stamp: {field: n_frames}} from ONE listing per field directory.
@@ -45,22 +55,63 @@ def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
     return idx
 
 
-def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
-    """{model: [{run_init, state, frames}]} for every cycle slot in the window.
+def _raw_state(model_id: str, run_init: datetime) -> tuple[int, bool]:
+    """(count of real raw files, tombstoned?) for this run.
 
-    state is one of:
-      ok       - frames exist for every field this model renders
-      partial  - some fields have frames, others do not
-      missing  - past its publication deadline with nothing to show
-      pending  - not due yet; absence here is not a fault
-      no-render- model has no renderer, so frames can never be the evidence
+    Dotfiles are excluded: a failed fetch leaves .extracted / .last_fetch_attempt
+    behind, and counting those as raw would make an empty run look fetched.
+    The tombstone (.reclaimed.json) is what separates "raw deleted after a
+    verified render" from "raw never arrived" - without it those two look
+    identical from disk, and they are opposite ends of the lifecycle.
+    """
+    from src.config import DATA_RAW
+    from src.pipeline.journal import RECLAIMED_FILE
+    d = DATA_RAW / model_id / f"{run_init:%Y%m%d%H}"
+    if not d.is_dir():
+        return 0, False
+    n = 0
+    tomb = False
+    for p in d.iterdir():
+        if p.name == RECLAIMED_FILE:
+            tomb = True
+        elif p.is_file() and not p.name.startswith("."):
+            n += 1
+    return n, tomb
+
+
+def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
+    """Per-run LIFECYCLE state for every cycle slot in the window.
+
+    A run moves: future -> available -> fetched -> ready -> done. The two
+    in-flight states (fetching, rendering) are not on disk at all - they come
+    from pipeline_activity.json and are overlaid by the page, because only the
+    running pass knows them.
+
+      future    - upstream has not published it yet (now < due_at)
+      available - due, and nothing has arrived. Waiting to be fetched.
+      overdue   - available for far longer than it should be. A real fault:
+                  upstream retention is short, so this is where runs are lost.
+      fetched   - raw on disk, not yet rendered (or only partly)
+      ready     - every supported field rendered, raw still on disk to reclaim
+      done      - fetched, rendered and reclaimed by THIS box. Terminal.
+      seeded    - frames present but raw never was: migrated in from the
+                  desktop archive. Also terminal, but this box never extracted
+                  its points, which matters for being self-sufficient.
+      no-render - model has no renderer, so frames can never be the evidence;
+                  its raw is kept indefinitely and it never reaches done.
     """
     from src.config import load_models
-    from src.fetchers.base import cycle_run_inits, due_time
+    from src.fetchers.base import (
+        FETCH_TOPUP_WINDOW_H,
+        cycle_run_inits,
+        due_time,
+        full_range_steps,
+    )
     from src.viz.frame_renderer import _MODEL_READERS, supported_fields
 
     now = now or datetime.now(UTC)
     out: dict[str, list[dict]] = {}
+    next_up: dict[str, dict] = {}
     for model_id, cfg in load_models()["models"].items():
         if "cycles" not in cfg or "fetch" not in cfg:
             continue
@@ -70,31 +121,132 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         rows = []
         for run_init in cycle_run_inits(cfg["cycles"], now, lookback_hours=lookback_h):
             due = due_time(cfg.get("publication_lag_h", [0, 0]), run_init)
-            if not renderable:
-                state, frames = "no-render", 0
-            elif now < due:
-                state, frames = "pending", 0
-            else:
-                per_field = index.get(f"{run_init:%Y%m%d%H}", {})
-                frames = sum(per_field.values())
-                if not per_field:
-                    state = "missing"
+            per_field = index.get(f"{run_init:%Y%m%d%H}", {})
+            frames = sum(per_field.values())
+            raw_n, tombstoned = _raw_state(model_id, run_init)
+            # Completeness has to be about STEPS, not fields. "every field has
+            # at least one frame" called a run complete after its first chunk
+            # of 17, so a run 6% processed looked finished. Steps that
+            # genuinely publish nothing produce no frame by design (gfs f000),
+            # so this is a proportion rather than equality.
+            expected = len(full_range_steps(cfg, run_init)) or 1
+            complete = (
+                renderable and n_fields and len(per_field) == n_fields
+                and min(per_field.values()) >= expected * COMPLETE_FRACTION
+            )
+
+            if now < due:
+                state = "future"
+            elif not renderable:
+                # cma_grapes_global, gem_global, jma_gsm, ukmo_global: Open-Meteo
+                # point-API models with no grid and no reader. They can never
+                # produce a frame, so judging them on frames left them stuck at
+                # available -> overdue permanently, reporting 30+ hours "late"
+                # for work that is never going to happen. They contribute point
+                # rows to points.parquet, not maps; the lifecycle simply does
+                # not apply, and saying so is more honest than a red cell.
+                state = "no-render"
+            elif complete:
+                # Tombstone first, because it is MONOTONIC and raw presence is
+                # not. A finished run stays inside the 48 h top-up window, so
+                # every pass re-fetches it: raw reappears, nothing new renders,
+                # raw is reclaimed again. Keying on raw made such a run
+                # oscillate done -> ready -> done once per pass forever, and
+                # emit a timeline event each way. Once this box has reclaimed a
+                # complete run it is done; transient top-up raw is work
+                # happening TO it, which the busy indicator already shows.
+                if tombstoned:
+                    state = "done"         # fetched, rendered and reclaimed here
+                elif raw_n:
+                    state = "ready"        # rendered here, awaiting first reclaim
                 else:
-                    state = "ok" if len(per_field) == n_fields else "partial"
+                    state = "seeded"       # frames arrived from elsewhere
+            elif raw_n:
+                state = "fetched"
+            elif tombstoned:
+                # Raw gone and steps incomplete. Only a loss once the run can
+                # no longer gain steps: gefs_extended publishes its 385-840h
+                # range 25-27 h AFTER init, so a 6 h old run legitimately sits
+                # at 104/121 steps and a flat percentage called that "lost".
+                # The top-up window is the existing notion of "can this still
+                # grow", so use it rather than inventing a second rule.
+                sealed = (now - run_init).total_seconds() / 3600 >= FETCH_TOPUP_WINDOW_H
+                state = "gone" if sealed else "fetched"
+            else:
+                overdue_h = (now - due).total_seconds() / 3600
+                state = "overdue" if overdue_h > OVERDUE_AFTER_H else "available"
+
             rows.append({
                 "run_init": run_init.isoformat().replace("+00:00", "Z"),
+                "hour": f"{run_init:%H}Z",
+                "day": f"{run_init:%m-%d}",
                 "state": state,
                 "frames": frames,
+                "raw_files": raw_n,
+                "reclaimed": tombstoned,
                 "due_at": due.isoformat().replace("+00:00", "Z"),
                 "age_h": round((now - run_init).total_seconds() / 3600, 1),
             })
-        rows.sort(key=lambda r: r["run_init"], reverse=True)
+        # Chronological, oldest first: the row then reads left-to-right as the
+        # lifecycle itself runs, with future slots at the right edge.
+        rows.sort(key=lambda r: r["run_init"])
+
+        # "What happens next" is a different question from "what state is
+        # everything in", and the matrix could not answer it: every cell is a
+        # run that already exists in the schedule, so the next thing the
+        # pipeline will actually do was nowhere on the page.
+        nxt = next((r for r in rows if r["state"] in ("available", "overdue")), None)
+        upcoming = next((r for r in rows if r["state"] == "future"), None)
         out[model_id] = rows
+        next_up[model_id] = {
+            "waiting": {"run_init": nxt["run_init"], "hour": nxt["hour"],
+                        "state": nxt["state"], "due_at": nxt["due_at"]} if nxt else None,
+            "future": {"run_init": upcoming["run_init"], "hour": upcoming["hour"],
+                       "due_at": upcoming["due_at"]} if upcoming else None,
+        }
     return {
         "updated_at": now.isoformat().replace("+00:00", "Z"),
         "lookback_h": lookback_h,
         "models": out,
+        "next_up": next_up,
     }
+
+
+EVENTS_FILENAME = "pipeline_events.jsonl"
+EVENTS_MAX_ROWS = 4000
+
+# Transitions not worth a line: they are noise, not events.
+_BORING = {("future", "available"), ("available", "future")}
+
+
+def _emit_events(prev: dict, cur: dict, path) -> None:
+    """Append one line per run whose lifecycle state changed.
+
+    Derived by diffing successive coverage snapshots rather than emitted from
+    inside the pipeline. One place produces every event, including the ones no
+    single code path owns - a run becoming available is upstream's doing and
+    the pipeline never executes anything at that moment, so there is nowhere
+    in the pass to emit it from.
+    """
+
+    prev_states = {
+        (m, r["run_init"]): r["state"]
+        for m, rows in (prev.get("models") or {}).items() for r in rows
+    }
+    from src.pipeline.orchestrator import append_event
+    for model, rows in cur["models"].items():
+        for r in rows:
+            was = prev_states.get((model, r["run_init"]))
+            if was == r["state"] or (was, r["state"]) in _BORING:
+                continue
+            if was is None and r["state"] in ("future", "available"):
+                continue        # first sighting of a slot is not an event
+            append_event({
+                "kind": "state", "at": cur["updated_at"], "model": model,
+                "run_init": r["run_init"], "hour": r["hour"], "day": r["day"],
+                "from": was, "to": r["state"],
+                "frames": r["frames"], "raw_files": r["raw_files"],
+            })
 
 
 def write(now: datetime | None = None) -> None:
@@ -102,10 +254,17 @@ def write(now: datetime | None = None) -> None:
 
     from src.viz import frame_renderer
     try:
-        path = frame_renderer.OUTPUT_DIR / "pipeline_coverage.json"
+        out = frame_renderer.OUTPUT_DIR
+        path = out / "pipeline_coverage.json"
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            prev = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            prev = {}
+        cur = build(now)
+        _emit_events(prev, cur, out / EVENTS_FILENAME)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(build(now), indent=2), encoding="utf-8")
+        tmp.write_text(json.dumps(cur, indent=2), encoding="utf-8")
         tmp.replace(path)
     except OSError:
         pass
