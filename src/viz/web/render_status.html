@@ -47,9 +47,18 @@
   .mini > i { display: block; height: 100%; background: var(--done); }
   .mini.partial > i { background: var(--accent); }
   svg { background: #fff; border: 1px solid var(--rule); display: block; width: 100%; height: 150px; }
+  .charts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 4px; }
+  .charts figure { margin: 0; }
+  .charts figcaption { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em;
+                       color: var(--dim); margin-bottom: 3px; }
+  .charts figcaption span { text-transform: none; letter-spacing: 0; color: var(--faint); }
+  @media (max-width: 700px) { .charts { grid-template-columns: 1fr; } }
   .legend { color: var(--dim); font-size: 10px; margin: 4px 0 18px; }
   .legend b { color: var(--ink); }
   .stale { color: var(--warn); font-weight: 700; }
+  .wrow { font-size: 11px; margin-top: 3px; padding-left: 14px; font-variant-numeric: tabular-nums; }
+  .wrow b { color: var(--dim); font-weight: 700; margin-right: 4px; }
+  .wrow.stuckrow { color: var(--warn); }
   #err { color: var(--warn); display: none; margin-bottom: 12px; }
   .foot { color: var(--faint); font-size: 10px; line-height: 1.6; }
 </style>
@@ -72,11 +81,19 @@
 <div class="now" id="now">…</div>
 <div class="verdict" id="verdict">…</div>
 
-<svg id="chart" viewBox="0 0 1000 150" preserveAspectRatio="none"></svg>
+<div class="charts">
+  <figure><figcaption>Archived <span id="cap-archived"></span></figcaption>
+    <svg id="ch-archived" viewBox="0 0 340 150" preserveAspectRatio="none"></svg></figure>
+  <figure><figcaption>Rendered <span id="cap-complete"></span></figcaption>
+    <svg id="ch-complete" viewBox="0 0 340 150" preserveAspectRatio="none"></svg></figure>
+  <figure><figcaption>Gap <span id="cap-gap"></span></figcaption>
+    <svg id="ch-gap" viewBox="0 0 340 150" preserveAspectRatio="none"></svg></figure>
+</div>
 <div class="legend">
-  <b>green</b> runs fully rendered &middot; <b>brown</b> runs archived (the target
-  it is chasing) &middot; both scaled to the same axis. The gap between the lines is the backlog;
-  it closing means rendering is outpacing fetching.
+  Each panel is scaled to its <b>own</b> range, not a shared axis - on a common
+  0-based axis all three sat in the top few percent and looked flat. The y-range
+  is printed under each. <b>Gap</b> = archived &minus; rendered, the backlog: down
+  is catching up.
 </div>
 
 <table>
@@ -107,10 +124,18 @@ const fmtN = n => n.toLocaleString();
 
 async function poll() {
   try {
-    const [idxR, histR, liveR] = await Promise.all([
+    // Each render worker publishes its own file (they run in parallel and a
+    // shared file would be a read-modify-write race). Probe a fixed span of
+    // ids and keep whatever answers - missing ones 404 cheaply on keep-alive,
+    // and this needs no extra coupling to publish the worker count.
+    const MAX_WORKERS = 8;
+    const workerReqs = Array.from({length: MAX_WORKERS}, (_, i) =>
+      fetch(`render_worker_status_${i}.json?_=` + Date.now())
+        .then(r => r.ok ? r.json() : null).catch(() => null));
+    const [idxR, histR, ...workers] = await Promise.all([
       fetch("rendered_index.json?_=" + Date.now()),
       fetch("rendered_history.jsonl?_=" + Date.now()),
-      fetch("render_worker_status.json?_=" + Date.now()),
+      ...workerReqs,
     ]);
     if (!idxR.ok) throw new Error("rendered_index.json HTTP " + idxR.status);
     const index = await idxR.json();
@@ -118,8 +143,7 @@ async function poll() {
     if (histR.ok) {
       hist = (await histR.text()).trim().split("\n").filter(Boolean).map(JSON.parse);
     }
-    let live = null;
-    if (liveR.ok) { try { live = await liveR.json(); } catch (e) { live = null; } }
+    const live = workers.filter(Boolean);
     $("err").style.display = "none";
     render(index, hist, live);
   } catch (e) {
@@ -179,50 +203,54 @@ function render(index, hist, live) {
 // minutes is worth looking at.
 const STUCK_MIN = 20;
 
+function workerLine(w, i) {
+  const c = w.current;
+  const ago = ts => {
+    const sec = (Date.now() - new Date(ts).getTime()) / 1000;
+    return sec < 90 ? Math.round(sec) + "s" : (sec / 60).toFixed(1) + " min";
+  };
+  if (!c) {
+    return `<div class="wrow"><b>#${i}</b> <span class="meta">between runs</span></div>`;
+  }
+  if (c.phase === "scanning") {
+    return `<div class="wrow"><b>#${i}</b> <span class="meta">scanning the archive, ` +
+           `${ago(c.started_at)} — working out what still needs rendering</span></div>`;
+  }
+  const mins = (Date.now() - new Date(c.started_at).getTime()) / 60000;
+  const stuck = mins > STUCK_MIN;
+  return `<div class="wrow${stuck ? " stuckrow" : ""}"><b>#${i}</b> ` +
+         `${c.model} ${String(c.run_init).slice(0, 13)}Z ` +
+         `<span class="meta">— ${ago(c.started_at)} in` +
+         (stuck ? ", longer than expected" : "") + `</span></div>`;
+}
+
 function liveNow(live) {
   const el = $("now");
-  if (!live) {
+  if (!live || !live.length) {
     el.className = "now idle";
     el.innerHTML = '<span class="dot"></span>No worker status yet — ' +
-      "the render worker publishes this on its next run.";
+      "the render workers publish this on their next run.";
     return;
   }
-  const last = live.last_completed;
+  // Workers share one queue, so "pending" is a single number they all report;
+  // take the freshest. last_completed is whichever worker finished most recently.
+  const fresh = live.slice().sort((a, b) =>
+    new Date(b.updated_at) - new Date(a.updated_at))[0];
+  const pending = fresh.pending_runs;
+  const last = live.map(w => w.last_completed).filter(Boolean)
+    .sort((a, b) => new Date(b.finished_at) - new Date(a.finished_at))[0];
   const lastTxt = last
     ? `<div class="meta">last finished <b>${last.model}</b> ${String(last.run_init).slice(0, 13)}Z — ` +
       `${last.steps} steps, ${last.steps_with_data} with data, ${last.seconds}s, ${fmtAgo(last.finished_at)}</div>`
     : "";
-  // "Idle" is only true with an EMPTY queue. A null current with runs queued
-  // means it is between runs (regenerating manifests), which is work, not idle.
-  if (!live.current) {
-    const busy = live.pending_runs > 0;
-    el.className = "now" + (busy ? "" : " idle");
-    el.innerHTML = '<span class="dot"></span>' + (busy
-      ? `<span class="what">Between runs</span> <span class="meta">— ${live.pending_runs} queued, starting the next shortly.</span>`
-      : '<span class="what">Idle</span> — nothing left to render; waiting for new runs.') + lastTxt;
-    return;
-  }
-  if (live.current.phase === "scanning") {
-    const secs = Math.round((Date.now() - new Date(live.current.started_at).getTime()) / 1000);
-    el.className = "now";
-    el.innerHTML = '<span class="dot"></span><span class="what">Scanning the archive</span> ' +
-      `<span class="meta">— ${secs}s, working out what still needs rendering</span>` + lastTxt;
-    return;
-  }
-  if (live.current.phase === "manifests") {
-    const secs = Math.round((Date.now() - new Date(live.current.started_at).getTime()) / 1000);
-    el.className = "now";
-    el.innerHTML = '<span class="dot"></span><span class="what">Publishing manifests</span> ' +
-      `<span class="meta">— ${secs}s, ${live.pending_runs || 0} run(s) still queued</span>` + lastTxt;
-    return;
-  }
-  const mins = (Date.now() - new Date(live.current.started_at).getTime()) / 60000;
-  el.className = "now" + (mins > STUCK_MIN ? " stuck" : "");
-  el.innerHTML = '<span class="dot"></span><span class="what">Rendering ' +
-    live.current.model + " " + String(live.current.run_init).slice(0, 13) + "Z</span> " +
-    `<span class="meta">— ${mins < 1 ? Math.round(mins * 60) + "s" : mins.toFixed(1) + " min"} in` +
-    (live.pending_runs ? `, ${live.pending_runs} queued` : "") +
-    (mins > STUCK_MIN ? " — longer than expected, worth a look" : "") + "</span>" + lastTxt;
+  const active = live.filter(w => w.current && !w.current.phase).length;
+  const busy = active > 0 || pending > 0;
+  el.className = "now" + (busy ? "" : " idle");
+  el.innerHTML = '<span class="dot"></span><span class="what">' +
+    (active ? `Rendering on ${active} of ${live.length} worker(s)` :
+     pending ? "Between runs" : "Idle") + "</span> " +
+    `<span class="meta">— ${pending != null ? pending + " queued" : "queue unknown"}</span>` +
+    live.map((w, i) => workerLine(w, w.worker != null ? w.worker : i)).join("") + lastTxt;
 }
 
 // Rate is measured over the trailing window rather than since the beginning:
@@ -288,20 +316,35 @@ function verdict(t, hist) {
 }
 
 function chart(hist) {
-  const svg = $("chart");
-  if (hist.length < 2) { svg.innerHTML = ""; return; }
-  const W = 1000, H = 150, PAD = 4;
-  const t0 = new Date(hist[0].at).getTime(), t1 = new Date(hist[hist.length - 1].at).getTime();
-  const span = Math.max(1, t1 - t0);
-  const yMax = Math.max(...hist.map(h => h.archived)) * 1.05 || 1;
-  const path = key => hist.map((h, i) => {
-    const x = ((new Date(h.at).getTime() - t0) / span) * (W - 2 * PAD) + PAD;
-    const y = H - PAD - (h[key] / yMax) * (H - 2 * PAD);
-    return (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
-  }).join(" ");
-  svg.innerHTML =
-    `<path d="${path("archived")}" fill="none" stroke="#8a5a20" stroke-width="2"/>` +
-    `<path d="${path("complete")}" fill="none" stroke="#2f6f3f" stroke-width="2"/>`;
+  // One panel per series, each autoscaled to its own [min,max] rather than a
+  // shared 0-based axis: archived and rendered differ by a few units against
+  // totals in the hundreds, so a common axis flattened every curve into a line.
+  const series = [
+    ["archived", h => h.archived,              "#8a5a20"],
+    ["complete", h => h.complete,              "#2f6f3f"],
+    ["gap",      h => h.archived - h.complete, "#b03030"],
+  ];
+  for (const [name, fn, colour] of series) {
+    const svg = $("ch-" + name), cap = $("cap-" + name);
+    if (!svg) continue;
+    if (hist.length < 2) { svg.innerHTML = ""; if (cap) cap.textContent = ""; continue; }
+    const W = 340, H = 150, PAD = 6;
+    const t0 = new Date(hist[0].at).getTime();
+    const span = Math.max(1, new Date(hist[hist.length - 1].at).getTime() - t0);
+    const vals = hist.map(fn);
+    let lo = Math.min(...vals), hi = Math.max(...vals);
+    if (hi === lo) { hi = lo + 1; lo = lo - 1; }   // flat series: give it a band
+    const pad = (hi - lo) * 0.08;
+    lo -= pad; hi += pad;
+    const d = hist.map((h, i) => {
+      const x = ((new Date(h.at).getTime() - t0) / span) * (W - 2 * PAD) + PAD;
+      const y = H - PAD - ((fn(h) - lo) / (hi - lo)) * (H - 2 * PAD);
+      return (i ? "L" : "M") + x.toFixed(1) + " " + y.toFixed(1);
+    }).join(" ");
+    svg.innerHTML = `<path d="${d}" fill="none" stroke="${colour}" stroke-width="2"` +
+                    ` vector-effect="non-scaling-stroke"/>`;
+    if (cap) cap.textContent = `${Math.round(vals[vals.length - 1])} · range ${Math.round(lo)}–${Math.round(hi)}`;
+  }
 }
 
 poll();

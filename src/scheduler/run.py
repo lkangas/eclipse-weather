@@ -159,9 +159,92 @@ def _runs_needing_render(renderable: set[str]) -> list[tuple[str, datetime, int]
 # anyone looks for when they think a backfill has stalled. Written on entering
 # and leaving each run, so a reader can also tell a long render from a wedged
 # one by how old started_at is.
+WORKER_ID = 0  # set from argv in __main__; each render worker gets its own file
+
+
 def _live_status_path():
     from src.viz.frame_renderer import OUTPUT_DIR
-    return OUTPUT_DIR / "render_worker_status.json"
+    return OUTPUT_DIR / f"render_worker_status_{WORKER_ID}.json"
+
+
+# Runs are claimed rather than divided up in advance. Sharding by model was the
+# obvious alternative and is worse: a GFS run is 209 steps against AROME's 52,
+# so fixed lanes leave workers idle on a queue that still has work in it.
+# Claiming keeps every worker busy AND preserves the global newest-first
+# ordering, since all of them walk the same ranked list and simply skip what is
+# already taken.
+CLAIM_STALE_SECONDS = float(os.environ.get("RENDER_CLAIM_STALE_S", "3600"))
+
+
+def _claim_path(model_id: str, run_init: datetime):
+    from src.viz.frame_renderer import OUTPUT_DIR
+    # NOT under data/raw/: raw_data_files() counts everything in a run's
+    # directory, so a lock file there would inflate raw_count and make the run
+    # look permanently un-rendered.
+    d = OUTPUT_DIR / ".claims"
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"{model_id}_{run_init:%Y%m%d%H}.json"
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists, owned by someone else
+    except OSError:
+        return False
+    return True
+
+
+def _write_claim(path) -> bool:
+    """O_EXCL create - the atomicity that makes this safe without a lock server.
+    All render workers are children of one scheduler, so they share a PID
+    namespace and can check each other's liveness directly."""
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+    except FileExistsError:
+        return False
+    with os.fdopen(fd, "w") as fh:
+        json.dump({"pid": os.getpid(), "worker": WORKER_ID,
+                   "at": datetime.now(UTC).isoformat().replace("+00:00", "Z")}, fh)
+    return True
+
+
+def _try_claim(model_id: str, run_init: datetime) -> bool:
+    path = _claim_path(model_id, run_init)
+    if _write_claim(path):
+        return True
+    # Someone holds it. Take it over only if that someone is gone or the claim
+    # is ancient - a worker SIGKILLed mid-render leaves its claim behind, and
+    # without this the run would never be retried.
+    try:
+        info = json.loads(path.read_text(encoding="utf-8"))
+        owner = int(info.get("pid", -1))
+        age = time.time() - path.stat().st_mtime
+    except (OSError, ValueError, TypeError):
+        owner, age = -1, CLAIM_STALE_SECONDS + 1
+    if _pid_alive(owner) and age < CLAIM_STALE_SECONDS:
+        return False
+    log.warning("stealing stale render claim for %s %s (pid %s, %.0fs old)",
+                model_id, run_init.isoformat(), owner, age)
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    return _write_claim(path)
+
+
+def _release_claim(model_id: str, run_init: datetime) -> None:
+    try:
+        _claim_path(model_id, run_init).unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        log.exception("could not release render claim for %s %s", model_id, run_init.isoformat())
 
 
 def _publish_live(current: dict | None, last: dict | None, pending: int | None = None) -> None:
@@ -174,6 +257,7 @@ def _publish_live(current: dict | None, last: dict | None, pending: int | None =
             except (OSError, ValueError):
                 prev = {}
         payload = {
+            "worker": WORKER_ID,
             "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "current": current,
             "last_completed": last if last is not None else prev.get("last_completed"),
@@ -197,7 +281,7 @@ def render_worker_main() -> None:
     # be rendered at all, and a copy of it in this file would silently rot the
     # first time a model is added there (CLAUDE.md hard constraint #2's spirit).
     renderable = set(_MODEL_READERS)
-    log.info("render worker started, %d renderable model(s)", len(renderable))
+    log.info("render worker %d started, %d renderable model(s)", WORKER_ID, len(renderable))
 
     while True:
         # last_completed/pending_runs are carried forward by _publish_live when
@@ -212,6 +296,9 @@ def render_worker_main() -> None:
             continue
         rendered_any = False
         for model_id, run_init, raw_count in pending:
+            # Another worker is already on this one - skip, do not wait.
+            if not _try_claim(model_id, run_init):
+                continue
             started = datetime.now(UTC)
             _publish_live(
                 {"model": model_id, "run_init": run_init.isoformat().replace("+00:00", "Z"),
@@ -228,6 +315,8 @@ def render_worker_main() -> None:
                     "render failed for %s %s", model_id, run_init.isoformat()
                 )
                 continue
+            finally:
+                _release_claim(model_id, run_init)
             n_steps = len(result)
             n_with_data = sum(1 for fields in result.values() if any(fields.values()))
             _record_render(model_id, run_init, raw_count)
@@ -325,10 +414,19 @@ MANIFEST_WORKER_FLAG = "--manifest-worker"
 # the reason - neither survives being driven concurrently from one interpreter.
 # Separate processes also mean one worker wedging on a bad GRIB cannot stall the
 # others, which is the whole point of the split.
-_WORKERS: dict[str, list] = {
-    RENDER_WORKER_FLAG: [None],    # [Popen | None]
-    MANIFEST_WORKER_FLAG: [None],
-}
+RENDER_WORKERS = int(os.environ.get("RENDER_WORKERS", "4"))
+
+def _worker_specs() -> dict[str, list[str]]:
+    """label -> argv tail. One manifest worker, RENDER_WORKERS render workers.
+    Render workers are interchangeable: they all walk the same ranked queue and
+    claim what is free, so the count is a pure throughput dial."""
+    specs = {"manifest-worker": [MANIFEST_WORKER_FLAG]}
+    for i in range(RENDER_WORKERS):
+        specs[f"render-worker-{i}"] = [RENDER_WORKER_FLAG, "--worker-id", str(i)]
+    return specs
+
+
+_WORKERS: dict[str, list] = {label: [None] for label in _worker_specs()}
 # poll-then-spawn must be atomic: supervision and startup both call
 # ensure_workers(), and a death noticed by both would otherwise start two of the
 # same worker. Two renderers writing the same frame paths is the one thing
@@ -343,17 +441,18 @@ def ensure_workers() -> None:
     poll() per worker when all is well."""
     if not RENDER_IN_SCHEDULER:
         return
+    specs = _worker_specs()
     with _worker_lock:
-        for flag, slot in _WORKERS.items():
+        for label, slot in _WORKERS.items():
             proc = slot[0]
             if proc is not None and proc.poll() is None:
                 continue
             if proc is not None:
-                log.error("%s exited with code %s - restarting it", flag, proc.returncode)
+                log.error("%s exited with code %s - restarting it", label, proc.returncode)
             slot[0] = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
-                [sys.executable, "-m", "src.scheduler.run", flag]
+                [sys.executable, "-m", "src.scheduler.run", *specs[label]]
             )
-            log.info("%s running as pid %d", flag, slot[0].pid)
+            log.info("%s running as pid %d", label, slot[0].pid)
 
 
 def _supervise_workers_forever() -> None:
@@ -496,6 +595,8 @@ if __name__ == "__main__":
     # One module, three roles. Fetching, rendering and manifest generation each
     # run as their own process so none of them can block the others.
     if RENDER_WORKER_FLAG in sys.argv[1:]:
+        if "--worker-id" in sys.argv:
+            WORKER_ID = int(sys.argv[sys.argv.index("--worker-id") + 1])
         render_worker_main()
     elif MANIFEST_WORKER_FLAG in sys.argv[1:]:
         manifest_worker_main()
