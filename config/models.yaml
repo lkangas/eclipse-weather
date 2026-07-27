@@ -66,7 +66,8 @@ models:
            note: "T37 (2026-07-23): confirmed live via herbie inventory against the SAME atmos.5 product this
              model's own total-cloud fetch already uses (member c00) - ':APCP:surface:0-6 hour acc fcst:ENS=low-res
              ctl:'. Rides along in the same file, no new product/fetch needed."}
-    surface_temp: {param: TMP, level: "2 m above ground", step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: TMP, level: "2 m above ground", height: 2m, step_type: instant,
+                    status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed live in the same atmos.5 product/file - ':TMP:2 m above
                       ground:6 hour fcst:ENS=low-res ctl:'. Clean single message, no windowing ambiguity."}
     source:
@@ -115,7 +116,8 @@ models:
              duplicate-message pattern the existing TCDC fetch already has to filter, see herbie_fetcher.py's
              'N hour fcst' vs 'ave' regex discipline). APCP (accumulated) is the natural default; PRATE available
              if an instantaneous-rate view is ever wanted."}
-    surface_temp: {param: TMP, level: "2 m above ground", step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: TMP, level: "2 m above ground", height: 2m, step_type: instant,
+                    status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed live - ':TMP:2 m above ground:6 hour fcst:'. Clean single
                       message, unlike cloud/rain's 'ave vs fcst' duplication."}
     source:
@@ -161,7 +163,8 @@ models:
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run - tp
              present across all 50 real pf members (same zero-cf-messages pattern already known from this model's
              own cloud fetch)."}
-    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request as rain above - t2m present across all
                       50 members."}
     source:
@@ -213,7 +216,8 @@ models:
              physical quantity as ecmwf_hres/ecmwf_ens's tp but reported in kg/m² here rather than m water-
              equivalent - different unit convention per model family, do not assume the same scale factor across
              models (same lesson as tcc's fraction-vs-percent split elsewhere in this file)."}
-    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request as rain above."}
     source:
       client: ecmwf-opendata
@@ -269,7 +273,8 @@ models:
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) - tp present in both a
              control-shaped (no member dim) and a (50, lat, lon) perturbed-member array, same structure as
              ecmwf_ens/aifs_single's own fields."}
-    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request/shape as rain above."}
     notes: "T02: may be the first entry in this registry with CONFIRMED native L/M/H at ensemble scale out to 15
       days — re-ranking nuance is 'best confirmed native-L/M/H long-range ENSEMBLE', pending gefs_extended's own
@@ -313,7 +318,8 @@ models:
            note: "T37 (2026-07-23): confirmed live via retrieve(param=[2t,tp]) against the real 00Z run - clean
              single tp message, m water-equivalent (matches ecmwf_ens's own unit convention, differs from
              aifs_single/aifs_ens's kg/m² - see those entries' notes)."}
-    surface_temp: {param: t2m, units: K, step_type: instant, status: confirmed, task: T37,
+    surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request as rain above."}
     source:
       client: ecmwf-opendata
@@ -356,7 +362,7 @@ models:
            note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket for the exact same URL convention
              the cloud params already use (param_lower dir + PARAM in filename) - a direct drop-in extension of
              dwd_bz2_fetcher.py's existing _cloud_params()-style request, no new code shape needed."}
-    surface_temp: {param: T_2M, status: confirmed, task: T37,
+    surface_temp: {param: T_2M, cfgrib_var: t2m, height: 2m, status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed live, same URL convention as rain above."}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon/grib/{HH}/{param_lower}/icon_global_icosahedral_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
@@ -405,7 +411,7 @@ models:
     rain: {param: TOT_PREC, status: confirmed, task: T37,
            note: "T37 (2026-07-23): confirmed live, HTTP 200 on the real bucket - same finding/reasoning as
              icon_global's own rain entry."}
-    surface_temp: {param: T_2M, status: confirmed, task: T37,
+    surface_temp: {param: T_2M, cfgrib_var: t2m, height: 2m, status: confirmed, task: T37,
                     note: "T37 (2026-07-23): confirmed live, same URL convention as rain above."}
     source:
       url_template: "https://opendata.dwd.de/weather/nwp/icon-eu/grib/{HH}/{param_lower}/icon-eu_europe_regular-lat-lon_single-level_{YYYYMMDDHH}_{FFF}_{PARAM}.grib2.bz2"
@@ -712,22 +718,52 @@ models:
                             finding). The altitude figures are height above the model's own internal orography
                             ('relief modele'), NOT above sea level or real terrain - a separate ALTITUDE
                             parameter is the real-terrain reference, don't conflate the two."}}
-    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
+    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, height: skin, units: K,
+                    status: confirmed, task: T37, corrected: T45,
+                    correction: "T45 (2026-07-27): this is SKIN (surface) temperature, NOT 2 m air
+                      temperature, and T37 recorded it as the latter. Proven against a real archived
+                      SP2 file: `t` EXCEEDS the same file's own `max_2t` (the 2 m maximum over a window
+                      containing the step) at 76.7% of gridpoints, mean excess +2.12 K, domain max
+                      64.3 C vs max_2t's 49.8 C - impossible for an instantaneous 2 m value bounded by
+                      its own windowed maximum. Full inventory of SP2 shows only t(surface), 2d(2m
+                      dewpoint) and the WINDOWED max_2t/min_2t: there is NO instantaneous 2 m
+                      temperature in SP2 at all. Skin temperature has ~2x the diurnal amplitude of 2 m
+                      air temperature, so plotting it on a shared 2 m colour scale with the other
+                      models would exaggerate this model's apparent eclipse cooling and mislead.
+                      height: skin is what excludes it from the temperature layer by config rather
+                      than by a model name in code. Real 2 m temperature requires package SP1, which
+                      is a genuinely new fetch (~600 MB/run for ARPEGE), not the free ride T37
+                      assumed.",
                     note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
                       (000H012H) with cfgrib.open_datasets() - zero new fetch needed, same SP2 package the cloud
                       fields already come from. Rides along for free."}
-    rain: {package: "SP2", grib2: {discipline: 0, category: 1, parameterNumber: 6}, step_type: accum,
-           status: confirmed, task: T37,
-           note: "T37 (2026-07-23): confirmed by inspecting the same already-downloaded group file, but cfgrib
-             could NOT resolve a clean shortName for it (grouped under a generic 'unknown' xarray var due to a
-             local eccodes table gap) - decoded directly via raw eccodes discipline/parameterCategory/
-             parameterNumber instead of trusting shortName, landing on WMO-standard 0-1-6 = Total Precipitation.
-             A bonus 0-1-64 (Total Snowfall Rate Water Equivalent) was also found in the same file, not yet added
-             as its own field here. IMPLEMENTATION NOTE for whoever builds this extractor: do not key on
-             GRIB_shortName=='tp' the way arome_france's tirf lookup can - key on
-             (discipline=0, parameterCategory=1, parameterNumber=6) directly via the eccodes low-level API, or
-             this field will silently vanish under cfgrib's generic 'unknown' merge collision (it collided with
-             2 OTHER unrelated params in this same file during T37's own check)."}
+    rain: {package: "SP1", cfgrib_shortname: tirf,
+           grib2: {discipline: 0, category: 1, parameterNumber: 65}, step_type: accum,
+           accumulation: since_run_start, units: kg_m2,
+           status: verify, task: T45,
+           note: "T45 (2026-07-27) CORRECTS T37, which was wrong twice over. T37 recorded
+             (0,1,6) in SP2 as Total Precipitation and (0,1,64) as Total Snowfall Rate. Per
+             eccodes' own WMO table 4.2.0.1, 0-1-6 is EVAPORATION and 0-1-64 is Total column
+             integrated water vapour; Total precipitation is 0-1-8. Verified against the real
+             archived file arpege_europe/2026072518/arpege_europe_SP2_073H084H.grib2: the
+             0-1-6 accum field at 0-84 has min -104.4, max +3.23, mean -6.36 and NOT ONE exact
+             zero - unambiguously accumulated evaporation (negative = upward flux), not rain,
+             which would be non-negative and mostly zero. Building against the old entry would
+             have shipped an evaporation map labelled 'rain', with plausible magnitudes and
+             negative values.
+             A full 331-message enumeration of SP2 000H012H confirms SP2 carries NO
+             precipitation-amount field at all (only ptype, a category code). Real ARPEGE
+             precipitation is in package SP1 - verified by ranged reads of the live bucket
+             file: cp (0,1,37), lsp (0,1,54), tirf (0,1,65) and crr (0,1,76), all accum and
+             all since-run-start. tirf is the field to use, identical to what arome_france
+             already provides free in SP2.
+             COST: this is NOT a free ride - SP1 is a whole additional package, 9 group files,
+             619.6 MB/run measured, roughly doubling this model's raw footprint, for a field
+             arome_france already gives at 4x the resolution over the same domain. Recommend
+             deferring unless ARPEGE rain is specifically wanted.
+             status: verify (not confirmed) because SP1's completeness across every group
+             window has not been checked - tirf was found by sampling three 6 MB windows of a
+             72 MB file, and whether SP1 also carries a true tp (0-1-8) is unestablished."}
     source:
       primary: {via: mf_api, url: "https://public-api.meteofrance.fr/previnum/DPPaquetARPEGE",
                 auth: api_key, human_action: true,
@@ -794,7 +830,22 @@ models:
                             France's official glossary PDF gives ONE shared NEBBAS/NEBMOY/NEBHAU boundary set
                             for both models, no AROME-specific split published. Altitudes are height above
                             model terrain ('relief modele'), not sea level or real terrain."}}
-    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, units: K, status: confirmed, task: T37,
+    surface_temp: {package: "SP2", cfgrib_shortname: t, level: surface, height: skin, units: K,
+                    status: confirmed, task: T37, corrected: T45,
+                    correction: "T45 (2026-07-27): this is SKIN (surface) temperature, NOT 2 m air
+                      temperature, and T37 recorded it as the latter. Proven against a real archived
+                      SP2 file: `t` EXCEEDS the same file's own `max_2t` (the 2 m maximum over a window
+                      containing the step) at 76.7% of gridpoints, mean excess +2.12 K, domain max
+                      64.3 C vs max_2t's 49.8 C - impossible for an instantaneous 2 m value bounded by
+                      its own windowed maximum. Full inventory of SP2 shows only t(surface), 2d(2m
+                      dewpoint) and the WINDOWED max_2t/min_2t: there is NO instantaneous 2 m
+                      temperature in SP2 at all. Skin temperature has ~2x the diurnal amplitude of 2 m
+                      air temperature, so plotting it on a shared 2 m colour scale with the other
+                      models would exaggerate this model's apparent eclipse cooling and mislead.
+                      height: skin is what excludes it from the temperature layer by config rather
+                      than by a model name in code. Real 2 m temperature requires package SP1, which
+                      is a genuinely new fetch (~600 MB/run for ARPEGE), not the free ride T37
+                      assumed.",
                     note: "T37 (2026-07-23): confirmed by inspecting an already-downloaded real group file
                       (00H06H) with cfgrib.open_datasets() - zero new fetch needed. Also present in the same file
                       but not used here: d2m (2m dewpoint), mn2t/mx2t (windowed min/max 2m temp)."}

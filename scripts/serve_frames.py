@@ -34,6 +34,7 @@ _NO_CACHE_NAMES = {
     # iterated on, so they must never be served immutable like the frames are.
     "review.html", "review_grid.json",
     "rain_overlay_review.html", "rain_overlay_grid.json",
+    "temp_panel_review.html", "temp_panel_grid.json",
 }
 
 
