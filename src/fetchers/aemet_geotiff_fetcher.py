@@ -63,6 +63,10 @@ scheduler (which is generic and must stay that way):
    tags carry only FECHA (valid time) and no reference time, so the GeoJSON
    sidecar is the only in-band statement of the run init. Reverse-inferring
    the init from the earliest valid time (init+1h) is kept as a fallback.
+   That init is also what comes back in ``FetchResult.run_init``, and CALLERS
+   MUST FOLLOW IT rather than the init they asked for: extracting, marking or
+   reclaiming the requested run instead files work against a directory this
+   fetch never wrote to (see src/scheduler/run.py's ``fetched_init``).
 
 2. This model must not take part in the generic 48-hour top-up pass. A
    latest-only endpoint can never "gain steps" for an older run, so a top-up
