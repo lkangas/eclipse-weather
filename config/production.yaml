@@ -89,6 +89,24 @@ chunking:
   # furthest down the list.
   max_chunks_per_pass: 4
 
+# Models production skips entirely.
+#
+# aemet_harmonie (2026-07-27): its endpoint serves whatever run is CURRENT
+# regardless of what is requested, and the fetcher files the result under the
+# requested run_init anyway. So every pass downloads the same 18 MB bundle once
+# per "missing" cycle and writes it into the wrong run's directory - on the
+# desktop that has already put rasters from 2-4 different runs into 9 of 23
+# directories, and 23 directories hold only 13 distinct runs. Running it here
+# does not archive AEMET, it corrupts the archive and spends bandwidth doing
+# it. Excluded until the fetcher takes the run init from the bundle itself
+# (every press_1.geojson member carries "name": "fc<YYYYMMDDHH>+NNNh00m_1"),
+# which is being fixed and verified standalone on the desktop first.
+#
+# Note this is a PRODUCTION-only exclusion: the desktop keeps fetching AEMET,
+# so nothing stops being collected while the fix is proven.
+exclude_models:
+  - aemet_harmonie
+
 frames:
   # Rendered PNGs plus the manifests ARE the product; raw data is only a means
   # to them. They are ~130 KB each and the whole archive to date is well under

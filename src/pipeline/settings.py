@@ -55,6 +55,11 @@ class Settings:
 
     max_run_age_days: int | None = None
 
+    # Models production must not touch at all. Not a performance dial: it is
+    # for a model whose fetch path is known to be actively harmful, where
+    # doing nothing is better than doing the wrong thing every pass.
+    exclude_models: list[str] = field(default_factory=list)
+
     def chunk_hours(self, model_id: str) -> int:
         return int(self.per_model_chunk_hours.get(model_id, self.default_chunk_hours))
 
@@ -119,4 +124,5 @@ def load_settings(path: Path | None = None) -> Settings:
         per_model_chunk_hours=dict(chunking.get("per_model_chunk_hours") or {}),
         max_chunks_per_pass=max_chunks,
         max_run_age_days=max_age,
+        exclude_models=list(raw.get("exclude_models") or []),
     )

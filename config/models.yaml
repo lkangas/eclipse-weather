@@ -929,6 +929,30 @@ models:
     source:
       open_endpoint: {url: "https://www.aemet.es/es/api-eltiempo/modelos/download/harmonie/PB",
                       auth: none, status: confirmed, task: "T07(c)",
+                      serves_latest_run_only: true,
+                      serves_latest_run_only_note: "2026-07-27, verified: this endpoint ignores which run_init the
+                        caller wants and always returns the CURRENT run's bundle. Read by
+                        src/fetchers/aemet_geotiff_fetcher.py to opt this model out of the generic 48h top-up
+                        pass — a latest-only endpoint can never gain steps for an older run, so a top-up can only
+                        re-download the current bundle and (before the filing fix) write it into an older run's
+                        directory. This flag is the per-model opt-out; FETCH_TOPUP_WINDOW_H stays global because
+                        gefs_extended depends on it. No other model in this file has this property.",
+                      bundle_identity: "Content-Disposition filename=descargas_<unixtime>.tar.gz, where <unixtime>
+                        is the bundle's GENERATION time (verified 2026-07-27: 1785163351 = 14:42:31Z for that
+                        day's 12Z run, ~2h42m after init; identical across repeated requests). No ETag or
+                        Last-Modified is exposed. The fetcher records it as .bundle_token in the run directory, so
+                        a HEAD request is enough to recognise a bundle already held and skip the ~18MB download.",
+                      run_init_in_band: "Every *_press_1.geojson member of the bundle carries a top-level
+                        'name': 'fc<YYYYMMDDHH>+NNNh00m_1' — the ONLY in-band statement of the run init (the
+                        GeoTIFFs' GDAL tags carry FECHA/valid time only, no reference time). Verified 2026-07-27:
+                        all 48 members of a bundle agree. This is what the fetcher files the run under.",
+                      history_endpoint: "https://www.aemet.es/es/api-eltiempo/modelo-harmonie/imagen-modelo/71/PB/
+                        fc<YYYYMMDDHH>+NNNh00m_71_3857.tif_color.png (index at .../timeline/71/PB, which lists the
+                        CURRENT run only, so filenames for older runs must be constructed). Undocumented, no auth.
+                        Measured retention 2026-07-27T17Z: 11 runs / ~2.8 days back (fc2026072500 served,
+                        fc2026072418 404). NOT the same product as this endpoint's bundle — PNG, EPSG:3857,
+                        586x476, versus GeoTIFF, EPSG:4326, 0.025° — so it is a distinct-provenance emergency
+                        recovery path, not an archive substitute. See scripts/aemet_harmonie.py history.",
                       note: "Confirmed public, no auth needed — HEAD/GET (headers only) returns HTTP 200,
                         Content-Type: application/tar+gzip, filename=descargas_<unixtime>.tar.gz. Cadence could
                         not be read from headers directly (no Last-Modified/Cache-Control exposed); one sample

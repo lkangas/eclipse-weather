@@ -111,6 +111,10 @@
   .feed .m b { font-weight:700; }
   .feed .s { font-size:10px; padding:0 5px; border:1px solid transparent; }
   .feed .live { background:#fff6e0; }
+  /* Predicted, not observed - dimmed and dashed so it cannot be mistaken for
+     something that has already happened. */
+  .feed .next { background:#f4f1e8; color:var(--dim); border-bottom:1px dashed var(--rule); }
+  .feed .next .s { opacity:.55; }
   .legend { color:var(--dim); font-size:10px; margin-top:6px; }
   .legend b { color:var(--ink); }
   .key { display:inline-block; width:9px; height:9px; vertical-align:-1px; margin:0 3px 0 9px;
@@ -234,7 +238,7 @@ function render(status, activity, cov, hist, fails, events) {
   }
   coverage(cov, activity);
   failures(fails);
-  timeline(events, activity);
+  timeline(events, activity, cov);
   attention(status);
 }
 
@@ -440,7 +444,7 @@ function coverage(cov, activity) {
 // (fetching gfs chunk 3/17); "state" is a run changing what it IS on disk
 // (gfs 18Z -> done). The first is emitted per phase change by the pass, the
 // second by diffing coverage - neither alone tells the story.
-function timeline(events, activity) {
+function timeline(events, activity, cov) {
   const el = $("feed");
   const hhmm = ts => { const t = new Date(ts);
     return String(t.getHours()).padStart(2,"0") + ":" + String(t.getMinutes()).padStart(2,"0") +
@@ -471,6 +475,49 @@ function timeline(events, activity) {
   if (activity && activity.model && activity.run_init && activity.phase) {
     seenPhase.add(activity.model + "|" + activity.run_init + "|" + activity.phase);
   }
+  // What happens when "now" finishes. The pipeline's loop is deterministic:
+  // each chunk fetches then renders, then the next chunk starts; when a run's
+  // last chunk is done it moves to the next run needing work, in the order
+  // coverage lists them (models.yaml order, newest run first within a model).
+  // So this is derivable rather than guessed - but it is still a PREDICTION,
+  // hence the dashed styling.
+  if (activity && activity.model && cov) {
+    const NEEDS = new Set(["available", "overdue", "fetched"]);
+    let nx = null;
+    if (activity.phase === "fetching" && activity.chunk) {
+      nx = {phase: "rendering", model: activity.model, run: activity.run_init,
+            chunk: activity.chunk, chunks: activity.chunks};
+    } else if (activity.phase === "rendering" && activity.chunk < activity.chunks) {
+      nx = {phase: "fetching", model: activity.model, run: activity.run_init,
+            chunk: activity.chunk + 1, chunks: activity.chunks};
+    } else {
+      // Run finished (or between runs): find the next one with work to do,
+      // continuing from this model and then onward through the list.
+      const names = Object.keys(cov.models);
+      const start = Math.max(0, names.indexOf(activity.model));
+      outer:
+      for (let i = 0; i < names.length; i++) {
+        const m = names[(start + i) % names.length];
+        const runs = cov.models[m].filter(r => NEEDS.has(r.state))
+                        .sort((a, b) => b.run_init.localeCompare(a.run_init));
+        for (const r of runs) {
+          if (m === activity.model && r.run_init === activity.run_init) continue;
+          nx = {phase: "fetching", model: m, run: r.run_init, chunk: 1, chunks: null};
+          break outer;
+        }
+      }
+    }
+    if (nx) {
+      const ri = String(nx.run || "");
+      rows.unshift(`<div class="next"><span class="t">next</span>` +
+        `<span class="s st-${nx.phase}">${nx.phase}</span>` +
+        `<span class="m">${nx.model} <b>${ri.slice(5,10)} ${ri.slice(11,13)}Z</b></span>` +
+        `<span class="muted">` +
+        (nx.chunks ? `chunk ${nx.chunk}/${nx.chunks}` : "next run needing work") +
+        `</span></div>`);
+    }
+  }
+
   for (const e of events.slice(0, 1200)) {
     if (e.kind === "activity") {
       const key = e.model + "|" + e.run_init + "|" + e.phase;
