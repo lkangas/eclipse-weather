@@ -576,19 +576,23 @@ def render_frame(
     if field in _COMPOSITE_SUBFIELDS:
         return _render_composite_frame(model_name, run_init, step, field, bbox, output_path)
 
+    if output_path.exists():
+        # Already rendered, and that is the whole answer: a frame is only ever
+        # written when the reader returned real data (see the no-placeholder
+        # branch below), so its existence IS has_data=True. Returning here
+        # WITHOUT calling the reader is what makes re-walking an already
+        # rendered archive cheap - opening the GRIB just to recompute a flag
+        # the file's own existence already proves cost ~10 minutes per
+        # already-done run in the render worker's first sweep, which read as
+        # the worker being stalled. Archived data for a past step never
+        # changes, so there is nothing to re-derive.
+        return output_path, True
+
     try:
         result = _MODEL_READERS[model_name](field, run_init, step, bbox)
     except Exception:
         log.exception("frame_renderer: %s/%s/+%dh/%s failed", model_name, run_init, step, field)
         result = None
-
-    if output_path.exists():
-        # Already rendered by an earlier pass over this same (model, run,
-        # step, field) - archived data for a past step never changes, so
-        # re-drawing/re-saving the PNG would be pure waste. Still calls the
-        # reader above (needed for an accurate has_data), just skips the
-        # expensive matplotlib construction/savefig below.
-        return output_path, result is not None
 
     if result is None:
         # No file at all when there's no data - see the module note on why
@@ -650,6 +654,14 @@ def _render_composite_frame(
     - low cloud (or P(low)) is the most decisive layer for whether the
     eclipse is actually visible, so it should visually win where layers
     overlap."""
+    if output_path.exists():
+        # Same reasoning as render_frame()'s own early return, and it matters
+        # more here: a composite needs THREE reads per frame, so recomputing
+        # has_data for an already-drawn frame was the single most expensive
+        # pointless operation in the codebase. The frame's existence already
+        # proves all three sub-fields had data.
+        return output_path, True
+
     high_field, mid_field, low_field = _COMPOSITE_SUBFIELDS[field]
     try:
         high_result = _MODEL_READERS[model_name](high_field, run_init, step, bbox)
@@ -662,9 +674,6 @@ def _render_composite_frame(
         high_result = mid_result = low_result = None
 
     has_data = high_result is not None and mid_result is not None and low_result is not None
-
-    if output_path.exists():
-        return output_path, has_data
 
     if not has_data:
         # No file at all - same reasoning as render_frame()'s own early
