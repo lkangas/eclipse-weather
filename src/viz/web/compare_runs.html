@@ -301,14 +301,35 @@
     text-transform: uppercase;
     letter-spacing: 0.09em;
   }
-  #mapAreaImg {
-    max-width: 100%;
+  /* The rain PNG is transparent everywhere it is not raining, so it can sit
+     straight on top of whatever base frame is showing. Exact registration
+     needs no arithmetic - both are the same bbox at the same size - but it
+     DOES need the two boxes to resolve identically, hence one sizing rule
+     applied to both and object-fit: contain on each. */
+  #mapAreaStack {
+    position: relative;
     flex: 1 1 0;
     min-height: 0;
+    display: flex;
+    justify-content: center;
+  }
+  #mapAreaImg, #mapAreaRainImg {
+    max-width: 100%;
+    max-height: 100%;
     width: auto;
     object-fit: contain;
     display: none;
   }
+  #mapAreaRainImg {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    pointer-events: none;
+  }
+  /* A model with no rain data gets a disabled control, not a live one that
+     does nothing - otherwise "no rain forecast" and "this model cannot do
+     rain" look identical. */
+  .rainOpt.disabled { opacity: 0.4; }
   .legend {
     font-size: 9.5px;
     color: #7a776c;
@@ -368,7 +389,10 @@
 
 <div id="mapArea">
   <div class="placeholder-tag" id="mapAreaTag">select a run</div>
-  <img id="mapAreaImg" alt="">
+  <div id="mapAreaStack">
+    <img id="mapAreaImg" alt="">
+    <img id="mapAreaRainImg" alt="">
+  </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
 </div>
@@ -489,6 +513,7 @@ function setMapTag(text) {
   mapAreaTag.style.display = text ? "" : "none";
 }
 const mapAreaImg = document.getElementById("mapAreaImg");
+const mapAreaRainImg = document.getElementById("mapAreaRainImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
 
@@ -542,7 +567,10 @@ function resolveField(images, hasData, mode) {
   if (mode === "cloudProb") {
     return fieldHasData(images, hasData, "prob_hml_composite") ? "prob_hml_composite" : null;
   }
-  return null; // temp - placeholder, no field to resolve yet
+  if (mode === "temp") {
+    return fieldHasData(images, hasData, "temp") ? "temp" : null;
+  }
+  return null;
 }
 
 // Can this model answer the current quantity AT ALL (regardless of run/step)?
@@ -822,9 +850,14 @@ function updateCursorUI() {
     });
   });
 
-  // The rain checkbox is independent of the radios and deliberately changes
-  // nothing about the displayed image - it only says so.
-  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
+  // Rain is orthogonal to the radios: it overlays whatever base is selected,
+  // so it is gated on the MODEL rather than on the quantity.
+  const modelHasRain = builtRows.some(r =>
+    Object.values(r.run.hasDataByStep || {}).some(f => f && f.rain));
+  rainCheckbox.disabled = !modelHasRain;
+  rainCheckbox.closest("label").classList.toggle("disabled", !modelHasRain);
+  placeholderNote.textContent = modelHasRain ? "" : "no rain data for this model";
+  mapAreaRainImg.style.display = "none";
 
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) {
     setMapTag("select a run");
@@ -837,14 +870,6 @@ function updateCursorUI() {
   const { run } = builtRows[selectedRunIdx];
   const step = nearestStep(run, cursorTime);
 
-  if (quantityMode === "temp") {
-    setMapTag("not available");
-    mapAreaImg.style.display = "none";
-    mapAreaTitle.textContent = MODELS[selectedModelId].label;
-    mapAreaSub.textContent = "temperature: not yet implemented";
-    return;
-  }
-
   const images = step === null ? null : run.imagesByStep[step];
   const hasDataFlags = step === null ? null : run.hasDataByStep[step];
   const field = resolveField(images, hasDataFlags, quantityMode);
@@ -855,6 +880,10 @@ function updateCursorUI() {
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
+    if (rainOn && modelHasRain && images.rain) {
+      mapAreaRainImg.src = images.rain;
+      mapAreaRainImg.style.display = "block";
+    }
     mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
   } else {
     setMapTag("not available");

@@ -248,8 +248,7 @@
   #mapArea .placeholder-tag { font-size: 9.5px; color: #a8a498; text-transform: uppercase; letter-spacing: 0.09em; }
   #mapAreaImg {
     max-width: 100%;
-    flex: 1 1 0;
-    min-height: 0;
+    max-height: 100%;
     width: auto;
     object-fit: contain;
     display: none;
@@ -285,7 +284,26 @@
     color: #7a776c;
   }
   .galleryCell .cellTitle { font-weight: 700; color: #232320; font-size: 10.5px; }
-  .galleryCell .cellImg { width: 100%; flex: 1; object-fit: contain; display: none; }
+  /* Rain ships as its own transparent PNG rather than baked into the base
+     frame, so it overlays any base (cloud composite, total, temp) without a
+     frame per combination. Registration is free - same bbox, same size - as
+     long as the two <img> resolve to the same box, hence one shared sizing
+     rule and object-fit: contain on each. */
+  .imgStack { position: relative; flex: 1; min-height: 0; display: flex; justify-content: center; }
+  .galleryCell .cellImg, .galleryCell .cellRainImg {
+    width: 100%; height: 100%; object-fit: contain; display: none;
+  }
+  .galleryCell .cellRainImg { position: absolute; inset: 0; pointer-events: none; }
+  #mapAreaStack { position: relative; flex: 1 1 0; min-height: 0; display: flex; justify-content: center; }
+  #mapAreaRainImg {
+    position: absolute; inset: 0; margin: auto;
+    max-width: 100%; max-height: 100%; width: auto;
+    object-fit: contain; display: none; pointer-events: none;
+  }
+  /* Disabled, not merely inert, where the model has no rain data - a live
+     checkbox that does nothing makes "no rain forecast" and "this model
+     cannot do rain" look the same. */
+  .rainOpt.disabled { opacity: 0.4; }
   .galleryCell .cellBody {
     flex: 1;
     display: flex;
@@ -367,7 +385,10 @@
 
 <div id="mapArea" style="display:none;">
   <div class="placeholder-tag" id="mapAreaTag">click a row</div>
-  <img id="mapAreaImg" alt="">
+  <div id="mapAreaStack">
+    <img id="mapAreaImg" alt="">
+    <img id="mapAreaRainImg" alt="">
+  </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
 </div>
@@ -484,15 +505,24 @@ function resolveField(images, hasData, mode) {
   if (mode === "cloudProb") {
     return fieldHasData(images, hasData, "prob_hml_composite") ? "prob_hml_composite" : null;
   }
-  return null; // temp - placeholder, no field to resolve yet
+  if (mode === "temp") {
+    return fieldHasData(images, hasData, "temp") ? "temp" : null;
+  }
+  return null;
 }
 
 // Can this model answer the current quantity AT ALL (regardless of run or
 // target)? Cloud cover always can - every model has either a composite or a
-// total. Cloud prob needs the one prob-capable ensemble; Temp has no data
-// path for any model yet.
+// total. Cloud prob needs the one prob-capable ensemble. Temp is now real for
+// every gridded model, so it is answered from the manifest rather than
+// hard-coded false: a model whose frames have not been rendered yet must read
+// as "not there yet", not as "unsupported".
 function modelSupportsMode(modelId, mode) {
-  if (mode === "temp") return false;
+  if (mode === "temp") {
+    const m = MODELS.find(x => x.id === modelId);
+    return !!(m && m.runs.some(r => Object.values(r.byTarget || {})
+      .some(t => (t.images || {}).temp)));
+  }
   if (mode === "cloudProb") return modelId === PROB_ONLY_MODEL;
   return true;
 }
@@ -529,6 +559,7 @@ const legendNoCoverage = document.getElementById("legendNoCoverage");
 const legendTarget = document.getElementById("legendTarget");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
 const rainCheckbox = document.getElementById("rainCheckbox");
+const mapAreaRainImg = document.getElementById("mapAreaRainImg");
 const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
@@ -665,16 +696,23 @@ function init() {
     const titleEl = document.createElement("div");
     titleEl.className = "cellTitle";
     titleEl.textContent = model.label;
+    const imgStack = document.createElement("div");
+    imgStack.className = "imgStack";
     const imgEl = document.createElement("img");
     imgEl.className = "cellImg";
     imgEl.alt = "";
+    const rainImgEl = document.createElement("img");
+    rainImgEl.className = "cellRainImg";
+    rainImgEl.alt = "";
+    imgStack.appendChild(imgEl);
+    imgStack.appendChild(rainImgEl);
     const bodyEl = document.createElement("div");
     bodyEl.className = "cellBody";
     cell.appendChild(titleEl);
-    cell.appendChild(imgEl);
+    cell.appendChild(imgStack);
     cell.appendChild(bodyEl);
     galleryEl.appendChild(cell);
-    galleryCells.push({ model, cell, titleEl, imgEl, bodyEl });
+    galleryCells.push({ model, cell, titleEl, imgEl, rainImgEl, bodyEl });
   });
 
   buildTargetToggle();
@@ -853,16 +891,16 @@ function describeRunAtTarget(model, run) {
   if (!modelSupportsMode(model.id, quantityMode)) {
     const isTemp = quantityMode === "temp";
     return {
-      covers: td.covers, hasImage: false, imageUrl: null, title,
-      sub: isTemp ? "temperature: not yet implemented" : PROB_HML_GAP,
-      note: isTemp ? "temp: not yet implemented" : "no cloud prob. data",
+      covers: td.covers, hasImage: false, imageUrl: null, rainUrl: null, title,
+      sub: isTemp ? "no temperature frames for this model yet" : PROB_HML_GAP,
+      note: isTemp ? "no temp frames yet" : "no cloud prob. data",
     };
   }
 
   if (!td.covers) {
     const gapH = Math.round((TARGET_VALID_TIME - run.runInit) / 3600000);
     return {
-      covers: false, hasImage: false, imageUrl: null, title,
+      covers: false, hasImage: false, imageUrl: null, rainUrl: null, title,
       sub: gapH >= 0
         ? "run doesn't reach the target valid time yet (needs +" + gapH + "h)"
         // Can only happen if the manifest's target has drifted behind an
@@ -877,6 +915,7 @@ function describeRunAtTarget(model, run) {
   // low/mid/high levels, plain total otherwise.
   const field = resolveField(td.images, td.hasData, quantityMode);
   const url = field ? td.images[field] : null;
+  const rainUrl = (td.images || {}).rain || null;
 
   // The nearest published step rarely lands exactly on the target valid time
   // (misalignment_h); showing both makes it obvious when a frame is really
@@ -889,6 +928,7 @@ function describeRunAtTarget(model, run) {
     covers: true,
     hasImage: !!url,
     imageUrl: url,
+    rainUrl,
     title,
     sub: url ? stamp + "  ·  field: " + field : "no rendered frame for this run",
     note: url ? "" : "no rendered frame",
@@ -909,9 +949,18 @@ function updateUI() {
   cursorLine.style.left = Math.round(trackOffsetPx + timeToPx(cursorTime, trackRect.width)) + "px";
   cursorReadout.textContent = "cursor " + fmtTime(cursorTime);
 
-  // The rain checkbox is independent of the radios and deliberately changes
-  // nothing about the displayed image - it only says so.
-  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
+  // Rain overlays whatever base is selected, so it is gated on the MODEL
+  // rather than on the quantity. In gallery view every model is on screen at
+  // once, so "has rain" is asked of the set; in single view, of the one row.
+  const rainModels = viewMode === "gallery"
+    ? MODELS
+    : (clickedRowIdx !== null && builtRows[clickedRowIdx] ? [builtRows[clickedRowIdx].model] : []);
+  const modelHasRain = rainModels.some(m =>
+    m.runs.some(r => Object.values(r.byTarget || {}).some(t => (t.images || {}).rain)));
+  rainCheckbox.disabled = !modelHasRain;
+  rainCheckbox.closest("label").classList.toggle("disabled", !modelHasRain);
+  placeholderNote.textContent = modelHasRain ? "" : "no rain data for this model";
+  mapAreaRainImg.style.display = "none";
 
   // Does anything on screen actually have a frame at this cursor position?
   // Collected here because the row loop already resolves every model's
@@ -927,13 +976,14 @@ function updateUI() {
     });
   });
   if (viewMode === "gallery") {
-    galleryCells.forEach(({ model, cell, imgEl, bodyEl }) => {
+    galleryCells.forEach(({ model, cell, imgEl, rainImgEl, bodyEl }) => {
       const run = nearestRun(model, cursorTime);
       // Dim the models that can't answer the current quantity at all (Cloud
       // prob. on anything but the one ensemble, Temp on everything) - the
       // cell then states it in words below rather than showing a broken or
       // empty image.
       cell.classList.toggle("unsupported", !modelSupportsMode(model.id, quantityMode));
+      rainImgEl.style.display = "none";
       if (!run) {
         cell.classList.add("noCoverage");
         imgEl.style.display = "none";
@@ -947,6 +997,10 @@ function updateUI() {
         imgEl.src = info.imageUrl;
         imgEl.style.display = "block";
         bodyEl.style.display = "none";
+        if (rainOn && info.rainUrl) {
+          rainImgEl.src = info.rainUrl;
+          rainImgEl.style.display = "block";
+        }
       } else {
         imgEl.style.display = "none";
         bodyEl.style.display = "flex";
@@ -978,6 +1032,10 @@ function updateUI() {
     setMapTag("");
     mapAreaImg.src = info.imageUrl;
     mapAreaImg.style.display = "block";
+    if (rainOn && info.rainUrl) {
+      mapAreaRainImg.src = info.rainUrl;
+      mapAreaRainImg.style.display = "block";
+    }
   } else {
     setMapTag(info.covers ? "not available" : "not yet covering");
     mapAreaImg.style.display = "none";
