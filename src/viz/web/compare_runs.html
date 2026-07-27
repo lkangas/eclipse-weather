@@ -1088,6 +1088,29 @@ loadManifest()
     document.body.innerHTML = "<pre style='color:#8b3a2f'>failed to load tool2_manifest.json: " + err + "</pre>";
     console.error(err);
   });
+
+// ---------------------------------------------------------------------------
+// Periodic reload. The manifest is fetched once at load and never re-read, so
+// a tab left open shows whatever was current when it opened - which, in the
+// run-up to the eclipse, is exactly the wrong thing. Manifests rebuild every
+// 60 s; this picks them up.
+//
+// A full reload rather than a live merge: the alternative means reconciling
+// new runs against the selected model, cursor position and preloaded images
+// mid-interaction, and getting that subtly wrong is worse than a reload you
+// can see happen. Deferred while you are actually using the page - a reload
+// that lands mid-drag would be infuriating - so the interval is a floor, not
+// a promise.
+// ---------------------------------------------------------------------------
+const AUTO_RELOAD_MS = 600000;   // 10 min
+const IDLE_BEFORE_RELOAD_MS = 60000;
+let lastInteractionMs = Date.now();
+["pointerdown", "pointermove", "keydown", "wheel", "touchstart"].forEach(ev =>
+  window.addEventListener(ev, () => { lastInteractionMs = Date.now(); }, { passive: true }));
+setInterval(() => {
+  if (Date.now() - lastInteractionMs < IDLE_BEFORE_RELOAD_MS) return;  // busy - try again next tick
+  location.reload();
+}, AUTO_RELOAD_MS);
 </script>
 </body>
 </html>

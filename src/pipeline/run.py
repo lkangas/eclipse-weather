@@ -37,7 +37,12 @@ COVERAGE_INTERVAL_S = 60.0
 BUSY_INTERVAL_S = float(os.environ.get("BUSY_INTERVAL_S", "15"))
 
 # How often the tool manifests are rebuilt, independent of the pass loop.
-MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "300"))
+# 60 s, not the original 300: regeneration used to cost 86 s (models.yaml was
+# re-parsed on every get_model call) and now costs 1.7 s, so the old interval
+# was sized against a cost that no longer exists. As the eclipse approaches the
+# newest run is the one worth seeing, and five minutes of staleness on a 1.7 s
+# job is not a trade worth making.
+MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "60"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pipeline.run")
