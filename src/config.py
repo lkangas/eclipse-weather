@@ -1,5 +1,7 @@
+import copy
 import json
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -27,9 +29,29 @@ POINTS_PARQUET = DATA_ROOT / "points.parquet"
 # trees were merged back into this one DATA_RAW.
 
 
-def load_models() -> dict:
-    with open(MODELS_YAML, encoding="utf-8") as f:
+@lru_cache(maxsize=8)
+def _parse_models(path: str, mtime_ns: int) -> dict:
+    """Parsed models.yaml, keyed on the file's mtime so an edit is still picked
+    up without a restart."""
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
+
+
+def load_models() -> dict:
+    """models.yaml, parsed.
+
+    Cached because this is called a LOT - get_model() goes through it, and the
+    manifest generators call that once per model and again per run. Parsing
+    measured 89 ms (the file carries long provenance notes), so tool3's
+    manifest spent ~52 of its 58 seconds re-parsing the same unchanged file
+    roughly 600 times. That made regenerating manifests cost more than an
+    entire production pass, which is 54 s.
+
+    A deepcopy is handed out rather than the cached object: nothing mutates the
+    result today, but a caller that did would silently corrupt every later
+    read, and the copy costs 0.6 ms against the 89 ms it saves.
+    """
+    return copy.deepcopy(_parse_models(str(MODELS_YAML), MODELS_YAML.stat().st_mtime_ns))
 
 
 def load_sites() -> dict:
