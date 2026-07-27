@@ -26,10 +26,10 @@ isn't tied to the eclipse date at all.
    value into every chart.
 4. **UTC everywhere.** ISO-8601, init times as `YYYYMMDDTHH`. No local times in
    data or code; only the UI may render Europe/Madrid for display.
-5. **Deadline-driven.** First real data: GFS 18Z run, **Jul 27** (~23 UTC on
-   disk). Model onboarding is COMPLETE — all 15 fetchable models have archived
-   continuously since 2026-07-27, ahead of TASKS.md's own calendar. That
-   preference, sets priorities.
+5. **Deadline-driven.** Model onboarding is COMPLETE — all 15 fetchable
+   models have archived continuously since 2026-07-27, ahead of TASKS.md's own
+   calendar. What remains is calendar-driven in the same spirit: see TODO.md,
+   and note the archiver must not miss a run in the Aug 5–12 window.
 6. **Verified vs unverified metadata.** Entries in models.yaml carry
    `status: confirmed | verify`. Research tasks (T01–T09) resolve `verify`
    items by fetching real index/sample files, then update models.yaml and flip
