@@ -34,7 +34,7 @@ from pathlib import Path
 
 from herbie import Herbie
 
-from src.fetchers.base import FetchResult, full_range_steps, raw_output_dir
+from src.fetchers.base import FetchResult, full_range_steps, have_usable_file, raw_output_dir
 from src.fetchers.registry import register
 
 log = logging.getLogger(__name__)
@@ -176,8 +176,15 @@ def _download_one(
             if out_path is None:
                 raise RuntimeError("download() returned no file")
             out_path = Path(out_path)
-            if not out_path.exists() or out_path.stat().st_size == 0:
-                raise RuntimeError(f"downloaded file missing or empty: {out_path}")
+            # Structural check on the freshly-downloaded staging file, not just
+            # "non-empty": a byte-range transfer that died partway writes a
+            # truncated GRIB, and copying that into the archive is how a run
+            # ends up permanently broken. Failing here instead means this
+            # attempt retries (and the file never reaches out_dir).
+            # min_age_s=0: this download is finished, so the "might still be
+            # being written" grace period must not excuse a truncated file here.
+            if not have_usable_file(out_path, min_age_s=0):
+                raise RuntimeError(f"downloaded file missing, empty or truncated: {out_path}")
             return out_path
         except Exception as exc:  # noqa: BLE001 - retried, then reported to caller
             last_exc = exc
@@ -234,8 +241,13 @@ def _download_steps(
             for f in spec["fetches"]:
                 dest_path = out_dir / _output_filename(model_name, member, step, f.suffix)
 
-                if dest_path.exists():
-                    # Idempotent: don't re-download a step/product we already have.
+                if have_usable_file(dest_path):
+                    # Idempotent: don't re-download a step/product we already
+                    # have. NOT a bare .exists() - a truncated GRIB exists too,
+                    # and skipping it froze the run permanently broken (see
+                    # have_usable_file's note). A file it judges broken is gone
+                    # by the time this returns False, so the download below
+                    # simply recreates it.
                     result.files_written.append(dest_path)
                     continue
 

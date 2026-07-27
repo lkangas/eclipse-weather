@@ -30,6 +30,10 @@ _NO_CACHE_NAMES = {
     "tool2_manifest.json", "tool2_index.html",
     "tool3_manifest.json", "tool3_index.html",
     "backfill_progress.json", "backfill_progress.html", "rendered_index.json",
+    # Review/experiment pages are re-rendered in place while a design is being
+    # iterated on, so they must never be served immutable like the frames are.
+    "review.html", "review_grid.json",
+    "rain_overlay_review.html", "rain_overlay_grid.json",
 }
 
 

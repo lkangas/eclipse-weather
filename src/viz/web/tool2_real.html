@@ -361,6 +361,24 @@ let MODELS = {}; // {id: {label, runs: [{runInit, steps: [h,...], imagesByStep, 
 // unparseable value: the marker is then simply never drawn.
 let ECLIPSE_TIME = null;
 
+// Hours of axis to keep BEYOND the eclipse, so the marker never sits flush
+// against the right edge where it reads as "the axis just ends here".
+const ECLIPSE_AXIS_MARGIN_H = 24;
+
+// The axis must reach past the eclipse even when none of THIS model's runs
+// forecast anywhere near it - the normal case this far out, and exactly when
+// it is most useful: the empty stretch between the furthest run and the
+// marker IS the information, showing how far off T still is and visibly
+// shrinking as each new run's horizon advances. Sizing the axis to the data
+// alone hides that, and makes the marker appear and disappear depending on
+// which model happens to be selected (AROME France reaches 51h, GEFS's 00Z
+// run 840h). Returns -Infinity (no floor) when the manifest predates
+// eclipse_t.
+function axisEndFloor() {
+  if (!ECLIPSE_TIME) return -Infinity;
+  return ECLIPSE_TIME.getTime() + ECLIPSE_AXIS_MARGIN_H * 3600 * 1000;
+}
+
 // Known, permanent (not-a-bug) per-model field gaps - same facts already
 // documented in tool1_real.html/tool3_real.html.
 // Cloud probability (per-pixel, not the pooled point metric T32 uses for
@@ -567,7 +585,7 @@ function loadModel(modelId) {
 
   AXIS_START = runsNewestFirst[runsNewestFirst.length - 1].runInit;
   const reaches = model.runs.map(r => stepValidTime(r, Math.max(...r.steps)));
-  AXIS_END = new Date(Math.max(...reaches.map(d => d.getTime())));
+  AXIS_END = new Date(Math.max(...reaches.map(d => d.getTime()), axisEndFloor()));
 
   const fullSpanMs = AXIS_END - AXIS_START;
   extentInput.min = 0;

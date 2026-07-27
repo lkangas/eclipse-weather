@@ -1,9 +1,13 @@
+import logging
 import os
+import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from src.config import DATA_RAW, eclipse_config
+
+log = logging.getLogger(__name__)
 
 DEFAULT_ECLIPSE_T = "2026-08-12T18:30:00Z"
 
@@ -171,9 +175,156 @@ def due_time(
 
 
 def already_fetched(model_name: str, run_init: datetime) -> bool:
-    """Cheap idempotency check: has anything been written for this run already?"""
+    """Cheap idempotency check: has anything been written for this run already?
+
+    Deliberately counts the dot-markers below too, not just data files: a run
+    whose every download failed still has a `.last_fetch_attempt`, and that is
+    exactly what keeps should_attempt_fetch() on the rate-limited top-up path
+    instead of re-requesting ~154 not-yet-published files every 5 minutes (the
+    NOAA "Slow Down" case its own note describes). Use raw_data_files() when
+    you want "did this run actually gain data".
+    """
     d = DATA_RAW / model_name / format_init_dir(run_init)
     return d.exists() and any(d.iterdir())
+
+
+# cfgrib/herbie drop a "<gribname>.<hash>.idx" sidecar next to a GRIB the
+# first time that GRIB is OPENED (extract/render), not when it is fetched.
+# Anything that counts files in a run directory to answer "did this run gain
+# steps since last time" must exclude them, or merely reading a run looks
+# like new data arriving and the reader re-triggers itself forever.
+_SIDECAR_SUFFIXES = {".idx"}
+
+
+def raw_data_files(model_name: str, run_init: datetime) -> list[Path]:
+    """The actual downloaded data files in a run's raw directory - excluding
+    this module's own dot-markers and the .idx sidecars described above.
+
+    This is the "how much of this run do we actually have" signal, as opposed
+    to already_fetched()'s "has anything at all been written". The scheduler
+    uses the count to notice a run that gained steps after it was last
+    rendered (see src/scheduler/run.py)."""
+    d = DATA_RAW / model_name / format_init_dir(run_init)
+    if not d.exists():
+        return []
+    return [
+        p for p in d.iterdir()
+        if p.is_file()
+        and not p.name.startswith(".")
+        and p.suffix.lower() not in _SIDECAR_SUFFIXES
+    ]
+
+
+# "The file exists" is not "the file is usable", and every fetcher's per-file
+# idempotency check used to be a bare `dest_path.exists()`. A download that
+# dies mid-transfer leaves a truncated (or zero-byte) GRIB behind, which then
+# looks "already fetched" to every subsequent top-up pass, so the run stays
+# broken permanently. The case that motivated this:
+# ecmwf_hres/2026072612/tcc_f123.grib2 was written 0 bytes; cfgrib raises
+# "EOFError: No valid message found" on it, that run rendered "65 steps, 41
+# with real data", and it would have stayed that way forever.
+#
+# The check runs on every candidate file of every still-topping-up run, every
+# tick, so it must be cheap - a real GRIB parse of ~23k archived files is not
+# an option. It is therefore STRUCTURAL, not a parse: GRIB edition 1 and 2
+# both start with the ASCII magic "GRIB" (section 0) and end with the ASCII
+# sentinel "7777" (section 5 / section 8). Two seeks and 68 bytes per file
+# catch every failure mode a broken download actually produces - empty file,
+# body cut short, an HTML/XML error page saved under a .grib2 name.
+#
+# Measured false-positive risk: this exact test over all 22786 archived .grib2
+# files flagged nothing but files that were genuinely not complete GRIBs.
+# Deleting good archived data is the one unacceptable outcome, so the rule is
+# narrow on purpose - only a file we ourselves named .grib/.grib2 is ever
+# judged, and anything merely unrecognised is left strictly alone.
+#
+# What it deliberately does NOT catch: a file truncated exactly at a message
+# boundary (say 3 of 6 requested messages), which is a structurally valid
+# GRIB. Detecting that needs a per-model expected-message count, which is
+# downstream knowledge and has no place in a hot idempotency check.
+_GRIB_MAGIC = b"GRIB"
+_GRIB_TRAILER = b"7777"
+_GRIB_SUFFIXES = {".grib", ".grib2"}
+_TRAILER_SEARCH_BYTES = 64  # slack for any trailing pad; see search-not-compare below
+
+# A file still being written is structurally incomplete too, and that is the
+# one false positive this test really has: the audit scan that produced the
+# numbers above initially flagged two aifs_ens files as truncated, and they
+# turned out to be 266 MB downloads in flight. Every fetcher writes straight
+# to the destination path (no temp-then-rename), so a recently-touched file
+# gets the benefit of the doubt and is reported as "leave it alone". Within
+# one fetcher this changes nothing - its loop is sequential and can never be
+# mid-writing the very path it is about to skip - but a second process (a
+# hand-run fetch alongside the container) could be, and condemning its
+# in-flight transfer would throw away a large download for no reason.
+# Callers checking a download they JUST finished pass min_age_s=0.
+_MID_WRITE_GRACE_S = 180.0
+
+
+def _discard_broken(path: Path, reason: str) -> None:
+    """Delete a file positively identified as broken so the fetcher's normal
+    download path recreates it. Also drops any .idx sidecar built against the
+    old bytes - a stale index pointing into a replaced file is worse than no
+    index at all."""
+    log.warning("discarding broken raw file %s (%s) - it will be re-fetched", path, reason)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError as e:
+        log.error("could not delete broken raw file %s: %s", path, e)
+        return
+    for sidecar in path.parent.glob(path.name + "*.idx"):
+        sidecar.unlink(missing_ok=True)
+
+
+def have_usable_file(dest_path: Path, min_age_s: float = _MID_WRITE_GRACE_S) -> bool:
+    """Every fetcher's per-file idempotency check, in place of a bare
+    `dest_path.exists()`. True means "don't download this now": the file is
+    present and structurally complete, OR it is too recently written to judge
+    (see _MID_WRITE_GRACE_S), OR it is a format this check has no opinion
+    about. A file it does judge broken is DELETED, which turns it back into a
+    plain missing file for the caller and lets the existing hourly top-up pass
+    re-fetch it.
+
+    Never deletes a file it merely does not recognise: anything non-empty that
+    is not a .grib/.grib2 is reported usable and left untouched, and an
+    unreadable file is left alone too (we cannot tell, so we do no harm).
+    """
+    try:
+        stat = dest_path.stat()
+    except OSError:
+        return False  # missing, or a path we cannot stat - treat as not fetched
+
+    size = stat.st_size
+    if min_age_s > 0 and (time.time() - stat.st_mtime) < min_age_s:
+        return True  # possibly still being written - see _MID_WRITE_GRACE_S
+
+    if size == 0:
+        _discard_broken(dest_path, "zero bytes")
+        return False
+
+    if dest_path.suffix.lower() not in _GRIB_SUFFIXES:
+        return True  # not a format this check understands - present is good enough
+
+    try:
+        with open(dest_path, "rb") as f:
+            head = f.read(len(_GRIB_MAGIC))
+            f.seek(-min(size, _TRAILER_SEARCH_BYTES), os.SEEK_END)
+            tail = f.read()
+    except OSError as e:
+        log.warning("could not structurally check %s (%s) - leaving it alone", dest_path, e)
+        return True
+
+    # `in tail` rather than `tail == _GRIB_TRAILER`: a producer that pads the
+    # end of a file would otherwise look corrupt. The extra tolerance costs
+    # essentially nothing - the odds of a truncated GRIB's last 64 bytes of
+    # packed data happening to contain the literal "7777" are ~1e-8.
+    if head == _GRIB_MAGIC and _GRIB_TRAILER in tail:
+        return True
+
+    _discard_broken(
+        dest_path, f"not a complete GRIB (starts {head!r}, no {_GRIB_TRAILER!r} at end)"
+    )
+    return False
 
 
 # A run is not necessarily complete the first time it is fetched. Providers

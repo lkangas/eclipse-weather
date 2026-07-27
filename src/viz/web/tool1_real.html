@@ -354,6 +354,21 @@ let cursorTime = new Date();
 // unparseable value: the marker is then simply never drawn.
 let ECLIPSE_TIME = null;
 
+// Hours of axis to keep BEYOND the eclipse, so the marker never sits flush
+// against the right edge where it reads as "the axis just ends here".
+const ECLIPSE_AXIS_MARGIN_H = 24;
+
+// The axis must reach past the eclipse even when no model forecasts anywhere
+// near it yet - which is the normal case this far out, and exactly when it is
+// most useful: the empty stretch between the furthest forecast and the marker
+// IS the information, showing how far off T still is and visibly shrinking as
+// the models' horizons advance. Sizing the axis to the data alone hides that
+// entirely. Returns -Infinity (no floor) when the manifest predates eclipse_t.
+function axisEndFloor() {
+  if (!ECLIPSE_TIME) return -Infinity;
+  return ECLIPSE_TIME.getTime() + ECLIPSE_AXIS_MARGIN_H * 3600 * 1000;
+}
+
 // Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent
 // rain overlay checkbox - see tool1_renderer.py's hml_composite/prob_*
 // fields, which is what backs cloudCover/cloudProb here. Temp and the rain
@@ -391,6 +406,15 @@ const mapAreaTag = document.getElementById("mapAreaTag");
 function setMapTag(text) {
   mapAreaTag.textContent = text;
   mapAreaTag.style.display = text ? "" : "none";
+}
+
+// Same collapse-when-empty treatment for the two lines under the map. An
+// empty div is still a flex item, so #mapArea's gap would keep reserving
+// space around it - display:none removes it from the layout entirely,
+// giving that height back to the map.
+function setMapText(el, text) {
+  el.textContent = text;
+  el.style.display = text ? "" : "none";
 }
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
@@ -448,7 +472,12 @@ async function loadManifest() {
 
   AXIS_START = new Date(Math.min(...MODELS.map(m => m.runInit.getTime())));
   const reaches = MODELS.map(m => stepValidTime(m, m.steps.length ? Math.max(...m.steps) : 0).getTime());
-  AXIS_END = new Date(Math.max(...reaches, AXIS_START.getTime()));
+  // Always keep the eclipse (plus a margin) on the axis, even when no model
+  // reaches anywhere near it - the empty gap between the furthest forecast
+  // and the marker IS the useful information: it shows at a glance how far
+  // out T still is, and it shrinks day by day as the models' horizons
+  // advance towards it. Sizing the axis to the data alone hides that.
+  AXIS_END = new Date(Math.max(...reaches, AXIS_START.getTime(), axisEndFloor()));
   axisRightMs = Math.max(AXIS_END - AXIS_START, 3600 * 1000);
 
   extentInput.min = 0;
@@ -688,8 +717,8 @@ function updateCursorUI() {
   if (!selectedModel) {
     setMapTag("select a model");
     mapAreaImg.style.display = "none";
-    mapAreaTitle.textContent = "";
-    mapAreaSub.textContent = "—";
+    setMapText(mapAreaTitle, "");
+    setMapText(mapAreaSub, "—");
     return;
   }
 
@@ -701,8 +730,8 @@ function updateCursorUI() {
   if (quantityMode === "temp") {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
-    mapAreaTitle.textContent = model.label;
-    mapAreaSub.textContent = "temperature: not yet implemented";
+    setMapText(mapAreaTitle, model.label);
+    setMapText(mapAreaSub, "temperature: not yet implemented");
     return;
   }
 
@@ -711,20 +740,24 @@ function updateCursorUI() {
   const url = field && images ? images[field] : null;
 
   if (url) {
+    // Nothing under the map: the rendered frame already carries the model,
+    // the run init, the valid time and the step in its own baked-in title
+    // (see frame_renderer's ax.set_title), so title/sub here just repeated
+    // it and cost vertical space the map could use.
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
-    mapAreaTitle.textContent = model.label + " · run " + fmtTime(model.runInit);
-    mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(model, step));
+    setMapText(mapAreaTitle, "");
+    setMapText(mapAreaSub, "");
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
-    mapAreaTitle.textContent = model.label;
-    mapAreaSub.textContent = step === null
+    setMapText(mapAreaTitle, model.label);
+    setMapText(mapAreaSub, step === null
       ? "no step available"
       : (quantityMode === "cloudProb"
           ? "needs an ensemble with native low/mid/high - only AIFS ENS qualifies"
-          : "no rendered frame for this step");
+          : "no rendered frame for this step"));
   }
 }
 
@@ -952,8 +985,8 @@ loadManifest()
   })
   .catch(err => {
     setMapTag("error");
-    mapAreaTitle.textContent = "failed to load manifest.json";
-    mapAreaSub.textContent = String(err);
+    setMapText(mapAreaTitle, "failed to load manifest.json");
+    setMapText(mapAreaSub, String(err));
     console.error(err);
   });
 </script>

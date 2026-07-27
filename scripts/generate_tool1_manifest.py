@@ -1,20 +1,28 @@
-"""Tool 1: batch-fetch + render real map frames for every wired model's
-latest full-range run and write manifest.json describing what's available.
+"""Tool 1: scan the already-rendered PNG tree and write the manifest of each
+model's most recent run - plus, when the newest run falls short, the
+furthest-reaching one alongside it.
 
-Image paths in the manifest are relative to manifest.json's own directory
-(src/viz/frame_renderer.py's OUTPUT_DIR) - not an absolute "/data/..." path -
-so serving works regardless of exactly where that directory is mounted
-(DATA_ROOT may not even be under the repo - see src/config.py).
+PURE CONSUMER - this script renders nothing, fetches nothing, and never
+touches data/raw/. Rendering is a separate, earlier pass
+(scripts/render_backfill.py, or the archiver itself -> frame_renderer's
+render_run()), which writes every step x structurally-supported field of
+every archived run to
+OUTPUT_DIR/{model}/{field}/{YYYYMMDDHH}_{step:03d}.png. All this script does
+is walk that tree and describe what it finds. That decoupling is what makes
+the production fetch -> render everything -> DELETE the raw GRIB pipeline
+possible (see CLAUDE.md's disk-footprint note): a manifest script that still
+needed raw data would break the moment raw data is deleted.
 
-Fetching: dispatched via src/fetchers/registry.py's shared FETCHERS registry,
-keyed by the model's models.yaml `fetch:` value - the same fetch() every
-fetcher module registers for the eclipse archiver/scheduler (see TASKS.md's
-2026-07-23 archiver-consolidation note: there used to be a separate
-Tool 1-only fetch_full_range() per module, merged into fetch() the same day).
-Idempotent per fetcher (skips already-downloaded files), so re-running this
-script only fetches whatever's new since the last run.
+This script used to fetch and render inline, which is why it took minutes
+while tool 2/3's equivalents take seconds. It no longer does either; the
+archiver keeps runs topped up and the backfill renders them.
 
-Usage (inside Docker, GRIB deps required):
+Unlike Tool 2 (every step of EVERY run) or Tool 3 (one step per run at a
+fixed valid time), Tool 1 shows the CURRENT state of each model: its newest
+run, every step.
+
+Usage (inside Docker - no raw data is read, but importing frame_renderer
+still pulls in the GRIB/matplotlib stack):
     .venv/bin/python -m scripts.generate_tool1_manifest
 """
 
@@ -22,18 +30,15 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import UTC, datetime, timedelta
 
-from src import fetchers as _fetchers  # noqa: F401 - import for @register side-effects
-from src.config import DATA_RAW, get_model
-from src.fetchers.base import eclipse_t, full_range_steps, latest_available_run_init
-from src.fetchers.registry import get_fetcher
-from src.viz.frame_renderer import OUTPUT_DIR, render_frame
+from src.fetchers.base import eclipse_t
+from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("generate_tool1_manifest")
 
-FIELDS = ["total", "hml_composite", "prob_hml_composite"]
 MODELS = [
     ("gfs", "GFS"),
     ("gefs_extended", "GEFS Extended"),
@@ -47,182 +52,156 @@ MODELS = [
     ("icon_global", "ICON Global"),
 ]
 
+# render_frame()'s own output_path convention:
+#   OUTPUT_DIR/{model}/{field}/{format_init_dir(run_init)}_{step:03d}.png
+_FRAME_RE = re.compile(r"^(\d{10})_(\d+)\.png$")
+
 
 def _iso_z(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _fetch_latest(model_id: str, model_config: dict, run_init: datetime) -> None:
+def _parse_run_init(stem: str) -> datetime | None:
     try:
-        fetch_fn = get_fetcher(model_config["fetch"])
-    except KeyError as e:
-        log.warning(
-            "%s: %s, rendering whatever's already archived without fetching first",
-            model_id, e,
-        )
-        return
-    log.info("%s: fetching full range for run_init=%s ...", model_id, run_init.isoformat())
-    result = fetch_fn(model_id, model_config, run_init)
-    log.info(
-        "%s: fetch status=%s, %d file(s) written%s",
-        model_id, result.status, len(result.files_written),
-        f", error={result.error}" if result.error else "",
-    )
+        return datetime.strptime(stem, "%Y%m%d%H").replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
-def _step_entries(model_id: str, run_init: datetime, steps: list[int]) -> list[dict]:
-    step_entries = []
-    skipped = []
-    for step in steps:
-        images = {}
-        has_data_by_field = {}
-        any_real = False
-        for field in FIELDS:
-            path, has_data = render_frame(model_id, run_init, step, field)
-            any_real = any_real or has_data
-            has_data_by_field[field] = has_data
-            images[field] = str(path.relative_to(OUTPUT_DIR)).replace("\\", "/")
-        if not any_real:
-            # Nothing was actually published for this step in ANY field -
-            # e.g. arome_france's group files start at +1h, not +0h,
-            # despite full_range_steps() assuming a step-0 field exists
-            # (true for gfs, not for arome_france - see TASKS.md T34).
-            # Exclude it rather than list a step that will always show
-            # "(no data)" regardless of which quantity is selected.
-            skipped.append(step)
+def _rendered_frames(model_id: str) -> dict[datetime, dict[int, dict[str, str]]]:
+    """{run_init: {step: {field: image path}}} for every PNG already rendered
+    for this model, across its structurally-supported fields only.
+
+    Image paths stay relative to manifest.json's own directory (OUTPUT_DIR),
+    so serving works wherever DATA_ROOT happens to be mounted. Same local
+    helper as generate_tool{2,3}_manifest.py - these are standalone entry
+    points, not a package.
+    """
+    index: dict[datetime, dict[int, dict[str, str]]] = {}
+    for field in supported_fields(model_id):
+        field_dir = OUTPUT_DIR / model_id / field
+        if not field_dir.is_dir():
             continue
-        step_entries.append({
+        for entry in field_dir.iterdir():
+            match = _FRAME_RE.match(entry.name)
+            if match is None:
+                continue  # stray/legacy file - ignore
+            run_init = _parse_run_init(match.group(1))
+            if run_init is None:
+                continue
+            step = int(match.group(2))
+            by_step = index.setdefault(run_init, {})
+            by_step.setdefault(step, {})[field] = f"{model_id}/{field}/{entry.name}"
+    return index
+
+
+def _reach(run_init: datetime, by_step: dict[int, dict[str, str]]) -> datetime:
+    """Furthest valid time this run has an ACTUALLY RENDERED frame for.
+
+    Deliberately measured from disk rather than from models.yaml's declared
+    cycle length. A 00Z gefs_extended run is configured to reach 840h, but
+    NOAA publishes that extended tail ~25-27h after init, so for most of a
+    day the run exists with only its first 384h. Ranking by the declared
+    reach picked such a run as "the long one" and produced a companion row
+    that reached LESS far than the newest run - see _longest_run below.
+    """
+    return run_init + timedelta(hours=max(by_step)) if by_step else run_init
+
+
+def _step_entries(run_init: datetime, by_step: dict[int, dict[str, str]], fields: list[str]) -> list[dict]:
+    """One entry per rendered step, ascending. A step with no frame in any
+    field simply never entered the index, so the old "exclude steps with no
+    real data" filter is structural here rather than an explicit check.
+
+    has_data now means "a frame exists on disk", which is exact: the renderer
+    no longer writes a placeholder when there is no data (see
+    frame_renderer.render_frame), so a file's presence IS the signal. images
+    carries only fields with a real file; has_data carries every supported
+    field so a consumer can tell "supported but not rendered" from "not
+    supported at all".
+    """
+    return [
+        {
             "h": step,
             "valid": _iso_z(run_init + timedelta(hours=step)),
-            "images": images,
-            # Per-field flag, not just per-URL - images[field] always
-            # exists (render_frame writes a "(no data)" placeholder PNG
-            # even when has_data is False), so consumers need this to
-            # tell a real map from a placeholder without inspecting
-            # pixels themselves. Some models permanently lack specific
-            # fields (arome_france/arpege_europe: no native total;
-            # ecmwf_ens: no native low/mid/high) - not a bug, see
-            # frame_renderer.py's reader docstrings.
-            "has_data": has_data_by_field,
-        })
-    if skipped:
-        log.info(
-            "%s %s: excluded %d step(s) with no real data in any field: %s",
-            model_id, run_init.isoformat(), len(skipped), skipped,
-        )
-    return step_entries
+            "images": {f: by_step[step][f] for f in fields if f in by_step[step]},
+            "has_data": {f: f in by_step[step] for f in fields},
+        }
+        for step in sorted(by_step)
+    ]
 
 
-def _reach(model_config: dict, run_init: datetime) -> datetime:
-    """The furthest valid time this run publishes."""
-    steps = full_range_steps(model_config, run_init)
-    return run_init + timedelta(hours=max(steps)) if steps else run_init
-
-
-def _longer_archived_run(
-    model_id: str, model_config: dict, newest_run_init: datetime,
-) -> datetime | None:
-    """The most recent ALREADY-ARCHIVED run that reaches further in absolute
-    time than the newest run does, or None if the newest run is also the
-    furthest-reaching.
+def _longest_run(index: dict, newest: datetime) -> datetime | None:
+    """The rendered run that reaches furthest, if that is not the newest one.
 
     Four models publish a different forecast length per cycle (models.yaml:
     gefs_extended 840h at 00Z vs 384h otherwise, ecmwf_hres 240/90,
-    ecmwf_ens 360/144, icon_global 180/120), so "newest run" and
-    "furthest-reaching run" are routinely different runs - for most of the
-    day the newest gefs_extended run stops ~19 days short of where its last
-    00Z run reaches. Tool 1 lists BOTH in that case, so the long-range view
-    doesn't disappear for the 18 hours a day the short cycles are newest.
-
-    Deliberately restricted to what's already on disk (no fetch): this is a
-    second full run per affected model, and the backfill/scheduler has
-    normally archived it already. A run that isn't archived simply isn't
-    offered rather than doubling Tool 1's fetch cost.
+    ecmwf_ens 360/144, icon_global 180/120), so for most of the day the
+    newest run stops well short of where the last long-cycle run reaches,
+    and a "latest run only" view loses the long-range picture entirely.
+    Tool 1 lists both in that case - and only then, so when the newest run
+    IS the long-cycle one there is a single row, not a duplicate.
     """
-    model_dir = DATA_RAW / model_id
-    if not model_dir.is_dir():
-        return None
-    newest_reach = _reach(model_config, newest_run_init)
-    candidates = []
-    for p in sorted(model_dir.iterdir(), reverse=True):
-        if not p.is_dir() or not any(p.iterdir()):
-            continue
-        try:
-            run_init = datetime.strptime(p.name, "%Y%m%d%H").replace(tzinfo=UTC)
-        except ValueError:
-            continue
-        if run_init >= newest_run_init:
-            continue
-        if _reach(model_config, run_init) > newest_reach:
-            candidates.append(run_init)
-    return max(candidates) if candidates else None
+    newest_reach = _reach(newest, index[newest])
+    candidates = [r for r in index if r != newest and _reach(r, index[r]) > newest_reach]
+    return max(candidates, key=lambda r: (_reach(r, index[r]), r)) if candidates else None
 
 
 def main() -> None:
-    now = datetime.now(UTC)
     manifest_models = []
-
     for model_id, label in MODELS:
-        model_config = get_model(model_id)
-        run_init = latest_available_run_init(model_config, now)
-        if run_init is None:
-            log.warning("%s: no due run_init found (nothing published yet), skipping", model_id)
+        index = _rendered_frames(model_id)
+        if not index:
+            log.info("%s: no rendered frames on disk, skipping", model_id)
             continue
+        fields = supported_fields(model_id)
 
-        _fetch_latest(model_id, model_config, run_init)
-
-        steps = full_range_steps(model_config, run_init)
-        log.info(
-            "%s: run_init=%s, %d steps to render x %d fields",
-            model_id, run_init.isoformat(), len(steps), len(FIELDS),
-        )
+        newest = max(index)
         manifest_models.append({
             # id is the ROW KEY (unique per manifest entry); model_id is the
             # real model. They differ only for the long-range companion entry
             # below, where one model contributes two rows - consumers keying
-            # per-model behaviour (e.g. tool1_real.html's ensemble-only cloud
-            # probability check) must use model_id, not id.
+            # per-model behaviour (tool1_real.html's ensemble-only cloud
+            # probability lock) must use model_id, not id.
             "id": model_id,
             "model_id": model_id,
             "label": label,
-            "run_init": _iso_z(run_init),
-            "steps": _step_entries(model_id, run_init, steps),
+            "run_init": _iso_z(newest),
+            "steps": _step_entries(newest, index[newest], fields),
         })
-        log.info("%s: rendered %d steps", model_id, len(manifest_models[-1]["steps"]))
+        log.info(
+            "%s: newest run %s, %d step(s), reaches %s",
+            model_id, _iso_z(newest), len(index[newest]), _iso_z(_reach(newest, index[newest])),
+        )
 
-        long_run_init = _longer_archived_run(model_id, model_config, run_init)
-        if long_run_init is not None:
-            long_steps = full_range_steps(model_config, long_run_init)
-            log.info(
-                "%s: newest run stops at %s, adding longer archived run %s (reaches %s)",
-                model_id, _iso_z(_reach(model_config, run_init)),
-                long_run_init.isoformat(), _iso_z(_reach(model_config, long_run_init)),
-            )
+        longest = _longest_run(index, newest)
+        if longest is not None:
             manifest_models.append({
                 "id": f"{model_id}__long",
                 "model_id": model_id,
-                "label": f"{label} · {long_run_init:%H}Z (+{max(long_steps)}h)",
-                "run_init": _iso_z(long_run_init),
-                "steps": _step_entries(model_id, long_run_init, long_steps),
+                "label": f"{label} · {longest:%d}d {longest:%H}Z",
+                "run_init": _iso_z(longest),
+                "steps": _step_entries(longest, index[longest], fields),
             })
             log.info(
-                "%s (long): rendered %d steps", model_id, len(manifest_models[-1]["steps"]),
+                "%s: newest stops at %s, adding longer run %s (reaches %s)",
+                model_id, _iso_z(_reach(newest, index[newest])),
+                _iso_z(longest), _iso_z(_reach(longest, index[longest])),
             )
 
-    # eclipse_t() (ECLIPSE_T env var, src/fetchers/base.py) rather than a
-    # literal - CLAUDE.md's "never hardcode T" rule applies to the UI too, and
-    # the browser has no other way to learn it. Consumed by tool1_real.html to
-    # place its eclipse marker on the time axis; that marker is simply not
-    # drawn if this key is absent (an older manifest).
     manifest = {
-        "generated_at": _iso_z(now),
+        "generated_at": _iso_z(datetime.now(UTC)),
+        # eclipse_t() (ECLIPSE_T env var) rather than a literal - CLAUDE.md's
+        # "never hardcode T" rule applies to the UI too, and the browser has
+        # no other way to learn it. tool1_real.html places its eclipse marker
+        # and its axis floor from this; both are simply absent without it.
         "eclipse_t": _iso_z(eclipse_t()),
         "models": manifest_models,
     }
     manifest_path = OUTPUT_DIR / "manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    log.info("wrote %s", manifest_path)
+    log.info("wrote %s (%d row(s))", manifest_path, len(manifest_models))
 
 
 if __name__ == "__main__":

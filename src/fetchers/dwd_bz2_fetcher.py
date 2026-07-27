@@ -30,7 +30,7 @@ from pathlib import Path
 
 import httpx
 
-from src.fetchers.base import FetchResult, full_range_steps, raw_output_dir
+from src.fetchers.base import FetchResult, full_range_steps, have_usable_file, raw_output_dir
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,14 @@ def _download_all_params(
                 grib2_name = Path(url).name.removesuffix(".bz2")
                 dest_grib2 = out_dir / grib2_name
 
-                if dest_grib2.exists() and dest_grib2.stat().st_size > 0:
+                # Structural GRIB check, not exists()/size>0: a decompress that
+                # was interrupted (or a .bz2 that arrived truncated) leaves a
+                # non-empty but incomplete .grib2, which this loop then skipped
+                # forever - see have_usable_file's note. It deletes what it
+                # judges broken, so the download below recreates it. DWD's ~24h
+                # retention means that second chance only exists briefly, which
+                # is exactly why the skip must not be a bare exists().
+                if have_usable_file(dest_grib2):
                     files_written.append(dest_grib2)  # idempotent re-run
                     continue
 
@@ -153,6 +160,15 @@ def _download_all_params(
                     continue
                 finally:
                     dest_bz2.unlink(missing_ok=True)
+
+                # bz2 can decompress "successfully" from a truncated archive
+                # and still leave a partial GRIB, so verify what we just wrote
+                # rather than assuming it (have_usable_file deletes it if not).
+                if not have_usable_file(dest_grib2, min_age_s=0):
+                    msg = f"{param} f{fff}: decompressed output is not a complete GRIB"
+                    logger.warning(msg)
+                    errors.append(msg)
+                    continue
 
                 files_written.append(dest_grib2)
                 time.sleep(_POLITE_DELAY_S)

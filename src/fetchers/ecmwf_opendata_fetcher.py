@@ -60,7 +60,7 @@ from pathlib import Path
 
 from ecmwf.opendata import Client
 
-from src.fetchers.base import FetchResult, full_range_steps, raw_output_dir
+from src.fetchers.base import FetchResult, full_range_steps, have_usable_file, raw_output_dir
 from src.fetchers.registry import register
 
 log = logging.getLogger(__name__)
@@ -178,7 +178,13 @@ def _download_steps(
 
     for step in steps:
         for req, target in builder(model_config, run_init, step, out_dir):
-            if target.exists() and target.stat().st_size > 0:
+            # Not exists()/size>0 but a structural GRIB check - a retrieve that
+            # died mid-transfer leaves a non-empty but truncated file, which
+            # this loop then skipped on every later top-up pass, freezing the
+            # run broken (real case: ecmwf_hres 2026072612 tcc_f123.grib2, and
+            # two truncated aifs_ens files; see have_usable_file's note). Files
+            # it judges broken are deleted, so the retrieve below recreates them.
+            if have_usable_file(target):
                 files_written.append(target)  # already fetched - politeness/idempotency
                 continue
             try:
@@ -186,10 +192,16 @@ def _download_steps(
             except Exception as e:
                 errors.append(f"step {step} ({target.name}): {e}")
                 continue
-            if target.exists() and target.stat().st_size > 0:
+            # Same check on the fresh download, so a truncated retrieve is
+            # reported now rather than looking complete until something tries
+            # to open it hours later. min_age_s=0: this retrieve has returned,
+            # so the "might still be being written" grace must not apply.
+            if have_usable_file(target, min_age_s=0):
                 files_written.append(target)
             else:
-                errors.append(f"step {step} ({target.name}): retrieve produced no data")
+                errors.append(
+                    f"step {step} ({target.name}): retrieve produced no usable data"
+                )
 
     status = "ok" if not errors else "error"
     error_msg = "; ".join(errors) if errors else None

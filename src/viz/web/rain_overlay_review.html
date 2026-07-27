@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rain overlay design review</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --cell-bg: #f9fafb;
+    --accent: #b8007e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #15171c;
+      --fg: #e6e6e6;
+      --muted: #9aa1ac;
+      --border: #2a2d35;
+      --cell-bg: #1c1f26;
+      --accent: #ff8ad8;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1.25rem;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  h1 { font-size: 1.2rem; margin: 0 0 0.25rem; }
+  .sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.9rem; max-width: 78ch; line-height: 1.45; }
+  .scenes { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1rem; }
+  .scene {
+    border: 1px solid var(--border); border-radius: 6px; padding: 0.5rem 0.7rem;
+    font-size: 0.75rem; color: var(--muted); background: var(--cell-bg);
+  }
+  .scene b { color: var(--fg); display: block; font-size: 0.85rem; margin-bottom: 0.15rem; }
+  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.8rem; font-size: 0.8rem; }
+  .controls label { color: var(--muted); cursor: pointer; }
+  table { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  th, td { border: 1px solid var(--border); padding: 0.35rem; vertical-align: top; }
+  thead th {
+    position: sticky; top: 0; background: var(--bg); text-align: center;
+    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em;
+    color: var(--muted); z-index: 2; overflow-wrap: anywhere;
+  }
+  tbody th {
+    text-align: left; font-size: 0.8rem; background: var(--bg);
+    position: sticky; left: 0; z-index: 1;
+  }
+  tbody th .note { display: block; color: var(--muted); font-weight: 400; font-size: 0.7rem; margin-top: 0.25rem; line-height: 1.35; }
+  tbody tr.pick th { border-left: 3px solid var(--accent); }
+  tbody tr.pick th .tag {
+    display: inline-block; background: var(--accent); color: #fff; border-radius: 3px;
+    padding: 0 0.3rem; font-size: 0.62rem; letter-spacing: 0.04em; margin-left: 0.3rem;
+    vertical-align: middle;
+  }
+  tbody tr.pick th .tag.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  td.cell { background: var(--cell-bg); text-align: center; }
+  td.cell img { width: 100%; height: auto; border-radius: 3px; display: block; }
+  td.empty { background: var(--cell-bg); color: var(--muted); font-size: 0.7rem; text-align: center; padding: 2rem 0.3rem; }
+  .cvd { display: none; }
+  body.show-cvd .cvd { display: table-cell; }
+  body.show-cvd th.cvd { display: table-cell; }
+</style>
+</head>
+<body>
+<h1>Rain overlay design review &mdash; contourf candidates over both cloud backgrounds</h1>
+<div class="sub" id="sub">loading&hellip;</div>
+<div class="scenes" id="scenes"></div>
+<div class="controls">
+  <label><input type="checkbox" id="cvd"> show deuteranopia simulation columns</label>
+  <label><input type="checkbox" id="big" checked> large images</label>
+</div>
+<div style="overflow-x:auto">
+<table id="grid"></table>
+</div>
+
+<script>
+// The one candidate this experiment recommends - highlighted so the page is
+// self-explanatory when reopened later without the accompanying write-up.
+const PICK = "magenta_ramp";
+// Kept as the accessibility variant: worth switching on only if frames ever
+// render bigger than today's dpi=100 (see rows 12b/13b at the bottom).
+const ALT = "magenta_ramp_hatch";
+
+async function main() {
+  const cacheBust = Date.now();
+  const resp = await fetch(`rain_overlay_grid.json?cb=${cacheBust}`);
+  const data = await resp.json();
+
+  document.getElementById("sub").innerHTML =
+    `Generated ${data.generated_at}. Real GFS data (cloud + APCP from the same run/step, ` +
+    `herbie idx byte-range). Rain bands: ${data.levels_mm.join(" / ")} mm. ` +
+    `Every background is drawn with exactly the code path ` +
+    `<code>src/viz/frame_renderer.py</code> uses today (same gamma, basemap, totality lines); ` +
+    `only the rain layer differs between rows. Click any image for full size. ` +
+    `The deuteranopia columns are a Brettel/Vi&eacute;not linear-RGB approximation, not a clinical model.`;
+
+  const scenesEl = document.getElementById("scenes");
+  for (const s of data.scenes) {
+    const div = document.createElement("div");
+    div.className = "scene";
+    div.innerHTML = `<b>${s.label}</b>${s.run_init} &rarr; ${s.valid} (+${s.step}h)<br>` +
+      `peak ${s.max_mm} mm/${s.window_h}h &middot; ${s.wet_area_pct}% of bbox wet<br>` +
+      `cloud source: ${s.archived ? "data/raw archive" : "byte-range fetch (pre-archive date)"}`;
+    scenesEl.appendChild(div);
+  }
+
+  const table = document.getElementById("grid");
+  const colgroup = document.createElement("colgroup");
+  const labelCol = document.createElement("col");
+  labelCol.style.width = "13%";
+  colgroup.appendChild(labelCol);
+  for (const c of data.columns) {
+    const col = document.createElement("col");
+    col.style.width = (87 / data.columns.length).toFixed(3) + "%";
+    if (c.key.endsWith("__deut")) col.className = "cvd";
+    colgroup.appendChild(col);
+  }
+  table.appendChild(colgroup);
+
+  const thead = document.createElement("thead");
+  const headRow = document.createElement("tr");
+  headRow.appendChild(document.createElement("th"));
+  for (const c of data.columns) {
+    const th = document.createElement("th");
+    th.textContent = c.label;
+    if (c.key.endsWith("__deut")) th.className = "cvd";
+    headRow.appendChild(th);
+  }
+  thead.appendChild(headRow);
+  table.appendChild(thead);
+
+  const tbody = document.createElement("tbody");
+  for (const cand of data.candidates) {
+    const row = document.createElement("tr");
+    if (cand.id === PICK || cand.id === ALT) row.className = "pick";
+    const rowHead = document.createElement("th");
+    rowHead.innerHTML = cand.label +
+      (cand.id === PICK ? '<span class="tag">RECOMMENDED</span>' : "") +
+      (cand.id === ALT ? '<span class="tag alt">A11Y VARIANT</span>' : "") +
+      `<span class="note">${cand.note}</span>`;
+    row.appendChild(rowHead);
+    for (const c of data.columns) {
+      const td = document.createElement("td");
+      const src = cand.cells[c.key];
+      if (src) {
+        td.className = "cell" + (c.key.endsWith("__deut") ? " cvd" : "");
+        const a = document.createElement("a");
+        a.href = `${src}?cb=${cacheBust}`;
+        a.target = "_blank";
+        const img = document.createElement("img");
+        img.src = `${src}?cb=${cacheBust}`;
+        img.loading = "lazy";
+        img.alt = `${cand.label} ${c.label}`;
+        a.appendChild(img);
+        td.appendChild(a);
+      } else {
+        td.className = "empty" + (c.key.endsWith("__deut") ? " cvd" : "");
+        td.textContent = "—";
+      }
+      row.appendChild(td);
+    }
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+
+  const cvd = document.getElementById("cvd");
+  cvd.addEventListener("change", () =>
+    document.body.classList.toggle("show-cvd", cvd.checked));
+  const big = document.getElementById("big");
+  const applySize = () => {
+    document.querySelectorAll("td.cell img").forEach(
+      (i) => (i.style.maxWidth = big.checked ? "none" : "260px"));
+  };
+  big.addEventListener("change", applySize);
+  applySize();
+}
+
+main();
+</script>
+</body>
+</html>
