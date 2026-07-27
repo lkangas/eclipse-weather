@@ -226,7 +226,6 @@ def process_run(
         caps = caps[: settings.max_chunks_per_pass]
 
     per_step = chunking.bytes_per_step(model_id, settings.fallback_bytes_per_step)
-    record_fetch_attempt(model_id, run_init, now)
 
     # NO dead-step filtering here. It was added on the belief that narrowing
     # `wanted` would keep those steps out of the fetch; it does not. `wanted`
@@ -302,6 +301,17 @@ def process_run(
         _reclaim_run(model_id, model_config, run_init, settings, outcome,
                      apply=apply, now=now)
 
+    # Stamped only after the whole run has been walked, not before it starts.
+    # should_attempt_fetch() then blocks this run for FETCH_RETRY_INTERVAL_H,
+    # which is right for "we asked for everything and upstream had no more" but
+    # wrong for "we were interrupted part way". Stamping up front meant any
+    # interruption - a container restart, a crash, a break out of the chunk
+    # loop on low disk - cost the run a full hour before it could be resumed,
+    # while it sat visibly incomplete and the pipeline reported nothing to do.
+    # Observed: gfs 2026-07-27T12Z stopped at 48 of 209 steps with every step
+    # published upstream, then was skipped for an hour in favour of an older
+    # run. A run that breaks out early is now simply retried on the next pass.
+    record_fetch_attempt(model_id, run_init, now)
     return outcome
 
 
