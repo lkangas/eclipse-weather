@@ -158,11 +158,28 @@
   }
   .row.clicked .rowLabel { color: #232320; font-weight: 700; }
   .rowTrack { position: relative; flex: 1; height: 100%; }
-  .tick { position: absolute; top: 3px; width: 2px; height: 9px; background: #a19e92; }
-  .tick.noCoverage { background: #d8d4c8; }
-  .row.clicked .tick { background: #8a5a20; }
+  /* Coverage is the whole question this tool asks, and right now 2 runs of 245
+     reach the eclipse - only gefs_extended has the range. So the covering ones
+     have to be findable among two hundred that are not, which means the
+     defaults invert: a non-covering tick is faint background context, and a
+     covering tick is loud.
+     The history is kept rather than filtered out because watching coverage
+     ARRIVE over the next fortnight is the thing worth seeing, and that needs
+     the runs which do not reach it yet as the backdrop. */
+  .tick { position: absolute; top: 5px; width: 2px; height: 6px; background: #cfcabb; }
+  .tick.noCoverage { background: #e2ded2; }
+  .row.clicked .tick { background: #b09a72; }
   .tick.near { width: 3px; height: 15px; top: 0; background: #8b3a2f; }
   .tick.near.noCoverage { background: #c99; }
+  /* After .near and .row.clicked so it wins on equal specificity: a covering
+     run must not stop looking like one because its row is selected. */
+  .tick.covers, .row.clicked .tick.covers {
+    top: 0; width: 4px; height: 16px; background: #2f6f3f; border-radius: 1px;
+    box-shadow: 0 0 0 1px #f6f4ef; z-index: 3;
+  }
+  /* Nearest-to-cursor keeps its red cue as an outline instead of a repaint,
+     so "covers" and "nearest" can be true at once. */
+  .tick.covers.near { box-shadow: 0 0 0 2px #8b3a2f; }
   #cursorLine {
     position: absolute; top: 0; bottom: 0; width: 1px;
     background: #8b3a2f; pointer-events: none; z-index: 5;
@@ -697,7 +714,7 @@ function layoutTicks() {
     model.runs.forEach(run => {
       if (run.runInit - AXIS_START > axisRightMs) return;
       const tick = document.createElement("div");
-      tick.className = "tick" + (targetData(run).covers ? "" : " noCoverage");
+      tick.className = "tick" + (targetData(run).covers ? " covers" : " noCoverage");
       tick.style.left = timeToPx(run.runInit, trackWidthPx) + "px";
       tick.dataset.runMs = run.runInit.getTime();
       track.appendChild(tick);
@@ -751,7 +768,9 @@ function placeMarkers() {
 function refreshTickCoverage() {
   builtRows.forEach(({ ticks }) => {
     (ticks || []).forEach(({ run, el }) => {
-      el.classList.toggle("noCoverage", !targetData(run).covers);
+      const c = targetData(run).covers;
+      el.classList.toggle("noCoverage", !c);
+      el.classList.toggle("covers", c);
     });
   });
 }
