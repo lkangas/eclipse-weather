@@ -79,7 +79,10 @@ services:
     image: eclipse-weather:latest
     container_name: eclipse-frames
     restart: unless-stopped
-    depends_on: [pipeline]
+    # Deliberately NOT depends_on pipeline: serving frames and producing them
+    # are independent, and coupling them would mean starting the container
+    # that DELETES raw data just to serve a page. The tools must be able to
+    # run against a seeded archive with the pipeline stopped.
     command:
       - /app/.venv/bin/python
       - scripts/serve_frames.py
