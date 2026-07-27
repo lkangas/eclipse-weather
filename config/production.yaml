@@ -74,7 +74,20 @@ chunking:
   # Each extra chunk re-walks the already-satisfied lower steps, which is
   # cheap (stat()s) but does re-request steps the provider has not published
   # yet, so this bounds how often a genuinely-absent step is retried.
-  max_chunks_per_pass: null
+  #
+  # Set to 4 on 2026-07-27 to stop the first two models starving the other
+  # thirteen. run_once() walks models.yaml serially, and gefs_extended (840h,
+  # 22 chunks) and gfs (384h, 17 chunks) are entries 1 and 2 with ~7 runs each
+  # in the top-up window - together that is most of an hour, so models 3-15
+  # were never reached at all and their runs simply aged into "overdue".
+  #
+  # This trades depth for breadth: a 17-chunk run now takes ~4 passes to fill
+  # instead of one, but every model is visited every pass, so nothing sits
+  # untouched. That is the right way round while catching up - a run half
+  # fetched is recoverable, a run never fetched is not, and the sources with
+  # the shortest retention (DWD ~24h, AEMET latest-only) are the ones sitting
+  # furthest down the list.
+  max_chunks_per_pass: 4
 
 frames:
   # Rendered PNGs plus the manifests ARE the product; raw data is only a means
