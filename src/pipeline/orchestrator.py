@@ -373,6 +373,8 @@ def run_once(
     for model_id, model_config in all_models.items():
         if models and model_id not in models:
             continue
+        if model_id in settings.exclude_models:
+            continue  # see config/production.yaml exclude_models
         if "cycles" not in model_config or "fetch" not in model_config:
             continue  # aggregator/reference entries carry no fetch path
 
