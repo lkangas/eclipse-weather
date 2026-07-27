@@ -1,4 +1,25 @@
-# TASKS.md — work queue
+# TASKS.md — ARCHIVED research record
+
+**This is no longer the todo list. See `TODO.md` for live work.**
+
+Kept in place, unmoved, because it is the project's research record: `config/
+models.yaml` and comments across `src/` cite these task numbers (T01–T45) for
+*why* a URL template, parameter name, unit convention or design decision is
+what it is. Moving or deleting the file would orphan all of those references.
+
+Read it for provenance. Do not add new work here, and do not trust its
+checkboxes — the Jul 27 – Aug 11 model-onboarding calendar below completed
+ahead of schedule (all 15 fetchable models have been archiving continuously
+since 2026-07-27), and several `status: confirmed` findings in it have since
+been corrected in models.yaml. Three T37 entries in particular were wrong:
+ARPEGE's "rain" was Evaporation, the ECMWF family's temperature param was
+`t2m` where the fetch layer needs `2t`, and Météo-France's surface temperature
+was skin temperature sitting in the wrong package. Each came from confirming a
+field's name without confirming what the field actually was.
+
+---
+
+# TASKS.md — work queue (historical)
 
 Work top-down within a phase; phases are ordered by the calendar, not preference.
 Every research task (T01–T12) ends by updating `config/models.yaml`

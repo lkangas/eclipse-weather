@@ -27,7 +27,8 @@ isn't tied to the eclipse date at all.
 4. **UTC everywhere.** ISO-8601, init times as `YYYYMMDDTHH`. No local times in
    data or code; only the UI may render Europe/Madrid for display.
 5. **Deadline-driven.** First real data: GFS 18Z run, **Jul 27** (~23 UTC on
-   disk). Model onboarding order and dates are in TASKS.md — the calendar, not
+   disk). Model onboarding is COMPLETE — all 15 fetchable models have archived
+   continuously since 2026-07-27, ahead of TASKS.md's own calendar. That
    preference, sets priorities.
 6. **Verified vs unverified metadata.** Entries in models.yaml carry
    `status: confirmed | verify`. Research tasks (T01–T09) resolve `verify`
@@ -49,7 +50,10 @@ isn't tied to the eclipse date at all.
                                           # time - see Stack & conventions' disk
                                           # footprint note)
     data/points.parquet     # extracted point/strip values (append-only)
-    TASKS.md                # ordered work queue — work top-down, tick boxes
+    TODO.md                 # live work list — short, read this first
+    TASKS.md                # ARCHIVED research record (T01-T45), not a todo.
+                            # models.yaml and src/ cite its task numbers for
+                            # provenance, so it stays put; don't trust its boxes.
 
 ## Data schema — `data/points.parquet`
 
