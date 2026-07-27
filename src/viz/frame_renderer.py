@@ -89,8 +89,49 @@ _TOTALITY_CENTER_LAT = [p["lat"] for p in _TOTALITY_PATH["centralLine"]]
 _AROME_VAR_BY_FIELD = {"low": "lcc", "mid": "mcc", "high": "hcc"}
 
 
+def _read_single_var(path, bbox: dict, scale: float = 1.0, offset: float = 0.0):
+    """One-variable GRIB -> (lats, lons, values), rolled to -180..180 and
+    cropped. Used by the temp and rain readers, whose files hold exactly one
+    message each (the fetcher's search regexes guarantee it - see the gfs.rain
+    note in models.yaml for why that matters)."""
+    import cfgrib
+    dss = cfgrib.open_datasets(str(path))
+    if not dss:
+        return None
+    ds = dss[0]
+    var = next(iter(ds.data_vars), None)
+    if var is None:
+        return None
+    lons = ds.longitude.values.copy()
+    lons = np.where(lons > 180, lons - 360, lons)
+    order = np.argsort(lons)
+    lats, lons_sorted, values = _crop(
+        ds.latitude.values, lons[order], np.asarray(ds[var].values)[:, order], bbox
+    )
+    return lats, lons_sorted, values * scale + offset
+
+
 def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
-    path = DATA_RAW / "gfs" / format_init_dir(run_init) / f"f{step:03d}_cloud.grib2"
+    run_dir = DATA_RAW / "gfs" / format_init_dir(run_init)
+
+    if field == "temp":
+        # K -> C. 2 m air temperature, not skin (":TMP:surface:" is a
+        # different field); the fetcher's search pins the level.
+        p = run_dir / f"f{step:03d}_temp.grib2"
+        return _read_single_var(p, bbox, offset=-273.15) if p.exists() else None
+
+    if field == "rain":
+        # kg m-2 s-1 -> mm/h. INSTANTANEOUS rate, never an accumulation: see
+        # models.yaml gfs.rain. to_mm_h is read from there rather than
+        # hardcoded, so the unit conversion cannot drift from the field
+        # definition that justifies it.
+        p = run_dir / f"f{step:03d}_rain.grib2"
+        if not p.exists():
+            return None
+        factor = float((get_model("gfs").get("rain") or {}).get("to_mm_h", 3600))
+        return _read_single_var(p, bbox, scale=factor)
+
+    path = run_dir / f"f{step:03d}_cloud.grib2"
     if not path.exists():
         return None
     layers = _gfs_layer_datasets(path)
@@ -154,6 +195,11 @@ def _gefs_extended_field(field: str, run_init: datetime, step: int, bbox: dict) 
     below; every dataset opened from these files carries a single scalar
     number=0. Longitude is 0-360 (NOAA global grid), same conversion as
     _gfs_field above."""
+    if field == "temp":
+        p = (DATA_RAW / "gefs_extended" / format_init_dir(run_init)
+             / f"f{step:03d}_c00_temp.grib2")
+        return _read_single_var(p, bbox, offset=-273.15) if p.exists() else None
+
     base_dir = DATA_RAW / "gefs_extended" / format_init_dir(run_init)
 
     if field == "total":
@@ -469,6 +515,11 @@ _MODEL_READERS = {
     "aemet_harmonie": _aemet_harmonie_field,
 }
 
+# Readers that implement the temp / rain fields today. Kept beside
+# _MODEL_READERS so adding a reader and advertising its fields is one edit.
+_TEMP_CAPABLE_READERS = {_gfs_field, _gefs_extended_field}
+_RAIN_CAPABLE_READERS = {_gfs_field}
+
 
 # The only readers with real per-member probability support - see
 # _aifs_field's own prob_ branch (further gated internally on "ensemble" in
@@ -520,12 +571,61 @@ def supported_fields(model_id: str) -> list[str]:
     # Rendering both for a model that has levels produces frames no tool ever
     # displays - the composite always wins - so it is pure waste.
     if not has_native_levels:
-        return ["total"] if "total" in cloud else []
+        base = ["total"] if "total" in cloud else []
+        return base + _extra_fields(model_id, model_config)
 
     fields = ["hml_composite"]
     if "ensemble" in model_config["kind"] and _MODEL_READERS[model_id] in _PROB_CAPABLE_READERS:
         fields.append("prob_hml_composite")
-    return fields
+    return fields + _extra_fields(model_id, model_config)
+
+
+# Bands and scale come from the reviewed prototypes, not from taste:
+# /rain_overlay_review.html settled the contourf levels against both cloud
+# backgrounds, /temp_panel_review.html settled RdYlBu_r 0-44 C.
+_RAIN_LEVELS_MM_H = [0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0]
+# Candidate 12 "magenta_ramp" from the review - magenta bands with a rising
+# opacity ramp plus band edges. Magenta because it is the one hue neither cloud
+# background uses: Blues owns the blue end and hml_composite spends red on high
+# cloud, so orange (the textbook colourblind-safe partner for blue) collides.
+# The alpha ramp is what makes light rain TINT and heavy rain COVER, which a
+# single contourf cannot do - hence one call per band below.
+_RAIN_COLORS = ["#ffc2ea", "#ff8ad8", "#f857be", "#e0219b",
+                "#b8007e", "#8a005e", "#5c003f", "#330023"]
+_RAIN_ALPHAS = [0.38, 0.48, 0.58, 0.70, 0.80, 0.88, 0.93, 0.96]
+_RAIN_EDGE_COLOR = "#6b0049"
+_RAIN_EDGE_LW = 0.32
+_TEMP_VMIN_C, _TEMP_VMAX_C, _TEMP_BAND_C = 0.0, 44.0, 2.0
+_TEMP_EMPHASIS_C = [20, 30, 40]
+
+
+def _extra_fields(model_id: str, model_config: dict) -> list[str]:
+    """temp and rain, per model, from models.yaml.
+
+    Rain is gated on an INSTANTANEOUS rate (`rain.rate: true`). Verified
+    2026-07-27 by decoding real messages: only gfs, ecmwf_hres and ecmwf_ens
+    publish one at all, and of those only gfs is in scope. Every other model
+    offers accumulations, which would need differencing consecutive steps -
+    deliberately not built. A model without a rate simply has no rain field,
+    which is what lets the tools grey the control rather than draw nothing and
+    leave "no rain forecast" indistinguishable from "not supported".
+
+    Both are ALSO gated on the reader actually implementing them. models.yaml
+    says which models have the data; _TEMP_CAPABLE_READERS / _RAIN_CAPABLE_READERS
+    say which readers can currently read it. Advertising a field whose reader
+    returns None would put it in the manifests with no images behind it - the
+    same trap as a model that renders nothing, and the reason the prob fields
+    are gated this way too. Extend the sets as readers land.
+    """
+    reader = _MODEL_READERS.get(model_id)
+    out = []
+    if ((model_config.get("surface_temp") or {}).get("status") == "confirmed"
+            and reader in _TEMP_CAPABLE_READERS):
+        out.append("temp")
+    if ((model_config.get("rain") or {}).get("rate") is True
+            and reader in _RAIN_CAPABLE_READERS):
+        out.append("rain")
+    return out
 
 
 def _steps_for_run(model_id: str, model_config: dict, run_init: datetime) -> list[int]:
@@ -727,6 +827,14 @@ def render_frame(
         return output_path, False
 
     lats, lons, values = result
+
+    if field == "rain":
+        return _render_rain_overlay(model_name, run_init, step, lats, lons, values,
+                                    bbox, output_path)
+    if field == "temp":
+        return _render_temp_frame(model_name, run_init, step, lats, lons, values,
+                                  bbox, output_path)
+
     fig_width, fig_height, axes_top = _figure_layout(bbox)
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
     norm = mcolors.PowerNorm(gamma=_gamma_for_field(field), vmin=0, vmax=100)
@@ -763,6 +871,98 @@ def render_frame(
     fig.savefig(output_path, dpi=100)
     plt.close(fig)
     return output_path, result is not None
+
+
+def _render_rain_overlay(model_name, run_init, step, lats, lons, values, bbox, output_path):
+    """Rain as a TRANSPARENT overlay, drawn alone with no basemap or title.
+
+    It is composited over whichever cloud background the tool is showing, so
+    it must contain nothing but rain: no coastline (the base already has one,
+    and two would not register), no axes, no background. Everything below the
+    first band is fully transparent - hence `extend="max"` and levels starting
+    at 0.2 rather than 0, so drizzle is drawn and dry ground is a hole.
+
+    Consequence worth stating: "no rain" and "this model has no rain" produce
+    an identical (empty) overlay. supported_fields() is what separates them -
+    a model without the field gets no overlay offered at all, and the tools
+    grey the control rather than showing an empty one.
+    """
+    fig_width, fig_height, _ = _figure_layout(bbox)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+    fig.patch.set_alpha(0.0)
+    ax.patch.set_alpha(0.0)
+
+    # One contourf PER BAND: a single call takes one scalar alpha for the whole
+    # set, which is exactly what stops it expressing the opacity ramp.
+    n_bands = len(_RAIN_LEVELS_MM_H)   # 7 interior + the open-topped last band
+    for i in range(n_bands):
+        upper = (_RAIN_LEVELS_MM_H[i + 1] if i + 1 < len(_RAIN_LEVELS_MM_H)
+                 else _RAIN_LEVELS_MM_H[-1] * 1e3)
+        ax.contourf(lons, lats, values, levels=[_RAIN_LEVELS_MM_H[i], upper],
+                    colors=[_RAIN_COLORS[i]], alpha=_RAIN_ALPHAS[i])
+    # Thin outline on every isohyet. The cheapest way to say "this is a
+    # different KIND of thing from the cloud underneath": the backgrounds are
+    # blocky pcolormesh pixels with no edges anywhere, so an outlined smooth
+    # isohyet never reads as a cloud patch even on a similar hue.
+    ax.contour(lons, lats, values, levels=_RAIN_LEVELS_MM_H,
+               colors=[_RAIN_EDGE_COLOR], linewidths=_RAIN_EDGE_LW)
+
+    ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
+    ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
+    ax.set_aspect(1.3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_axis_off()
+    # No subplots_adjust with axes_top here: the overlay must align pixel-for-
+    # pixel with the base frame's MAP area, and the base reserves the top strip
+    # for its title. Same layout call, same margins, minus the title band.
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=_figure_layout(bbox)[2])
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=100, transparent=True)
+    plt.close(fig)
+    return output_path, True
+
+
+def _render_temp_frame(model_name, run_init, step, lats, lons, values, bbox, output_path):
+    """2 m temperature as its own panel - absolute degrees C, banded.
+
+    Scale from /temp_panel_review.html: RdYlBu_r, 0-44 C in 2 C bands, with
+    contours at 20/30/40 to give the eye something to register against. Fixed,
+    never adaptive: an autoscaled panel makes every model look alike and makes
+    two models uncomparable, which is the whole point of showing them together.
+    """
+    levels = np.arange(_TEMP_VMIN_C, _TEMP_VMAX_C + _TEMP_BAND_C, _TEMP_BAND_C)
+    fig_width, fig_height, axes_top = _figure_layout(bbox)
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+
+    cmap = plt.get_cmap("RdYlBu_r", len(levels) - 1)
+    ax.contourf(lons, lats, values, levels=levels, cmap=cmap,
+                norm=mcolors.BoundaryNorm(levels, cmap.N), extend="both")
+    ax.contour(lons, lats, values, levels=_TEMP_EMPHASIS_C,
+               colors="#333333", linewidths=0.5, alpha=0.7)
+
+    draw_basemap(ax, bbox)
+    ax.plot(_TOTALITY_BAND_LON, _TOTALITY_BAND_LAT, "r-", linewidth=0.8, alpha=0.6, zorder=7)
+    ax.plot(_TOTALITY_CENTER_LON, _TOTALITY_CENTER_LAT, "r--", linewidth=1, alpha=0.8, zorder=7)
+
+    ax.set_xlim(bbox["lon_min"], bbox["lon_max"])
+    ax.set_ylim(bbox["lat_min"], bbox["lat_max"])
+    ax.set_aspect(1.3)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    label = _MODEL_LABELS.get(model_name, model_name)
+    valid = run_init + timedelta(hours=step)
+    ax.set_title(f"{label} · {_fmt_dm_z(run_init)} → {_fmt_dm_z(valid)} (+{step}h)", fontsize=10)
+    fig.subplots_adjust(left=0, right=1, bottom=0, top=axes_top)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path, dpi=100)
+    plt.close(fig)
+    return output_path, True
 
 
 def _render_composite_frame(

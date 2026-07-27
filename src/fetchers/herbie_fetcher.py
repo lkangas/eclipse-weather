@@ -50,6 +50,12 @@ class _Fetch:
     suffix: str
     product: str
     search: str
+    # models.yaml field whose `search` key overrides the regex below, when it
+    # has one. models.yaml is the single source of truth for what identifies a
+    # field (CLAUDE.md #2), and rain's selector was verified against live idx
+    # files - restating it here would give two places to rot independently.
+    # None means "this unit's search lives here", as cloud's does.
+    config_field: str | None = None
     # Lowest forecast hour this unit actually exists at. GEFS publishes no
     # cloud layer or entire-atmosphere TCDC at f000 - pgrb2a has none at all
     # and pgrb2b carries only TCDC:475 mb - so requesting it is a guaranteed
@@ -96,6 +102,26 @@ _MODEL_SPECS = {
                     r"|:TCDC:entire atmosphere:(?:\d+ hour fcst|anl):"
                 ),
             ),
+            # 2 m air temperature, NOT skin: ":TMP:surface:" is a different
+            # field. Verified live - exactly one message per step, and step 0
+            # is labelled "anl" like the cloud fields.
+            _Fetch(
+                suffix="temp",
+                product="pgrb2.0p25",
+                search=r":TMP:2 m above ground:(?:\d+ hour fcst|anl):",
+            ),
+            # Instantaneous precipitation RATE. The selector comes from
+            # models.yaml because getting it wrong is silent: PRATE is
+            # published twice per step - instantaneous and interval-average -
+            # sharing shortName, level, units AND paramId, so only stepType
+            # separates them and cfgrib keeps whichever comes first by byte
+            # order. See the gfs.rain note there for the verification.
+            _Fetch(
+                suffix="rain",
+                product="pgrb2.0p25",
+                search=r":PRATE:surface:(?:\d+ hour fcst|anl):",
+                config_field="rain",
+            ),
         ),
     },
     "gefs_extended": {
@@ -117,6 +143,14 @@ _MODEL_SPECS = {
                 product="atmos.5b",
                 search=r":TCDC:(?:low|middle|high) cloud layer:",
                 first_step=3,
+            ),
+            # 2 m temperature rides in the same atmos.5 product as the total
+            # cloud fetch above - no new product. Members are selected by the
+            # spec's own `member`, so no ENS qualifier is needed in the regex.
+            _Fetch(
+                suffix="temp",
+                product="atmos.5",
+                search=r":TMP:2 m above ground:(?:\d+ hour fcst|anl):",
             ),
         ),
     },
@@ -244,6 +278,18 @@ def _require_spec(model_name: str, model_config: dict) -> dict:
     return spec
 
 
+def _resolve_searches(spec: dict, model_config: dict) -> dict:
+    """Spec with each unit's search replaced by models.yaml's, where it has
+    one. Keeps the verified selector in exactly one place."""
+    import dataclasses
+    out = []
+    for f in spec["fetches"]:
+        cfg = (model_config.get("cloud") or {}) if f.config_field == "cloud" else model_config
+        declared = (cfg.get(f.config_field) or {}).get("search") if f.config_field else None
+        out.append(dataclasses.replace(f, search=declared) if declared else f)
+    return {**spec, "fetches": tuple(out)}
+
+
 def _download_steps(
     *, model_name: str, spec: dict, run_init: datetime, steps: list[int], out_dir: Path,
     result: FetchResult,
@@ -321,7 +367,7 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
     in config/models.yaml; both are handled by this one function per
     src/fetchers/registry.py's contract.
     """
-    spec = _require_spec(model_name, model_config)
+    spec = _resolve_searches(_require_spec(model_name, model_config), model_config)
 
     reachable = full_range_steps(model_config, run_init)
     # No eclipse valid-time targets here - each step's own natural valid
