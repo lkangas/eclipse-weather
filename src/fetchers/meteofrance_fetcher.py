@@ -57,6 +57,15 @@ AROME: 00H06H, 07H12H, ...). A single file bundles every step inside its
 window, so fetching a run's full range means downloading every group window
 - there is no per-step file to range-fetch (unlike GFS/GEFS idx-based byte
 ranges).
+
+Two packages are fetched per run, not one (see _packages): SP2 for the native
+low/mid/high cloud this project was built on, and SP1 for 2 m temperature.
+With no per-message index on this bucket, SP1 costs whole files - measured
+2026-07-27 at 75.0 MB/group for ARPEGE (~0.68 GB/run, 4 runs/day) and
+56.5 MB/group for AROME (~0.51 GB/run, 8 runs/day). That roughly doubles both
+models' raw footprint and is by far the most expensive part of adding
+temperature; it is also, per models.yaml's T45 note, the same package their
+rain would need.
 """
 
 from __future__ import annotations
@@ -100,6 +109,28 @@ _MODEL_SPECS = {
 _HTTP_TIMEOUT = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=15.0)
 _MAX_ATTEMPTS = 3
 _BACKOFF_BASE_S = 2.0
+
+
+def _packages(model_config: dict) -> list[str]:
+    """Every Meteo-France paquet this run needs, in fetch order.
+
+    SP2 (cloud.levels.package) carries the native lcc/mcc/hcc this project was
+    built on. SP1 (surface_temp.package) is a SECOND, whole package - it is
+    where 2 m temperature actually lives (models.yaml's T45 note: SP2's `t` is
+    skin temperature, not 2 m), and there is no per-message index on this
+    bucket to subset it, so wanting `2t` means downloading SP1's group files
+    whole. That is a real, measured cost - see the surface_temp COST note in
+    models.yaml - not a free ride on the existing SP2 fetch.
+
+    Both package names are read from models.yaml rather than hardcoded, and
+    the two are downloaded to DIFFERENT filenames (_download_groups puts the
+    paquet in the name), so adding SP1 cannot disturb the SP2 files.
+    """
+    packages = [model_config.get("cloud", {}).get("levels", {}).get("package", "SP2")]
+    temp_package = (model_config.get("surface_temp") or {}).get("package")
+    if temp_package and temp_package not in packages:
+        packages.append(temp_package)
+    return packages
 
 
 def _run_iso(run_init: datetime) -> str:
@@ -183,13 +214,17 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
                   f"(only arpege_europe/arome_france are supported)",
         )
 
-    paquet = model_config.get("cloud", {}).get("levels", {}).get("package", "SP2")
     out_dir = raw_output_dir(model_name, run_init)
 
-    files_written, errors = _download_groups(
-        model_name=model_name, spec=spec, run_init=run_init, groups=spec["groups"],
-        paquet=paquet, out_dir=out_dir,
-    )
+    files_written: list = []
+    errors: list[str] = []
+    for paquet in _packages(model_config):
+        pkg_files, pkg_errors = _download_groups(
+            model_name=model_name, spec=spec, run_init=run_init, groups=spec["groups"],
+            paquet=paquet, out_dir=out_dir,
+        )
+        files_written.extend(pkg_files)
+        errors.extend(f"{paquet} {e}" for e in pkg_errors)
 
     if not files_written:
         return FetchResult(

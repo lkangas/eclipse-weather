@@ -148,7 +148,78 @@ def _gfs_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple |
     return lats, lons_sorted, values
 
 
+def _mask_grib_missing(da) -> np.ndarray:
+    """Decoded values as float, with masked gridpoints forced to NaN.
+
+    AROME's 2 m temperature ships a BITMAP - 138,076 of its 803,757 gridpoints
+    are masked (the native grid has been trapezoidal since 2019, so a
+    rectangular lat/lon frame has real holes in it). Whether those arrive as
+    NaN or as a sentinel depends on the ecCodes/cfgrib read path: cfgrib sets
+    the GRIB missingValue key to FLT_MAX and hands back NaN, but a plain
+    ecCodes decode of the same message substitutes 9999.0, which turned a
+    domain mean into 1717.9 C. Neither the mean nor the colour scale survives
+    that, and the failure is loud enough to spot only if someone looks - so
+    both forms are masked here rather than trusting one read path's default.
+    """
+    values = np.asarray(da.values, dtype="float32")
+    missing = da.attrs.get("GRIB_missingValue")
+    if missing is not None:
+        values = np.where(values == np.float32(missing), np.nan, values)
+    return np.where(values == 9999.0, np.nan, values)
+
+
+def _meteofrance_temp_field(
+    model_name: str, run_init: datetime, step: int, bbox: dict
+) -> tuple | None:
+    """2 m temperature in degrees C for arome_france / arpege_europe.
+
+    Not in the SP2 package the cloud reader above uses: SP2's `t` is SKIN
+    temperature (models.yaml's T45 note has the evidence), and the real 2 m
+    field lives in the primary surface package SP1, which meteofrance_fetcher
+    now downloads alongside SP2. Package, GRIB shortName, level type and
+    cfgrib variable name all come from models.yaml's surface_temp block.
+
+    The level filter is not optional: SP1 carries several temperature-flavoured
+    messages, and `2t` must be pinned to heightAboveGround/2 m to land on the
+    right hypercube."""
+    st = get_model(model_name).get("surface_temp") or {}
+    package = st.get("package")
+    shortname = st.get("param")
+    if not package or not shortname:
+        return None
+    var = st.get("cfgrib_var") or shortname
+    level_type = st.get("level", "heightAboveGround")
+
+    for path in _group_files(model_name, run_init):
+        if f"_{package}_" not in path.name:
+            continue
+        try:
+            dsets = cfgrib.open_datasets(
+                str(path),
+                backend_kwargs={
+                    "filter_by_keys": {"shortName": shortname, "typeOfLevel": level_type}
+                },
+            )
+        except Exception:
+            log.exception("frame_renderer: failed to open %s for %s temp", path, model_name)
+            continue
+        for ds in dsets:
+            if var not in ds.data_vars or "step" not in ds.dims:
+                continue
+            idx = _step_hour_index(ds)
+            if step not in idx:
+                continue
+            at_step = ds.isel(step=idx[step])
+            values = _mask_grib_missing(at_step[var]) + _KELVIN_TO_C
+            return _crop(
+                at_step.latitude.values, at_step.longitude.values, values, bbox
+            )
+    return None
+
+
 def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
+    if field == "temp":
+        return _meteofrance_temp_field("arome_france", run_init, step, bbox)
     if field == "total":
         return None  # SP2 has no native total field (meteofrance_extractor.py's own note)
     if field.startswith("prob_"):
@@ -170,6 +241,8 @@ def _arome_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple
 def _arpege_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """Same package/shape as arome_france (SP2, no native total field) - see
     T31c's own _field_arpege for the same reasoning."""
+    if field == "temp":
+        return _meteofrance_temp_field("arpege_europe", run_init, step, bbox)
     if field == "total":
         return None
     if field.startswith("prob_"):
@@ -230,7 +303,10 @@ def _gefs_extended_field(field: str, run_init: datetime, step: int, bbox: dict) 
     return lats, lons_sorted, values
 
 
-def _read_ecmwf_grid(path: Path, shortname: str, scale: float, bbox: dict) -> tuple | None:
+def _read_ecmwf_grid(
+    path: Path, shortname: str, scale: float, bbox: dict, offset: float = 0.0,
+    var: str | None = None,
+) -> tuple | None:
     """One 2D grid for a single GRIB shortName, cropped to bbox. Grid is
     already -180..180 (ecmwf_extractor.py's own docstring) - no wraparound
     conversion needed, unlike the NOAA grids above.
@@ -241,16 +317,51 @@ def _read_ecmwf_grid(path: Path, shortname: str, scale: float, bbox: dict) -> tu
     aifs_ens entry to whatever quantity is selected." Same convention across
     every model this function serves, deterministic ones included - a
     deterministic file (ecmwf_hres's total, aifs_single) has exactly one
-    "member", so averaging across it is a no-op, not a special case."""
+    "member", so averaging across it is a no-op, not a special case.
+
+    `offset` is applied after `scale`, for the one field that needs an affine
+    rather than a purely multiplicative conversion: temperature's K -> C. It
+    commutes with the ensemble mean (mean(T) - 273.15 == mean(T - 273.15)), so
+    the ensemble-mean convention above still holds for it unchanged."""
     if not path.exists():
         return None
-    members = _iter_members(path, shortname)
+    members = _iter_members(path, shortname, var)
     if not members:
         return None
     stacked = np.stack([da.values for _, da in members], axis=0)
     mean_values = stacked.mean(axis=0)
     _, da0 = members[0]
-    return _crop(da0.latitude.values, da0.longitude.values, mean_values * scale, bbox)
+    return _crop(
+        da0.latitude.values, da0.longitude.values, mean_values * scale + offset, bbox
+    )
+
+
+# K -> C. Every model's surface_temp in models.yaml is Kelvin (the ICON
+# entries omit `units:`; DWD's T_2M is Kelvin like everything else here), and
+# the panel renderer's scale is in degrees C.
+_KELVIN_TO_C = -273.15
+
+
+def _temp_names(model_name: str) -> tuple[str, str]:
+    """(GRIB shortName, cfgrib variable name) for this model's 2 m
+    temperature, both from models.yaml's surface_temp block. They differ for
+    this field and only this field: `param` is 2t, `cfgrib_var` is t2m - one
+    selects the messages, the other indexes the decoded dataset."""
+    st = get_model(model_name).get("surface_temp") or {}
+    return st["param"], (st.get("cfgrib_var") or st["param"])
+
+
+def _ecmwf_temp_field(model_name: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
+    """2 m temperature for any of the four ecmwf-opendata models, in degrees C.
+
+    One shared implementation because the file is the same shape for all four:
+    ecmwf_opendata_fetcher's _temp_requests writes one temp_f{step}.grib2 per
+    step per model, holding `2t` only. Ensembles reduce through
+    _read_ecmwf_grid's ensemble MEAN, the same convention their cloud fields
+    already use - not member 0."""
+    path = DATA_RAW / model_name / format_init_dir(run_init) / f"temp_f{step:03d}.grib2"
+    shortname, var = _temp_names(model_name)
+    return _read_ecmwf_grid(path, shortname, 1.0, bbox, offset=_KELVIN_TO_C, var=var)
 
 
 _PROB_CLOUD_THRESHOLD_PCT = 10.0  # locked in after comparing 0-30% via the
@@ -310,6 +421,8 @@ def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> 
     model_config = get_model("ecmwf_hres")
     out_dir = DATA_RAW / "ecmwf_hres" / format_init_dir(run_init)
 
+    if field == "temp":
+        return _ecmwf_temp_field("ecmwf_hres", run_init, step, bbox)
     if field != "total":
         return None
     scale = _percent_scale(model_config["cloud"]["total"], "total")
@@ -320,6 +433,8 @@ def _ecmwf_hres_field(field: str, run_init: datetime, step: int, bbox: dict) -> 
 def _ecmwf_ens_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
     """No native L/M/H for classic ENS (models.yaml: levels absent_in_open_data
     - that split only exists in aifs_ens, a different product) - total only."""
+    if field == "temp":
+        return _ecmwf_temp_field("ecmwf_ens", run_init, step, bbox)
     if field != "total":
         return None
     model_config = get_model("ecmwf_ens")
@@ -350,6 +465,10 @@ def _aifs_field(
     probability - skip it there rather than render something misleading."""
     model_config = get_model(model_name)
     path = DATA_RAW / model_name / format_init_dir(run_init) / f"cloud_f{step:03d}.grib2"
+    if field == "temp":
+        # Its own temp_f{step}.grib2, not this cloud file - see
+        # ecmwf_opendata_fetcher._temp_requests for why it is a separate fetch.
+        return _ecmwf_temp_field(model_name, run_init, step, bbox)
     if field == "total":
         scale = _percent_scale(model_config["cloud"]["total"], "total")
         shortname = model_config["cloud"]["total"]["param"]
@@ -381,6 +500,27 @@ def _aifs_ens_field(field: str, run_init: datetime, step: int, bbox: dict) -> tu
 _ICON_PARAM_BY_FIELD = {"low": "CLCL", "mid": "CLCM", "high": "CLCH", "total": "CLCT"}
 
 
+def _icon_field_spec(model_name: str, field: str) -> tuple[str, str, float] | None:
+    """(DWD param name, cfgrib var name, K->C offset) for one ICON field.
+
+    DWD ships one param per file and the param name is BOTH the directory
+    segment and the filename token, so it is what locates the file - but it is
+    not always what cfgrib calls the variable inside (T_2M decodes as `t2m`).
+    The cloud params happen to coincide with their own variable names, which
+    is why the callers below could pass one string for both until temperature
+    arrived. Both names come from models.yaml."""
+    if field == "temp":
+        st = get_model(model_name).get("surface_temp") or {}
+        param = st.get("param")
+        if not param:
+            return None
+        return param, (st.get("cfgrib_var") or param), _KELVIN_TO_C
+    param = _ICON_PARAM_BY_FIELD.get(field)
+    if param is None:
+        return None
+    return param, param, 0.0
+
+
 def _icon_path(model_name: str, run_init: datetime, step: int, param: str) -> Path:
     """The path dwd_bz2_fetcher.py's fetch() wrote for this (step, param),
     reconstructed from models.yaml's own url_template - same convention as
@@ -399,14 +539,17 @@ def _icon_eu_field(field: str, run_init: datetime, step: int, bbox: dict) -> tup
     below)."""
     if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
-    param = _ICON_PARAM_BY_FIELD[field]
+    spec = _icon_field_spec("icon_eu", field)
+    if spec is None:
+        return None
+    param, var, offset = spec
     path = _icon_path("icon_eu", run_init, step, param)
     if not path.exists():
         return None
-    da = _open_param_dataarray(path, param)
+    da = _open_param_dataarray(path, var)
     if da is None:
         return None
-    return _crop(da.latitude.values, da.longitude.values, da.values, bbox)
+    return _crop(da.latitude.values, da.longitude.values, da.values + offset, bbox)
 
 
 def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) -> tuple | None:
@@ -416,19 +559,22 @@ def _icon_global_field(field: str, run_init: datetime, step: int, bbox: dict) ->
     same as cloud_field_comparison.py's _field_icon_global."""
     if field.startswith("prob_"):
         return None  # deterministic, single member - no ensemble spread to compute a P() from
-    param = _ICON_PARAM_BY_FIELD[field]
+    spec = _icon_field_spec("icon_global", field)
+    if spec is None:
+        return None
+    param, var, offset = spec
     src_path = _icon_path("icon_global", run_init, step, param)
     if not src_path.exists():
         return None
     grid_path, weights_path = _ensure_remap_weights()
     with tempfile.TemporaryDirectory(prefix="tool1_icon_global_remap_") as tmp:
         remapped = _remap_icon_global_to_iberia(src_path, bbox, grid_path, weights_path, Path(tmp))
-        da = _open_param_dataarray(remapped, param)
+        da = _open_param_dataarray(remapped, var)
         if da is None:
             return None
         da = da.load()  # must load into memory before the temp dir is cleaned up
     # Already cropped by -sellonlatbox during the remap; no further crop needed.
-    return da.latitude.values, da.longitude.values, da.values
+    return da.latitude.values, da.longitude.values, da.values + offset
 
 
 
@@ -517,7 +663,12 @@ _MODEL_READERS = {
 
 # Readers that implement the temp / rain fields today. Kept beside
 # _MODEL_READERS so adding a reader and advertising its fields is one edit.
-_TEMP_CAPABLE_READERS = {_gfs_field, _gefs_extended_field}
+_TEMP_CAPABLE_READERS = {
+    _gfs_field, _gefs_extended_field,
+    _ecmwf_hres_field, _ecmwf_ens_field, _aifs_single_field, _aifs_ens_field,
+    _icon_eu_field, _icon_global_field,
+    _arome_field, _arpege_field,
+}
 _RAIN_CAPABLE_READERS = {_gfs_field}
 
 

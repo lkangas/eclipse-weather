@@ -29,6 +29,13 @@ section names for their model - flagged here, not silently assumed correct:
     Fetched anyway per this fetcher's build spec - it is cheap, native, and
     useful as an independent cross-check outside the derive path.
 
+All four models additionally fetch 2 m temperature (models.yaml's
+`surface_temp.param`, i.e. `2t`) into its own temp_f{step}.grib2 - see
+_temp_requests for why it is a separate retrieve rather than one more param on
+the cloud request. It is NOT cheap for the ensembles: 33 MB/step for ecmwf_ens
+and 32 MB/step for aifs_ens (50-51 members on the 0.25 deg global grid),
+against 0.6 MB/step for the two deterministic models.
+
 NOTE (fixed after initial build+review): the first version of this fetcher
 only requested q+z for HRES, matching models.yaml's cloud.levels.method
 string at the time, which named only "q". But src/derive/humidity_to_cloud.py
@@ -152,12 +159,44 @@ def _aifs_requests(
     return [(req, target)]
 
 
+def _temp_requests(
+    model_config: dict, run_init: datetime, step: int, out_dir: Path
+) -> list[RequestSpec]:
+    """2 m temperature, as its own retrieve into its own temp_f{step}.grib2.
+
+    Appended to every model's own cloud request list rather than folded into
+    it: adding `2t` to, say, _aifs_requests' param list would silently change
+    what the EXISTING cloud_f{step}.grib2 file contains, and this fetcher is
+    the archiver's critical path - a new field must not be able to disturb a
+    file something else already reads. Separate file, separate retrieve, so a
+    temp failure costs only temp.
+
+    The param comes from models.yaml's `surface_temp.param` (2t for all four
+    ecmwf-opendata models) - single source of truth for field identity. A
+    model without a surface_temp block simply gets no temp request.
+    """
+    param = (model_config.get("surface_temp") or {}).get("param")
+    if not param:
+        return []
+    req = {
+        **_base_request(model_config),
+        "date": run_init.date(),
+        "time": run_init.hour,
+        "step": step,
+        "param": param,
+    }
+    return [(req, out_dir / f"temp_f{step:03d}.grib2")]
+
+
 _REQUEST_BUILDERS = {
     "ecmwf_hres": _hres_requests,
     "ecmwf_ens": _ens_requests,
     "aifs_single": _aifs_requests,
     "aifs_ens": _aifs_requests,
 }
+
+# Request builders every model gets on top of its own cloud builder above.
+_EXTRA_REQUEST_BUILDERS = (_temp_requests,)
 
 
 def _download_steps(
@@ -177,7 +216,10 @@ def _download_steps(
     errors: list[str] = []
 
     for step in steps:
-        for req, target in builder(model_config, run_init, step, out_dir):
+        specs = list(builder(model_config, run_init, step, out_dir))
+        for extra in _EXTRA_REQUEST_BUILDERS:
+            specs.extend(extra(model_config, run_init, step, out_dir))
+        for req, target in specs:
             # Not exists()/size>0 but a structural GRIB check - a retrieve that
             # died mid-transfer leaves a non-empty but truncated file, which
             # this loop then skipped on every later top-up pass, freezing the

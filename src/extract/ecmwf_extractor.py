@@ -156,8 +156,17 @@ def _valid_times_by_step(model_config: dict, run_init: datetime) -> dict[int, li
     return by_step
 
 
-def _iter_members(path: Path, shortname: str) -> list[tuple[int, xr.DataArray]]:
+def _iter_members(
+    path: Path, shortname: str, var: str | None = None
+) -> list[tuple[int, xr.DataArray]]:
     """Every (member, 2-D DataArray) pair for one GRIB2 shortName in `path`.
+
+    `var` is the name cfgrib gives the decoded variable, when it differs from
+    the GRIB shortName used to select the messages. For every cloud field here
+    the two coincide (shortName "tcc" decodes as variable "tcc"), which is why
+    one argument sufficed originally - but 2 m temperature has shortName "2t"
+    and decodes as "t2m", so filtering and indexing need separate names.
+    Defaults to `shortname`, leaving every existing caller unchanged.
 
     member = -1 for a field with no ensemble `number` key at all (a true
     deterministic run: ecmwf_hres, aifs_single).
@@ -174,7 +183,7 @@ def _iter_members(path: Path, shortname: str) -> list[tuple[int, xr.DataArray]]:
     )
     out: list[tuple[int, xr.DataArray]] = []
     for ds in dsets:
-        da = ds[shortname]
+        da = ds[var or shortname]
         if "number" in da.dims:
             for n in da["number"].values:
                 out.append((int(n), da.sel(number=int(n))))

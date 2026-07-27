@@ -143,6 +143,7 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         renderable = model_id in _MODEL_READERS
         n_fields = len(supported_fields(model_id)) if renderable else 0
         index = _frame_index(model_id) if renderable else {}
+        fields = supported_fields(model_id) if renderable else []
         rows = []
         for run_init in cycle_run_inits(cfg["cycles"], now, lookback_hours=lookback_h):
             due = due_time(cfg.get("publication_lag_h", [0, 0]), run_init)
@@ -155,9 +156,28 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
             # genuinely publish nothing produce no frame by design (gfs f000),
             # so this is a proportion rather than equality.
             expected = len(full_range_steps(cfg, run_init)) or 1
+            sealed = (now - run_init).total_seconds() / 3600 >= FETCH_TOPUP_WINDOW_H
+            # A field with NO frames at all on a SEALED run can never gain any:
+            # the run is past its top-up window, so nothing further will be
+            # fetched for it. Requiring such a field makes the run permanently
+            # incomplete, which is what happened the moment gfs/gefs gained
+            # temp and rain - 71 already-rendered runs flipped to "fetched"
+            # because their raw predates the fields and never contained them.
+            # verify.py draws exactly this distinction for differenced fields
+            # whose lookback input was reclaimed (see its `fully_rendered`);
+            # this is the same idea applied to the dashboard's own notion.
+            #
+            # Only on a sealed run. Inside the window a missing field is still
+            # fixable by fetching it, and calling that "complete" would stop
+            # the backfill that fixes it.
+            producible = [f for f in fields
+                          if per_field.get(f) or not sealed] if renderable else []
             complete = (
-                renderable and n_fields and len(per_field) == n_fields
-                and min(per_field.values()) >= expected * COMPLETE_FRACTION
+                renderable and n_fields
+                and all(per_field.get(f) for f in producible)
+                and (min((per_field[f] for f in producible if f in per_field),
+                         default=0) >= expected * COMPLETE_FRACTION)
+                and bool(producible)
             )
             # Incomplete for a reason that is not ours: the model has not
             # published the rest yet. gefs_extended is the case that keeps

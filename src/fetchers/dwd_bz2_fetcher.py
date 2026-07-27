@@ -3,10 +3,12 @@ icon_global (DWD ICON global, icosahedral) and icon_eu (DWD ICON-EU,
 regular-lat-lon). Both are public, no-auth, single-file-per-step-per-param
 downloads from opendata.dwd.de.
 
-For every step this run_init publishes and each cloud param (native L/M/H +
-total: CLCL/CLCM/CLCH/CLCT), this builds the download URL from the model's
-`source.url_template`, GETs the .grib2.bz2 file, decompresses it, and writes
-the raw .grib2 into raw_output_dir(model_name, run_init).
+For every step this run_init publishes and each param (native L/M/H + total
+cloud: CLCL/CLCM/CLCH/CLCT, plus 2 m temperature T_2M), this builds the
+download URL from the model's `source.url_template`, GETs the .grib2.bz2 file,
+decompresses it, and writes the raw .grib2 into
+raw_output_dir(model_name, run_init). One param per file, so every param is
+independent of every other - see _download_params.
 
 icon_global's grid is icosahedral (native, no regular-lat-lon variant exists
 on opendata.dwd.de per T04) — this module deliberately does NOT remap it.
@@ -50,6 +52,25 @@ def _cloud_params(model_config: dict) -> list[str]:
     for p in [*cloud.get("levels", {}).get("params", []), cloud.get("total", {}).get("param")]:
         if p and p not in params:
             params.append(p)
+    return params
+
+
+def _download_params(model_config: dict) -> list[str]:
+    """Every DWD param name this run should fetch: the cloud params above,
+    plus 2 m temperature (T_2M) when models.yaml declares one.
+
+    Appended rather than merged into _cloud_params so the cloud fetch is
+    unchanged by construction: each param is its own URL and its own file on
+    disk, so an added param can only add files, never alter existing ones.
+    The name comes from models.yaml's `surface_temp.param` (single source of
+    truth for field identity); DWD's own url_template already lowercases it
+    for the directory segment and uppercases it in the filename, so T_2M
+    needs no special-casing here.
+    """
+    params = _cloud_params(model_config)
+    temp_param = (model_config.get("surface_temp") or {}).get("param")
+    if temp_param and temp_param not in params:
+        params.append(temp_param)
     return params
 
 
@@ -104,9 +125,9 @@ def _download_all_params(
     """Shared download loop: fetch every (step, param) combo into `out_dir`,
     idempotently."""
     url_template = model_config["source"]["url_template"]
-    params = _cloud_params(model_config)
-    if not params:
+    if not _cloud_params(model_config):
         raise ValueError(f"{model_name}: no cloud params found in model_config['cloud']")
+    params = _download_params(model_config)
 
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
