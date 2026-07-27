@@ -55,6 +55,12 @@ def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
     return idx
 
 
+def _latest_only(cfg: dict) -> bool:
+    """Does this source serve only whatever run is current? (aemet_harmonie)"""
+    return bool((cfg.get("source", {}).get("open_endpoint") or {})
+                .get("serves_latest_run_only"))
+
+
 def _raw_state(model_id: str, run_init: datetime) -> tuple[int, bool]:
     """(count of real raw files, tombstoned?) for this run.
 
@@ -91,6 +97,8 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
       available - due, and nothing has arrived. Waiting to be fetched.
       overdue   - available for far longer than it should be. A real fault:
                   upstream retention is short, so this is where runs are lost.
+      missed    - past, and unfetchable: the source serves only its current
+                  run, so this cycle can never be retrieved. Not actionable.
       fetched   - raw on disk, not yet rendered (or only partly)
       ready     - every supported field rendered, raw still on disk to reclaim
       done      - fetched, rendered and reclaimed by THIS box. Terminal.
@@ -174,7 +182,18 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
                 state = "gone" if sealed else "fetched"
             else:
                 overdue_h = (now - due).total_seconds() / 3600
-                state = "overdue" if overdue_h > OVERDUE_AFTER_H else "available"
+                if overdue_h <= OVERDUE_AFTER_H:
+                    state = "available"
+                elif _latest_only(cfg):
+                    # A source that serves only its current run cannot be asked
+                    # for a past cycle, so "overdue" is wrong: it implies
+                    # someone could still fetch it. Once the window moved on,
+                    # that cycle is simply gone. Saying so stops six permanently
+                    # unfixable cells sitting red for up to 48 h and training
+                    # the eye to ignore the colour that means act now.
+                    state = "missed"
+                else:
+                    state = "overdue"
 
             rows.append({
                 "run_init": run_init.isoformat().replace("+00:00", "Z"),
