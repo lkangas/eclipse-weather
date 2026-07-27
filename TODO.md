@@ -86,13 +86,31 @@ What follows from that:
 
 ## Layers
 
-- [ ] **Rain and temperature** — designs settled and demonstrated on real
-      data; no code yet. Full spec, per-model costs and the implementation
-      traps are in the task tracker (task #8) and the two review pages:
-      `/rain_overlay_review.html`, `/temp_panel_review.html`.
+- [x] **Rain and temperature** — built 2026-07-27. Temp for all 10 gridded
+      models, rain for **GFS only** (the one model publishing an instantaneous
+      rate, `PRATE`; the rest would need differencing accumulations, and the
+      decision was to drop a model rather than fall back to accumulation).
+      Rain ships as a separate *transparent* PNG stacked over whatever base is
+      selected, so one overlay serves every base instead of a frame per
+      combination. All three tools wired. Designs came from
+      `/rain_overlay_review.html` and `/temp_panel_review.html`.
       One fetch of Météo-France **SP1** delivers both temperature *and* rain
       for AROME and ARPEGE — AROME being the highest-resolution model over
       Iberia at 0.025°.
+      - [ ] **Still open: put temp/rain in the VPS pipeline.** Costs ~18.6 GB/day
+            across all models, 62% of it `aifs_ens` + `ecmwf_ens` (ECMWF
+            open-data ships all 51 members for a scalar we only average).
+            ARPEGE's peak in-flight raw rises ~1.0 → ~1.7 GB, above the 0.62 GB
+            the VPS's 15 GB floor was sized against.
+      - [ ] **Backfilling a new field cannot reach every run.** Measured
+            2026-07-27 while backfilling temp across the 48 h window: DWD keeps
+            only ~24 h, so `icon_eu` runs from the 24–48 h band returned +0.0 MB
+            with 93 HTTP 404s each, while `icon_global` 07-27 12Z fetched
+            339.6 MB fine. Those runs can never have temp. Harmless today
+            (nothing checks temp completeness), but any future completeness or
+            "needs attention" check must treat them as *unproducible* rather
+            than missing — that is exactly what option C was for, and it now
+            has evidence. AEMET is worse: latest-run-only.
 - [ ] **Line-of-sight calculation** (TASKS.md T44). Today's `wnw_strip` is a
       ground-projected line that treats every cloud level alike; at ~11° sun
       elevation low and high cloud cross the real sightline at very different
