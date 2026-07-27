@@ -189,14 +189,28 @@
     border-left: 5px solid transparent; border-right: 5px solid transparent;
     border-top: 7px solid #8b3a2f; z-index: 6;
   }
+  /* Identical to #eclipseLine in newest_runs.html and compare_runs.html - the
+     eclipse is one moment and should look the same wherever it is drawn. It
+     was a solid 1px #5a4a8b here and a dashed 2px #6a2fa0 there, so the same
+     instant read as two different things across the three tools.
+     Note this line marks the SELECTED target, which is the eclipse by default
+     but becomes the simulated time when toggled - hence .isSim below, which
+     keeps the geometry and drops the eclipse colour so the two are never
+     confused. */
   #eclipseLine {
-    position: absolute; top: 0; bottom: 0; width: 1px;
-    background: #5a4a8b; pointer-events: none; z-index: 4;
+    position: absolute; top: 0; bottom: 0; width: 2px;
+    margin-left: -1px; /* centre the 2px band on the computed pixel */
+    background: repeating-linear-gradient(to bottom, #6a2fa0 0 4px, transparent 4px 8px);
+    pointer-events: none; z-index: 4;
+  }
+  #eclipseLine.isSim {
+    background: repeating-linear-gradient(to bottom, #7a776c 0 4px, transparent 4px 8px);
   }
   #eclipseLine .tag {
-    position: absolute; top: -14px; left: 3px; font-size: 8.5px; color: #5a4a8b;
+    position: absolute; top: -14px; left: 3px; font-size: 8.5px; color: #6a2fa0;
     white-space: nowrap; text-transform: uppercase; letter-spacing: 0.04em;
   }
+  #eclipseLine.isSim .tag { color: #7a776c; }
   #eclipseLine.flip .tag { left: auto; right: 3px; }
   /* Wider + lower z-index than the cursor/eclipse lines on purpose: if the
      draggable cursor (1px, z-index 5) ever sits exactly on "now" (its own
@@ -763,6 +777,8 @@ function placeMarkers() {
   // otherwise overflow past the stack.
   const eclipsePx = timeToPx(TARGET_VALID_TIME, trackRect.width);
   eclipseLine.classList.toggle("flip", trackRect.width - eclipsePx < 90);
+  // Purple is the eclipse specifically, not "whatever target is selected".
+  eclipseLine.classList.toggle("isSim", currentTarget !== "eclipse");
 }
 
 function refreshTickCoverage() {
