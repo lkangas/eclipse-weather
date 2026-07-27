@@ -104,8 +104,15 @@ chunking:
 #
 # Note this is a PRODUCTION-only exclusion: the desktop keeps fetching AEMET,
 # so nothing stops being collected while the fix is proven.
-exclude_models:
-  - aemet_harmonie
+# (empty) - aemet_harmonie was excluded 2026-07-27 while its fetcher filed
+# bundles under the requested run_init instead of the one the bundle declares.
+# Lifted the same day: the fetcher now reads the init from the bundle's own
+# press_1.geojson "name": "fc<YYYYMMDDHH>+NNNh00m_1", and models.yaml's
+# serves_latest_run_only flag stops it acting at all unless the requested
+# run_init IS the latest available - so requested and actual now coincide by
+# construction, and every other cycle is skipped with no network call and no
+# directory created.
+exclude_models: []
 
 frames:
   # Rendered PNGs plus the manifests ARE the product; raw data is only a means

@@ -31,6 +31,11 @@ from src.pipeline.settings import load_settings
 # How often the coverage matrix is rebuilt, independent of the pass loop.
 COVERAGE_INTERVAL_S = 60.0
 
+# Gap between passes while there is still work to do. Small but not zero: it
+# keeps a pathological loop (a run that always reports work but never finishes)
+# from becoming a hot spin against upstream.
+BUSY_INTERVAL_S = float(os.environ.get("BUSY_INTERVAL_S", "15"))
+
 # How often the tool manifests are rebuilt, independent of the pass loop.
 MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "300"))
 
@@ -186,7 +191,7 @@ def main() -> None:
         log.warning("--apply given but reclaim.enabled is false in config - "
                     "this pass will fetch/render but delete nothing")
 
-    def one_pass() -> None:
+    def one_pass():
         now = datetime.now(UTC)
         orchestrator.ping_healthcheck("/start")
         try:
@@ -199,13 +204,16 @@ def main() -> None:
                 result = orchestrator.run_once(settings, apply=args.apply, now=now,
                                                models=args.models)
             print_pass(result, verbose=args.verbose)
+            did_work = any(o.chunks or o.steps_rendered for o in result.outcomes)
             orchestrator.write_status(result, settings)
             orchestrator.append_history(result)
             coverage.write(now)
             orchestrator.ping_healthcheck("" if not result.errors else "/fail")
+            return did_work
         except Exception:
             log.exception("pass failed")
             orchestrator.ping_healthcheck("/fail")
+        return False
 
     if not args.loop:
         coverage.write()
@@ -248,8 +256,17 @@ def main() -> None:
     log.info("production pipeline starting (mode=%s, interval=%ds)",
              "apply" if args.apply else "dry-run", args.interval)
     while True:
-        one_pass()
-        time.sleep(args.interval)
+        # Only wait out the full interval when there was nothing to do. The
+        # interval exists to avoid hammering upstream when idle - it was never
+        # meant to throttle catch-up. With max_chunks_per_pass capping a run at
+        # 4 windows, a 17-chunk run needs 4-6 passes; at a flat 300 s that is
+        # ~25 minutes per run, almost all of it spent asleep while 10 runs sat
+        # part-fetched. A pass now takes ~54 s, so when a pass did real work
+        # there is no reason to pause before the next one.
+        if one_pass():
+            time.sleep(BUSY_INTERVAL_S)
+        else:
+            time.sleep(args.interval)
 
 
 if __name__ == "__main__":
