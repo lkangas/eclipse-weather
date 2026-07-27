@@ -47,6 +47,19 @@ _NO_CACHE_NAMES = {
 class FrameRequestHandler(SimpleHTTPRequestHandler):
     protocol_version = "HTTP/1.1"  # enables keep-alive - no per-request TCP handshake
 
+    def guess_type(self, path):
+        """Force UTF-8 on HTML.
+
+        SimpleHTTPRequestHandler sends bare `text/html`, leaving the browser to
+        guess the encoding - and it guessed Latin-1, so every en dash and middle
+        dot in the dashboards rendered as mojibake. A <meta charset> in the page
+        fixes one page; this fixes every page served from here.
+        """
+        t = super().guess_type(path)
+        if t in ("text/html", "text/css") or str(t).startswith("text/html"):
+            return t + "; charset=utf-8"
+        return t
+
     def end_headers(self):
         if self.path.rsplit("/", 1)[-1].split("?", 1)[0] in _NO_CACHE_NAMES:
             self.send_header("Cache-Control", "no-cache")

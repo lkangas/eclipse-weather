@@ -1,65 +1,75 @@
-<title>eclipse-weather · pipeline</title>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pipeline status</title>
 <style>
-  :root {
-    --bg:#12141a; --panel:#1a1d26; --rule:#2c313d; --ink:#e6e9f0; --dim:#9aa3b5;
-    --faint:#6b7488; --ok:#3fb950; --warn:#d29922; --bad:#f85149; --accent:#58a6ff;
-    --pend:#2c313d;
+  /* Same palette as render_status.html - these are two views of one system and
+     should not look like two different products. */
+  :root { --ink:#232320; --dim:#7a776c; --faint:#a8a498; --rule:#d8d4c8;
+          --done:#2f6f3f; --pend:#c9c4b4; --warn:#8b3a2f; --accent:#8a5a20;
+          --panel:#fffdf8; }
+  body {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
+    background: #f6f4ef; color: var(--ink); margin: 0; padding: 14px 16px 24px;
+    font-size: 12px; box-sizing: border-box;
   }
-  body { margin:0; padding:14px; background:var(--bg); color:var(--ink);
-         font:13px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-  h1 { font-size:14px; margin:0 0 2px; letter-spacing:.06em; text-transform:uppercase; }
-  .sub { color:var(--faint); font-size:11px; margin-bottom:12px; }
-  .panel { background:var(--panel); border:1px solid var(--rule); border-radius:5px;
-           padding:10px 12px; margin-bottom:10px; }
-  /* Verdict is the whole point of the page: one line, readable on a phone,
-     answering "do I need to do something right now". */
-  .verdict { font-size:15px; font-weight:700; padding:12px 14px; border-radius:5px;
-             border-left:5px solid var(--faint); background:var(--panel); margin-bottom:10px; }
-  .verdict.ok   { border-left-color:var(--ok); }
-  .verdict.warn { border-left-color:var(--warn); color:#f0d48a; }
-  .verdict.bad  { border-left-color:var(--bad); color:#ffb3ad; }
-  .verdict .why { display:block; font-size:11px; font-weight:400; color:var(--dim); margin-top:4px; }
+  h1 { font-size: 13px; margin: 0 0 2px; letter-spacing: .06em; text-transform: uppercase; }
+  .sub { color: var(--faint); font-size: 10.5px; margin-bottom: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--rule); padding: 9px 11px;
+           margin-bottom: 10px; }
+  /* The verdict is the point of the page: one line, phone-readable, answering
+     "do I need to do something right now". */
+  .verdict { font-size: 14px; font-weight: 700; padding: 11px 13px; margin-bottom: 10px;
+             background: var(--panel); border: 1px solid var(--rule);
+             border-left: 5px solid var(--faint); }
+  .verdict.ok   { border-left-color: var(--done); }
+  .verdict.warn { border-left-color: var(--accent); }
+  .verdict.bad  { border-left-color: var(--warn); color: var(--warn); }
+  .verdict .why { display:block; font-size:10.5px; font-weight:400; color:var(--dim);
+                  margin-top:4px; }
   .live { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
-  .dot { width:8px; height:8px; border-radius:50%; background:var(--ok); flex:none;
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--done); flex:none;
          animation:pulse 1.8s ease-in-out infinite; }
   .dot.idle { background:var(--faint); animation:none; }
   @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.25} }
-  .phase { color:var(--accent); font-weight:700; text-transform:uppercase; font-size:11px;
+  .phase { color:var(--accent); font-weight:700; text-transform:uppercase; font-size:10.5px;
            letter-spacing:.05em; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px;
            margin-bottom:10px; }
-  .card { background:var(--panel); border:1px solid var(--rule); border-radius:5px; padding:9px 11px; }
-  .card b { display:block; font-size:20px; font-variant-numeric:tabular-nums; margin-bottom:1px; }
-  .card span { color:var(--faint); font-size:10px; text-transform:uppercase; letter-spacing:.05em; }
-  .card.bad b { color:var(--bad); } .card.warn b { color:var(--warn); }
-  .charts { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .card { background:var(--panel); border:1px solid var(--rule); padding:8px 10px; }
+  .card b { display:block; font-size:19px; font-variant-numeric:tabular-nums; margin-bottom:1px; }
+  .card span { color:var(--faint); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; }
+  .card.bad b { color:var(--warn); } .card.warn b { color:var(--accent); }
+  .charts { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:10px; }
   @media (max-width:760px){ .charts{grid-template-columns:1fr} }
-  figure { margin:0; } figcaption { font-size:10px; color:var(--dim); margin-bottom:4px;
-           text-transform:uppercase; letter-spacing:.05em; }
+  figure { margin:0; }
+  figcaption { font-size:9.5px; color:var(--dim); margin-bottom:3px; text-transform:uppercase;
+               letter-spacing:.05em; }
   figcaption i { font-style:normal; color:var(--faint); text-transform:none; letter-spacing:0; }
-  svg { width:100%; height:110px; display:block; background:#0e1015; border:1px solid var(--rule);
-        border-radius:4px; }
-  table { border-collapse:collapse; width:100%; font-size:11.5px; }
-  th,td { padding:3px 7px; text-align:left; border-bottom:1px solid var(--rule);
-          white-space:nowrap; font-variant-numeric:tabular-nums; }
-  th { color:var(--faint); font-size:9.5px; text-transform:uppercase; letter-spacing:.05em;
-       font-weight:600; }
+  svg { width:100%; height:110px; display:block; background:#fff; border:1px solid var(--rule); }
+  table { border-collapse:collapse; width:100%; background:#fff; }
+  th,td { border:1px solid var(--rule); padding:3px 7px; text-align:left; white-space:nowrap;
+          font-variant-numeric:tabular-nums; }
+  th { background:#f0e8d2; font-size:9.5px; text-transform:uppercase; letter-spacing:.05em; }
   td.n { text-align:right; }
   /* Coverage matrix: one cell per expected cycle slot, newest at the left. */
   .cov { display:flex; gap:2px; }
-  .cov i { width:13px; height:13px; border-radius:2px; background:var(--pend); flex:none; }
-  .cov i.ok{background:var(--ok)} .cov i.partial{background:var(--warn)}
-  .cov i.missing{background:var(--bad)} .cov i.pending{background:var(--pend);
-    border:1px dashed var(--faint); box-sizing:border-box}
+  .cov i { width:13px; height:13px; flex:none; background:var(--pend); }
+  .cov i.ok{background:var(--done)} .cov i.partial{background:var(--accent)}
+  .cov i.missing{background:var(--warn)}
+  .cov i.pending{background:transparent;border:1px dashed var(--faint);box-sizing:border-box}
   .cov i.no-render{background:transparent;border:1px solid var(--rule);box-sizing:border-box}
-  .legend { color:var(--faint); font-size:10px; margin-top:6px; }
-  .legend b { color:var(--dim); font-weight:400; }
-  .key { display:inline-block; width:9px; height:9px; border-radius:2px; vertical-align:-1px;
-         margin:0 3px 0 9px; }
+  .legend { color:var(--dim); font-size:10px; margin-top:6px; }
+  .legend b { color:var(--ink); }
+  .key { display:inline-block; width:9px; height:9px; vertical-align:-1px; margin:0 3px 0 9px;
+         border:1px solid var(--rule); box-sizing:border-box; }
   .muted { color:var(--faint); }
-  .err { color:var(--bad); }
-  #stale { display:none; }
+  .err { color:var(--warn); }
 </style>
+</head>
+<body>
 
 <h1>eclipse-weather · pipeline</h1>
 <div class="sub" id="sub">loading…</div>
@@ -82,9 +92,9 @@
     One cell per expected cycle slot in the last 48 h, newest at the left, judged on
     <b>rendered frames</b> (production deletes raw once rendered, so raw presence would report
     every processed run as missing).
-    <span class="key" style="background:var(--ok)"></span>ok
-    <span class="key" style="background:var(--warn)"></span>partial
-    <span class="key" style="background:var(--bad)"></span>missing
+    <span class="key" style="background:var(--done)"></span>ok
+    <span class="key" style="background:var(--accent)"></span>partial
+    <span class="key" style="background:var(--warn)"></span>missing
     <span class="key" style="border:1px dashed var(--faint)"></span>not due yet
     <span class="key" style="border:1px solid var(--rule)"></span>no renderer
   </div>
@@ -245,9 +255,9 @@ function chartDisk(hist, status) {
   const t0=new Date(hist[0].at).getTime(), span=Math.max(1,new Date(hist[hist.length-1].at).getTime()-t0);
   const x=h=>((new Date(h.at).getTime()-t0)/span)*(W-2*P)+P;
   const y=v=>H-P-((v-lo)/(hi-lo))*(H-2*P);
-  let out = `<path d="${hist.map((h,i)=>(i?"L":"M")+x(h).toFixed(1)+" "+y(h.free_gb_after).toFixed(1)).join(" ")}" fill="none" stroke="#58a6ff" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  let out = `<path d="${hist.map((h,i)=>(i?"L":"M")+x(h).toFixed(1)+" "+y(h.free_gb_after).toFixed(1)).join(" ")}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
   if (floor!=null && floor>=lo && floor<=hi)
-    out += `<line x1="${P}" y1="${y(floor)}" x2="${W-P}" y2="${y(floor)}" stroke="#f85149" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+    out += `<line x1="${P}" y1="${y(floor)}" x2="${W-P}" y2="${y(floor)}" stroke="var(--warn)" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
   svg.innerHTML = out;
   cap.textContent = `${vals[vals.length-1].toFixed(1)} GB · range ${lo.toFixed(0)}–${hi.toFixed(0)}${floor!=null?` · floor ${floor}`:""}`;
 }
@@ -266,9 +276,9 @@ function chartDur(hist) {
   const y=v=>H-P-((v-lo)/(hi-lo))*(H-2*P);
   let out = rows.map(r=>{
     const over = r.duration_s > PASS_INTERVAL_S;
-    return `<rect x="${(x(r)-1.5).toFixed(1)}" y="${y(r.duration_s).toFixed(1)}" width="3" height="${(H-P-y(r.duration_s)).toFixed(1)}" fill="${over?"#d29922":"#3fb950"}"/>`;
+    return `<rect x="${(x(r)-1.5).toFixed(1)}" y="${y(r.duration_s).toFixed(1)}" width="3" height="${(H-P-y(r.duration_s)).toFixed(1)}" fill="${over?"var(--accent)":"var(--done)"}"/>`;
   }).join("");
-  out += `<line x1="${P}" y1="${y(PASS_INTERVAL_S)}" x2="${W-P}" y2="${y(PASS_INTERVAL_S)}" stroke="#f85149" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
+  out += `<line x1="${P}" y1="${y(PASS_INTERVAL_S)}" x2="${W-P}" y2="${y(PASS_INTERVAL_S)}" stroke="var(--warn)" stroke-width="1" stroke-dasharray="4 3" vector-effect="non-scaling-stroke"/>`;
   svg.innerHTML=out;
   cap.textContent = `${vals[vals.length-1].toFixed(0)}s · interval ${PASS_INTERVAL_S}s`;
 }
@@ -307,3 +317,5 @@ function attention(status) {
 poll();
 setInterval(poll, 10000);
 </script>
+</body>
+</html>
