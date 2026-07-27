@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 3 — eclipse valid-time, all models, run-init slider (real data)</title>
 <style>
+  /* Tool ribbon - the three tools are one product and were reachable only by
+     knowing each other's URL. Sits above everything, styled as navigation
+     rather than as another control so it does not compete with the row of
+     actual controls below it. */
+  .toolbar { display:flex; gap:0; align-items:stretch; margin: 0 0 6px;
+             border-bottom:1px solid #d8d4c8; }
+  .toolbar a { font: 11px/1 ui-monospace, "SF Mono", Consolas, monospace;
+               text-decoration:none; color:#7a776c; padding:7px 13px;
+               border:1px solid transparent; border-bottom:none;
+               letter-spacing:.03em; }
+  .toolbar a:hover { color:#232320; background:#efece3; }
+  .toolbar a.here { color:#232320; font-weight:700; background:#fffdf8;
+                    border-color:#d8d4c8; border-bottom:1px solid #fffdf8;
+                    margin-bottom:-1px; }
   html, body { height: 100%; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
@@ -283,6 +297,12 @@
 </style>
 </head>
 <body>
+
+<div class="toolbar">
+  <a href="index.html">Newest runs</a>
+  <a href="tool2_index.html">Compare runs</a>
+  <a href="tool3_index.html" class="here">At eclipse</a>
+</div>
 
 <div class="controls">
   <div class="quantityGroup" id="quantityGroup">
@@ -576,14 +596,19 @@ function setTarget(key) {
 function init() {
   const allRunInits = MODELS.flatMap(m => m.runs.map(r => r.runInit.getTime()));
   AXIS_START = new Date(Math.min(...allRunInits));
-  // Extend a bit past a target marker so it's visible on the shared axis -
-  // but from the NEAREST target only, and once, so the axis never depends on
-  // which target is selected (toggling would otherwise reflow every tick).
-  // Stretching to the farthest one (the real eclipse, weeks past every
-  // archived run) would squash the whole run-init history into a few pixels;
-  // placeMarkers() simply hides a marker that lands off the axis instead.
-  const nearestTargetMs = Math.min(...TARGETS.map(t => t.validTime.getTime()));
-  AXIS_END = new Date(Math.max(nearestTargetMs + 6 * 3600 * 1000, ...allRunInits));
+  // Reach the FARTHEST target - the eclipse itself - so its marker is always
+  // on the axis. Previously this stopped at the nearest target, which kept the
+  // run history readable but meant the one date the tool exists for was simply
+  // off-screen and placeMarkers() hid it.
+  //
+  // The cost is real: the eclipse is weeks past every archived run, so at full
+  // extent the run-init history compresses to the left edge. That is what the
+  // extent slider is for - it sets the visible right edge, so dragging it in
+  // zooms back onto the runs. Taking the farthest target rather than the
+  // SELECTED one also keeps the axis stable when toggling eclipse/sim, which
+  // would otherwise reflow every tick underneath you.
+  const farthestTargetMs = Math.max(...TARGETS.map(t => t.validTime.getTime()));
+  AXIS_END = new Date(Math.max(farthestTargetMs + 12 * 3600 * 1000, ...allRunInits));
   const fullSpanMs = AXIS_END - AXIS_START;
   axisRightMs = fullSpanMs;
   extentInput.min = 0;

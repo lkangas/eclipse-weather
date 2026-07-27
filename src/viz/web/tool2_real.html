@@ -5,6 +5,20 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Tool 2 — one model, stacked historical runs (real data)</title>
 <style>
+  /* Tool ribbon - the three tools are one product and were reachable only by
+     knowing each other's URL. Sits above everything, styled as navigation
+     rather than as another control so it does not compete with the row of
+     actual controls below it. */
+  .toolbar { display:flex; gap:0; align-items:stretch; margin: 0 0 6px;
+             border-bottom:1px solid #d8d4c8; }
+  .toolbar a { font: 11px/1 ui-monospace, "SF Mono", Consolas, monospace;
+               text-decoration:none; color:#7a776c; padding:7px 13px;
+               border:1px solid transparent; border-bottom:none;
+               letter-spacing:.03em; }
+  .toolbar a:hover { color:#232320; background:#efece3; }
+  .toolbar a.here { color:#232320; font-weight:700; background:#fffdf8;
+                    border-color:#d8d4c8; border-bottom:1px solid #fffdf8;
+                    margin-bottom:-1px; }
   html, body { height: 100%; }
   body {
     font-family: ui-monospace, "SF Mono", "Cascadia Code", Consolas, "Liberation Mono", monospace;
@@ -304,6 +318,12 @@
 </style>
 </head>
 <body>
+
+<div class="toolbar">
+  <a href="index.html">Newest runs</a>
+  <a href="tool2_index.html" class="here">Compare runs</a>
+  <a href="tool3_index.html">At eclipse</a>
+</div>
 
 <div class="controls">
   <div>

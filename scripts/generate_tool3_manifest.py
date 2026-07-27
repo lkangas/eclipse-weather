@@ -286,7 +286,13 @@ def main() -> None:
         # The simulated target is the useful default TODAY - the real eclipse
         # is still beyond every model's horizon, so defaulting to it would
         # show an empty tool. Flip to "eclipse" once runs actually reach it.
-        "default_target": "sim",
+        # The eclipse is the point of the tool, so it is what opens - even
+        # while no archived run reaches it yet and every model reads "not
+        # covering". That absence IS the answer to "who covers the eclipse
+        # yet", and opening on the simulated target instead made the tool look
+        # populated while showing a date nobody cares about. "sim" stays
+        # available as a toggle for exercising the UI against real coverage.
+        "default_target": "eclipse",
         "models": manifest_models,
     }
     manifest_path = OUTPUT_DIR / "tool3_manifest.json"
