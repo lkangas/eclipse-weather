@@ -71,6 +71,10 @@ MODELS = [
     ("aifs_ens", "AIFS ENS"),
     ("icon_eu", "ICON EU"),
     ("icon_global", "ICON Global"),
+    # AEMET last: it is the coarsest source here (colour-ramp inversion of a
+    # rendered map, 9 bins of ~10 points, total_only), so it should not be the
+    # first thing a reader lands on.
+    ("aemet_harmonie", "AEMET HARMONIE"),
 ]
 
 # render_frame()'s own output_path convention:

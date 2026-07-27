@@ -25,12 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from src.config import DATA_RAW
-from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
+from src.viz.frame_renderer import _MODEL_READERS, OUTPUT_DIR, supported_fields
 
-MODELS = [
-    "gfs", "gefs_extended", "arome_france", "arpege_europe", "ecmwf_hres",
-    "ecmwf_ens", "aifs_single", "aifs_ens", "icon_eu", "icon_global",
-]
+# Derived from the reader registry rather than listed here: a second hardcoded
+# model table is exactly what CLAUDE.md's single-source-of-truth rule forbids,
+# and it had already rotted - aemet_harmonie gained a reader and rendered 1386
+# frames while this list, and therefore the desktop dashboard, never saw it.
+MODELS = sorted(_MODEL_READERS)
 
 INDEX_PATH = OUTPUT_DIR / "rendered_index.json"
 

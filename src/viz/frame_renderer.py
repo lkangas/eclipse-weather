@@ -23,12 +23,20 @@ src/extract/*.py, same reuse rationale as cloud_field_comparison.py: no
 per-format GRIB parsing is duplicated here.
 
 Covers gfs, arome_france, gefs_extended, arpege_europe, ecmwf_hres,
-ecmwf_ens, aifs_single, aifs_ens, icon_eu, icon_global - every gridded model
-in models.yaml except aemet_harmonie (rendered color-ramp GeoTIFF, needs its
-own color-ramp-inversion path) and the Open-Meteo point-API models
-(ukmo_global, gem_global, jma_gsm, cma_grapes_global - no spatial grid to
-render). See _MODEL_READERS below; extend it the same way
-cloud_field_comparison.py's own reader dict was built.
+ecmwf_ens, aifs_single, aifs_ens, icon_eu, icon_global and aemet_harmonie -
+every model in models.yaml with a spatial grid. Only the Open-Meteo point-API
+models are outside it (ukmo_global, gem_global, jma_gsm, cma_grapes_global -
+no grid to render).
+
+aemet_harmonie is the odd one: its archive is AEMET's own rendered, colour-
+mapped web-map layer rather than numeric output, so its reader inverts the
+ESCALA legend instead of reading a field. That makes it materially coarser
+than everything else here (9 bins of ~10 percentage points, total_only) - see
+_aemet_harmonie_field and src/extract/aemet_extractor.py's provenance warning
+before treating its values as comparable.
+
+See _MODEL_READERS below; extend it the same way cloud_field_comparison.py's
+own reader dict was built.
 """
 
 from __future__ import annotations
