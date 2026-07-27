@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Surface temperature panel &mdash; design review</title>
+<title>2 m temperature panel &mdash; one per model</title>
 <style>
   :root {
     color-scheme: light dark;
@@ -13,9 +13,6 @@
     --border: #e5e7eb;
     --cell-bg: #f9fafb;
     --accent: #b2182b;
-    --warn-bg: #fff4e5;
-    --warn-fg: #7a3d00;
-    --warn-border: #f0c68a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -25,9 +22,6 @@
       --border: #2a2d35;
       --cell-bg: #1c1f26;
       --accent: #f4a582;
-      --warn-bg: #2e2416;
-      --warn-fg: #f0c68a;
-      --warn-border: #5a4520;
     }
   }
   * { box-sizing: border-box; }
@@ -36,249 +30,136 @@
     background: var(--bg); color: var(--fg);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
-  h1 { font-size: 1.2rem; margin: 0 0 0.25rem; }
-  h2 { font-size: 1.0rem; margin: 2rem 0 0.2rem; }
-  .sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 0.9rem; max-width: 88ch; line-height: 1.5; }
-  .blurb { color: var(--muted); font-size: 0.78rem; margin: 0 0 0.7rem; max-width: 88ch; line-height: 1.5; }
-  .warn {
-    background: var(--warn-bg); color: var(--warn-fg); border: 1px solid var(--warn-border);
-    border-radius: 6px; padding: 0.6rem 0.8rem; font-size: 0.8rem; line-height: 1.5;
-    max-width: 88ch; margin-bottom: 1rem;
+  h1 { font-size: 1.2rem; margin: 0 0 0.35rem; }
+  .sub { color: var(--muted); font-size: 0.82rem; margin-bottom: 1rem; max-width: 92ch; line-height: 1.55; }
+  .sub code { font-size: 0.95em; }
+  .validbar {
+    display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap;
+    border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    border-radius: 6px; background: var(--cell-bg);
+    padding: 0.7rem 0.9rem; margin-bottom: 1rem;
   }
-  .stats { display: flex; gap: 0.6rem; flex-wrap: wrap; margin-bottom: 1rem; }
-  .stat {
-    border: 1px solid var(--border); border-radius: 6px; padding: 0.45rem 0.65rem;
-    font-size: 0.72rem; color: var(--muted); background: var(--cell-bg); line-height: 1.4;
+  .validbar .big { font-size: 1.35rem; font-weight: 650; letter-spacing: -0.01em; }
+  .validbar .lbl { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .validbar .meta { color: var(--muted); font-size: 0.8rem; }
+  .controls { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.9rem; }
+  .controls label { cursor: pointer; }
+  .grid {
+    display: grid; gap: 0.9rem;
+    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
   }
-  .stat b { color: var(--fg); display: block; font-size: 0.8rem; margin-bottom: 0.1rem; }
-  .controls { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.8rem; font-size: 0.8rem; position: sticky; top: 0; background: var(--bg); padding: 0.4rem 0; z-index: 5; }
-  .controls label { color: var(--muted); cursor: pointer; }
-  table { border-collapse: collapse; width: 100%; table-layout: fixed; margin-bottom: 0.5rem; }
-  th, td { border: 1px solid var(--border); padding: 0.35rem; vertical-align: top; }
-  thead th {
-    background: var(--bg); text-align: center;
-    font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.03em;
-    color: var(--muted); overflow-wrap: anywhere;
+  body.wide .grid { grid-template-columns: repeat(auto-fill, minmax(560px, 1fr)); }
+  .panel {
+    border: 1px solid var(--border); border-radius: 6px;
+    background: var(--cell-bg); overflow: hidden;
   }
-  tbody th {
-    text-align: left; font-size: 0.8rem; background: var(--bg);
-    position: sticky; left: 0; z-index: 1;
+  .panel img { width: 100%; height: auto; display: block; }
+  .panel .cap { padding: 0.5rem 0.6rem 0.6rem; }
+  .panel .name { font-size: 0.9rem; font-weight: 600; }
+  .panel .tags { margin-top: 0.25rem; display: flex; gap: 0.3rem; flex-wrap: wrap; }
+  .tag {
+    display: inline-block; border: 1px solid var(--border); border-radius: 3px;
+    padding: 0.05rem 0.35rem; font-size: 0.65rem; color: var(--muted);
+    background: var(--bg); white-space: nowrap;
   }
-  tbody th .note { display: block; color: var(--muted); font-weight: 400; font-size: 0.7rem; margin-top: 0.25rem; line-height: 1.4; }
-  tbody tr.pick th { border-left: 3px solid var(--accent); }
-  tbody tr.bad th { border-left: 3px solid #999; }
-  tbody tr.pick th .tag, tbody tr.bad th .tag {
-    display: inline-block; border-radius: 3px; padding: 0 0.3rem; font-size: 0.6rem;
-    letter-spacing: 0.04em; margin-left: 0.3rem; vertical-align: middle;
+  .tag.ens { border-color: var(--accent); color: var(--accent); }
+  .panel .when { margin-top: 0.35rem; font-size: 0.72rem; color: var(--muted); line-height: 1.45; }
+  .panel.missing { border-style: dashed; }
+  .panel.missing .box {
+    padding: 3.5rem 1rem; text-align: center; color: var(--muted);
+    font-size: 0.78rem; line-height: 1.5;
   }
-  tbody tr.pick th .tag { background: var(--accent); color: #fff; }
-  tbody tr.pick th .tag.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
-  tbody tr.bad th .tag { background: transparent; color: var(--muted); border: 1px solid var(--muted); }
-  td.cell { background: var(--cell-bg); text-align: center; }
-  td.cell img { width: 100%; height: auto; border-radius: 3px; display: block; }
-  td.empty { background: var(--cell-bg); color: var(--muted); font-size: 0.7rem; text-align: center; padding: 2rem 0.3rem; }
-  .cvd { display: none; }
-  body.show-cvd .cvd, body.show-cvd th.cvd { display: table-cell; }
+  .excluded { margin-top: 1.6rem; color: var(--muted); font-size: 0.78rem; max-width: 92ch; line-height: 1.55; }
+  .excluded h2 { font-size: 0.95rem; color: var(--fg); margin: 0 0 0.35rem; }
 </style>
 </head>
 <body>
-<h1>Surface temperature panel &mdash; design review</h1>
+<h1>2 m temperature panel &mdash; the settled design, one panel per model</h1>
 <div class="sub" id="sub">loading&hellip;</div>
 
-<div class="warn" id="warn"></div>
-
-<div class="stats" id="stats"></div>
+<div class="validbar" id="validbar"></div>
 
 <div class="controls">
-  <label><input type="checkbox" id="cvd"> show deuteranopia simulation columns</label>
-  <label><input type="checkbox" id="big" checked> large images</label>
-  <label><input type="checkbox" id="picks"> recommended rows only</label>
-  <span style="color:var(--muted);font-size:0.75rem">
-    Recommendation: <b>A6</b> absolute (A14 if colourblind-safety outranks convention) &middot;
-    <b>B3 + B9</b> anomaly &middot; <b>E4</b> baseline &middot; <b>C3</b> totality overlay &middot;
-    <b>F6</b> roads (F10 if the secondary tier must stay).
-  </span>
+  <label><input type="checkbox" id="wide"> larger panels</label>
 </div>
 
-<div id="sections"></div>
+<div class="grid" id="grid"></div>
+
+<div class="excluded">
+  <h2>Not shown, and why</h2>
+  <p>
+    <b>arome_france</b> and <b>arpege_europe</b> are excluded on purpose. Their SP2
+    <code>t</code> is <i>skin</i> temperature (<code>height: skin</code> in
+    <code>config/models.yaml</code>, corrected T45), not 2&nbsp;m air temperature &mdash;
+    roughly double the diurnal amplitude, so it cannot honestly share this fixed 2&nbsp;m
+    scale. The Open-Meteo point models (ukmo_global, gem_global, jma_gsm,
+    cma_grapes_global) and aemet_harmonie have no gridded reader in this project and are
+    out of scope for a map.
+  </p>
+</div>
 
 <script>
-// The rows this experiment recommends / rejects, so the page stays
-// self-explanatory when reopened later without the accompanying write-up.
-// b03 + b09 are BOTH recommended: the final anomaly panel is b03's banding and
-// band edges WITH b09's +-0.5 C deadband, which is what makes an eclipse-blind
-// model render as an honestly empty map instead of a pastel noise field.
-// Section (f) follows the same convention: F6 is the road treatment this
-// experiment recommends (major highways only, white core in a dark casing -
-// the INVERSE polarity of C3's dark core in a white halo, which is what keeps
-// the two line families apart), F10 the runner-up if the secondary tier has to
-// stay, and F0 is today's basemap default, i.e. the failure being fixed.
-const PICKS = new Set(["a06_rdylbu_edges", "b03_rdbu_edges", "b09_deadband",
-                       "c3_black_halo", "e4_xm3", "f6_white_cased_major"]);
-const ALTS  = new Set(["a14_rdbu", "b10_rdbu_clabel", "e2_dd",
-                       "f10_cased_demoted_secondary", "f5_white_cased"]);
-const BAD   = new Set(["a01_turbo", "a12_autoscale", "a13_gamma", "b01_bwr",
-                       "b12_sympower", "b13_twoslope", "e1_naive",
-                       "f0_baseline", "f2_white_plain", "f3_black_plain",
-                       "f7_tiered"]);
-
 async function main() {
   const cacheBust = Date.now();
   const data = await (await fetch(`temp_panel_grid.json?cb=${cacheBust}`)).json();
+  const S = data.scale;
 
   document.getElementById("sub").innerHTML =
-    `Generated ${data.generated_at} from the ${data.run_init} runs. ` +
-    `Real 2&nbsp;m temperature, three models at one valid time: <b>GFS</b> 0.25&deg; (TMP at ` +
-    `"2 m above ground", herbie idx byte-range), <b>ICON-EU</b> 0.0625&deg; (T_2M, ` +
-    `opendata.dwd.de .grib2.bz2) and <b>ECMWF HRES</b> 0.25&deg; (param <code>2t</code> on the ` +
-    `request side &mdash; cfgrib then names the variable <code>t2m</code>; models.yaml currently ` +
-    `records only the latter). Kelvin converted to Celsius. ` +
-    `AROME/ARPEGE's SP2 <code>t</code> is deliberately unused &mdash; it is <i>skin</i> ` +
-    `temperature, not 2&nbsp;m, with roughly double the diurnal amplitude. ` +
-    `Every panel uses <code>src/viz/frame_renderer.py</code>'s own ` +
-    `<code>_figure_layout()</code>, 1.3 aspect, basemap and totality arrays, so it is ` +
-    `pixel-comparable to a production frame; frame_renderer.py itself is not modified. ` +
-    `Rendered at dpi=140 except sections (d) and (f), which are the real dpi=100 &mdash; ` +
-    `for (f), road legibility, that is the whole question. ` +
-    `Deuteranopia columns are a Brettel/Vi&eacute;not linear-RGB approximation, not a ` +
-    `clinical model. Click any image for full size.`;
+    `Absolute 2&nbsp;m temperature in Celsius, real model output, ` +
+    `<b>every panel on the identical fixed scale</b>: <code>${S.cmap}</code>, ` +
+    `${S.vmin}&ndash;${S.vmax}&nbsp;&deg;C in ${S.band_c}&nbsp;&deg;C bands, both ends ` +
+    `extended, plain linear normalisation. Thin band edges on every boundary, heavier ` +
+    `black isotherms at ${S.emphasis.join("/")}&nbsp;&deg;C as reading anchors, ` +
+    `production road styling, plain black totality band and centreline. Rendered through ` +
+    `<code>src/viz/frame_renderer.py</code>'s own <code>_figure_layout()</code> at the ` +
+    `production <b>dpi=${S.dpi}</b>, so each panel is pixel-comparable to a real frame; ` +
+    `frame_renderer.py itself is not modified. Models are selected from ` +
+    `<code>config/models.yaml</code> by <code>surface_temp.height == 2m</code>, not from a ` +
+    `hardcoded list. Click any panel for full size. Generated ${data.generated_at}.`;
 
-  document.getElementById("warn").innerHTML =
-    `<b>What is real and what is not.</b> Every absolute panel, and every panel in the ` +
-    `left-hand column of section (b0), is 100% real model output. <b>The eclipse cooling is ` +
-    `SYNTHETIC.</b> No real eclipse forecast exists yet &mdash; 2026-08-12 is far beyond every ` +
-    `model's current range &mdash; so any panel labelled "SYNTHETIC" has a fabricated umbral ` +
-    `dip added: a Gaussian in distance from the <i>real</i> totality centreline ` +
-    `(config/totality_path.json), deepened toward the west, masked to land by the model's own ` +
-    `15Z&rarr;21Z diurnal amplitude, scaled to the documented IFS&nbsp;Cy50r1 local 2&nbsp;m ` +
-    `cooling of up to 7&nbsp;&deg;C (&minus;8.3&nbsp;&deg;C peak once the broad penumbral term ` +
-    `is added). It is a plausible <i>shape</i> at a documented <i>magnitude</i> &mdash; nothing ` +
-    `more, and it must not be read as a forecast.`;
+  const rendered = data.panels.filter((p) => p.png);
+  const ens = rendered.filter((p) => p.ensemble_mean);
+  document.getElementById("validbar").innerHTML =
+    `<div><div class="lbl">valid time &mdash; identical in every panel</div>` +
+    `<div class="big">${data.valid}</div></div>` +
+    `<div class="meta">from the ${data.run_init} run &middot; step +${data.step}&nbsp;h<br>` +
+    `${rendered.length} of ${data.panels.length} models rendered ` +
+    `(${rendered.length - ens.length} single-member, ${ens.length} ensemble mean)</div>`;
 
-  const statsEl = document.getElementById("stats");
-  const S = data.stats;
-  const card = (title, body) => {
-    const d = document.createElement("div");
-    d.className = "stat";
-    d.innerHTML = `<b>${title}</b>${body}`;
-    statsEl.appendChild(d);
-  };
-  card("Real 18Z range over Iberia",
-       `GFS ${S.gfs18.min} .. ${S.gfs18.max} &deg;C<br>ICON-EU ${S.icon18.min} .. ${S.icon18.max} &deg;C<br>` +
-       `HRES ${S.hres18.min} .. ${S.hres18.max} &deg;C`);
-  card("Same run at 03Z (cold end)",
-       `GFS ${S.gfs03.min} .. ${S.gfs03.max} &deg;C<br>i.e. one fixed scale must span ` +
-       `${S.gfs03.min}&ndash;${S.gfs18.max} &deg;C`);
-  for (const [key, name] of [["e1_naive", "E1 naive temporal baseline"],
-                             ["e2_double_diff", "E2 double difference"],
-                             ["e3_gfs_minus_icon", "E3 GFS &minus; ICON-EU"],
-                             ["e4_hres_minus_blind", "E4 HRES &minus; blind mean"]]) {
-    const s = S[key];
-    card(name + " &mdash; eclipse-free background",
-         `mean |&Delta;T| over land <b>${s.land_mean_abs}</b> &deg;C<br>` +
-         `99th pct |&Delta;T| <b>${s.land_p99_abs}</b> &deg;C<br>range ${s.min} .. ${s.max} &deg;C`);
-  }
-  card("Synthetic eclipse dip (for scale)",
-       `peak ${S.synthetic_eclipse.min} &deg;C<br>mean ${S.synthetic_eclipse.land_mean_where_deep} &deg;C ` +
-       `where deeper than &minus;3 &deg;C`);
+  const grid = document.getElementById("grid");
+  for (const p of data.panels) {
+    const el = document.createElement("div");
+    el.className = "panel" + (p.png ? "" : " missing");
 
-  const root = document.getElementById("sections");
-  for (const section of data.sections) {
-    const h2 = document.createElement("h2");
-    h2.textContent = section.title;
-    root.appendChild(h2);
-    const blurb = document.createElement("div");
-    blurb.className = "blurb";
-    blurb.textContent = section.blurb;
-    root.appendChild(blurb);
+    const tags = [];
+    if (p.provider) tags.push(`<span class="tag">${p.provider}</span>`);
+    if (p.resolution) tags.push(`<span class="tag">${p.resolution}</span>`);
+    tags.push(p.ensemble_mean
+      ? `<span class="tag ens">${p.member_kind}</span>`
+      : `<span class="tag">${p.member_kind}</span>`);
+    if (p.param) tags.push(`<span class="tag">${p.param}</span>`);
 
-    const wrap = document.createElement("div");
-    wrap.style.overflowX = "auto";
-    const table = document.createElement("table");
+    const when = p.png
+      ? `run ${data.run_init_short} &rarr; valid <b>${data.valid_short}</b> (+${data.step}&nbsp;h) ` +
+        `&middot; ${p.min_c}&ndash;${p.max_c}&nbsp;&deg;C over Iberia (mean ${p.mean_c}) ` +
+        `&middot; ${p.shape[0]}&times;${p.shape[1]} grid`
+      : `<b>not rendered</b> &mdash; ${p.error}`;
 
-    const colgroup = document.createElement("colgroup");
-    const labelCol = document.createElement("col");
-    labelCol.style.width = section.columns.length > 2 ? "15%" : "22%";
-    colgroup.appendChild(labelCol);
-    const rest = 100 - parseFloat(labelCol.style.width);
-    for (const c of section.columns) {
-      const col = document.createElement("col");
-      col.style.width = (rest / section.columns.length).toFixed(3) + "%";
-      if (c.key.endsWith("__deut")) col.className = "cvd";
-      colgroup.appendChild(col);
-    }
-    table.appendChild(colgroup);
+    const body = p.png
+      ? `<a href="${p.png}?cb=${cacheBust}" target="_blank">` +
+        `<img src="${p.png}?cb=${cacheBust}" loading="lazy" alt="${p.id} 2 m temperature"></a>`
+      : `<div class="box">no panel &mdash; nothing substituted, nothing faked</div>`;
 
-    const thead = document.createElement("thead");
-    const headRow = document.createElement("tr");
-    headRow.appendChild(document.createElement("th"));
-    for (const c of section.columns) {
-      const th = document.createElement("th");
-      th.innerHTML = c.label;
-      if (c.key.endsWith("__deut")) th.className = "cvd";
-      headRow.appendChild(th);
-    }
-    thead.appendChild(headRow);
-    table.appendChild(thead);
-
-    const tbody = document.createElement("tbody");
-    for (const cand of section.candidates) {
-      const row = document.createElement("tr");
-      row.dataset.id = cand.id;
-      if (PICKS.has(cand.id) || ALTS.has(cand.id)) row.className = "pick";
-      else if (BAD.has(cand.id)) row.className = "bad";
-      const rowHead = document.createElement("th");
-      rowHead.innerHTML = cand.label +
-        (PICKS.has(cand.id) ? '<span class="tag">RECOMMENDED</span>' : "") +
-        (ALTS.has(cand.id) ? '<span class="tag alt">RUNNER-UP</span>' : "") +
-        (BAD.has(cand.id) ? '<span class="tag">REJECTED</span>' : "") +
-        `<span class="note">${cand.note}</span>`;
-      row.appendChild(rowHead);
-      for (const c of section.columns) {
-        const td = document.createElement("td");
-        const src = cand.cells[c.key];
-        const isCvd = c.key.endsWith("__deut");
-        if (src) {
-          td.className = "cell" + (isCvd ? " cvd" : "");
-          const a = document.createElement("a");
-          a.href = `${src}?cb=${cacheBust}`;
-          a.target = "_blank";
-          const img = document.createElement("img");
-          img.src = `${src}?cb=${cacheBust}`;
-          img.loading = "lazy";
-          img.alt = `${cand.label} ${c.label}`;
-          a.appendChild(img);
-          td.appendChild(a);
-        } else {
-          td.className = "empty" + (isCvd ? " cvd" : "");
-          td.textContent = "—";
-        }
-        row.appendChild(td);
-      }
-      tbody.appendChild(row);
-    }
-    table.appendChild(tbody);
-    wrap.appendChild(table);
-    root.appendChild(wrap);
+    el.innerHTML = body +
+      `<div class="cap"><div class="name">${p.id}</div>` +
+      `<div class="tags">${p.png ? tags.join("") : `<span class="tag">${p.provider}</span>`}</div>` +
+      `<div class="when">${when}</div></div>`;
+    grid.appendChild(el);
   }
 
-  const cvd = document.getElementById("cvd");
-  cvd.addEventListener("change", () =>
-    document.body.classList.toggle("show-cvd", cvd.checked));
-
-  const big = document.getElementById("big");
-  const applySize = () => document.querySelectorAll("td.cell img")
-    .forEach((i) => (i.style.maxWidth = big.checked ? "none" : "300px"));
-  big.addEventListener("change", applySize);
-  applySize();
-
-  const picks = document.getElementById("picks");
-  picks.addEventListener("change", () => {
-    document.querySelectorAll("tbody tr").forEach((tr) => {
-      tr.style.display = (!picks.checked || PICKS.has(tr.dataset.id) || ALTS.has(tr.dataset.id))
-        ? "" : "none";
-    });
-  });
+  const wide = document.getElementById("wide");
+  wide.addEventListener("change", () =>
+    document.body.classList.toggle("wide", wide.checked));
 }
 
 main();
