@@ -192,11 +192,28 @@ function liveNow(live) {
     ? `<div class="meta">last finished <b>${last.model}</b> ${String(last.run_init).slice(0, 13)}Z — ` +
       `${last.steps} steps, ${last.steps_with_data} with data, ${last.seconds}s, ${fmtAgo(last.finished_at)}</div>`
     : "";
+  // "Idle" is only true with an EMPTY queue. A null current with runs queued
+  // means it is between runs (regenerating manifests), which is work, not idle.
   if (!live.current) {
-    el.className = "now idle";
-    el.innerHTML = '<span class="dot"></span><span class="what">Idle</span> — ' +
-      (live.pending_runs ? `${live.pending_runs} run(s) queued, next sweep shortly.`
-                         : "nothing left to render; waiting for new runs.") + lastTxt;
+    const busy = live.pending_runs > 0;
+    el.className = "now" + (busy ? "" : " idle");
+    el.innerHTML = '<span class="dot"></span>' + (busy
+      ? `<span class="what">Between runs</span> <span class="meta">— ${live.pending_runs} queued, starting the next shortly.</span>`
+      : '<span class="what">Idle</span> — nothing left to render; waiting for new runs.') + lastTxt;
+    return;
+  }
+  if (live.current.phase === "scanning") {
+    const secs = Math.round((Date.now() - new Date(live.current.started_at).getTime()) / 1000);
+    el.className = "now";
+    el.innerHTML = '<span class="dot"></span><span class="what">Scanning the archive</span> ' +
+      `<span class="meta">— ${secs}s, working out what still needs rendering</span>` + lastTxt;
+    return;
+  }
+  if (live.current.phase === "manifests") {
+    const secs = Math.round((Date.now() - new Date(live.current.started_at).getTime()) / 1000);
+    el.className = "now";
+    el.innerHTML = '<span class="dot"></span><span class="what">Publishing manifests</span> ' +
+      `<span class="meta">— ${secs}s, ${live.pending_runs || 0} run(s) still queued</span>` + lastTxt;
     return;
   }
   const mins = (Date.now() - new Date(live.current.started_at).getTime()) / 60000;

@@ -201,13 +201,17 @@ def render_worker_main() -> None:
     log.info("render worker started, %d renderable model(s)", len(renderable))
 
     while True:
+        # last_completed/pending_runs are carried forward by _publish_live when
+        # passed None, so the page keeps showing them while the scan runs.
+        _publish_live({"phase": "scanning",
+                       "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")},
+                      None)
         pending = _runs_needing_render(renderable)
         if not pending:
             _publish_live(None, None, pending=0)
             time.sleep(RENDER_IDLE_SLEEP_SECONDS)
             continue
         rendered_any = False
-        _publish_live(None, None, pending=len(pending))
         for model_id, run_init, raw_count in pending:
             started = datetime.now(UTC)
             _publish_live(
@@ -229,14 +233,21 @@ def render_worker_main() -> None:
             n_with_data = sum(1 for fields in result.values() if any(fields.values()))
             _record_render(model_id, run_init, raw_count)
             rendered_any = True
-            _publish_live(None, {
-                "model": model_id,
-                "run_init": run_init.isoformat().replace("+00:00", "Z"),
-                "steps": n_steps,
-                "steps_with_data": n_with_data,
-                "seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
-                "finished_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            })
+            # Between runs the worker regenerates manifests, which takes long
+            # enough to be visible. Publishing current=None here made the page
+            # say "Idle" with a full queue - two things that cannot both be
+            # true. Name the phase instead.
+            _publish_live(
+                {"phase": "manifests", "started_at": datetime.now(UTC).isoformat().replace("+00:00", "Z")},
+                {
+                    "model": model_id,
+                    "run_init": run_init.isoformat().replace("+00:00", "Z"),
+                    "steps": n_steps,
+                    "steps_with_data": n_with_data,
+                    "seconds": round((datetime.now(UTC) - started).total_seconds(), 1),
+                    "finished_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+                },
+            )
             log.info(
                 "rendered %s %s: %d step(s), %d with real data",
                 model_id, run_init.isoformat(), n_steps, n_with_data,
@@ -273,7 +284,15 @@ def render_worker_main() -> None:
 # rescanning frame directories. In steady state a render takes far longer
 # than this interval, so in practice every rendered run does get its own
 # regeneration; the limit only collapses a burst of trivially fast ones.
-MANIFEST_MIN_INTERVAL_S = 60.0
+# Regenerating all three manifests rescans every frame on disk and measured
+# ~45s against the current archive - about 3x the cost of rendering the run
+# that triggered it. At a 60s floor stamped BEFORE the work, a 17s render was
+# enough to clear the interval again, so a catch-up sweep spent ~73% of its
+# time republishing manifests nobody was reading yet. The floor is now stamped
+# after completion (so it means "gap between regens", not "gap between
+# starts") and defaults to 10 minutes: during a long backfill the tools go at
+# most that long without seeing new frames, and the sweep runs ~3x faster.
+MANIFEST_MIN_INTERVAL_S = float(os.environ.get("MANIFEST_MIN_INTERVAL_S", "600"))
 _last_manifest_regen = 0.0
 
 
@@ -291,7 +310,6 @@ def regenerate_manifests(force: bool = False) -> None:
     now = time.monotonic()
     if not force and (now - _last_manifest_regen) < MANIFEST_MIN_INTERVAL_S:
         return
-    _last_manifest_regen = now
 
     try:
         from scripts import (
@@ -308,6 +326,7 @@ def regenerate_manifests(force: bool = False) -> None:
             module.main()
         except Exception:
             log.exception("%s.main() failed - that manifest is now stale", module.__name__)
+    _last_manifest_regen = time.monotonic()
 
 
 _render_proc: subprocess.Popen | None = None
