@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import subprocess
+import threading
 import sys
 import time
 from datetime import UTC, datetime
@@ -310,25 +311,63 @@ def regenerate_manifests(force: bool = False) -> None:
 
 
 _render_proc: subprocess.Popen | None = None
+# ensure_render_worker() is called from both the supervisor thread and (once at
+# startup) the main thread, so the poll-then-spawn has to be atomic or a death
+# noticed by both would spawn two workers - and two renderers writing the same
+# frame paths is the one thing frame_renderer cannot survive, since a torn PNG
+# from a concurrent savefig would then count as rendered forever.
+_render_lock = threading.Lock()
+RENDER_SUPERVISE_SECONDS = 20
 
 
 def ensure_render_worker() -> None:
     """Start the render child if it isn't running, restart it if it died.
-    Called once per tick; costs a poll() when all is well. Deliberately does
-    NOT wait for or communicate with the child - see the note above."""
+    Costs a poll() when all is well. Deliberately does NOT wait for or
+    communicate with the child - see the note above."""
     global _render_proc
     if not RENDER_IN_SCHEDULER:
         return
-    if _render_proc is not None:
-        if _render_proc.poll() is None:
+    # Poll AND spawn under the lock: the supervisor thread and the main thread
+    # both call this, and a death spotted by both would otherwise start two
+    # workers. Two renderers writing the same frame paths is the one thing
+    # frame_renderer cannot survive - a torn PNG from a concurrent savefig
+    # counts as rendered forever, since existence is what "has data" means now.
+    with _render_lock:
+        if _render_proc is not None and _render_proc.poll() is None:
             return
-        log.error(
-            "render worker exited with code %s - restarting it", _render_proc.returncode
+        if _render_proc is not None:
+            log.error(
+                "render worker exited with code %s - restarting it",
+                _render_proc.returncode,
+            )
+        _render_proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
+            [sys.executable, "-m", "src.scheduler.run", RENDER_WORKER_FLAG]
         )
-    _render_proc = subprocess.Popen(  # noqa: S603 - fixed argv, no shell, no user input
-        [sys.executable, "-m", "src.scheduler.run", RENDER_WORKER_FLAG]
-    )
-    log.info("render worker running as pid %d", _render_proc.pid)
+        log.info("render worker running as pid %d", _render_proc.pid)
+
+
+def _supervise_render_worker_forever() -> None:
+    """Keep the render child alive on its OWN cadence, independent of the fetch
+    loop.
+
+    Rendering was already independent of fetching - it is a separate process -
+    but RECOVERY was not: ensure_render_worker() used to be called once per
+    tick, so a worker that died early in a tick stayed dead until run_once()
+    returned. That is minutes at best and 20+ at worst, because a tick that
+    pulls a 50-member ensemble spends a long time downloading. Observed exactly
+    that: a killed worker sat as a zombie through several ticks while the
+    parent was busy fetching ecmwf_ens.
+
+    A thread is safe here where it would not be for rendering itself: this only
+    ever calls poll()/Popen and touches no eccodes or matplotlib state, which is
+    the reason rendering is a child process in the first place.
+    """
+    while True:
+        try:
+            ensure_render_worker()
+        except Exception:
+            log.exception("render worker supervision failed; will retry")
+        time.sleep(RENDER_SUPERVISE_SECONDS)
 
 
 def run_once() -> None:
@@ -400,10 +439,15 @@ def main() -> None:
         "in-scheduler rendering %s",
         "enabled" if RENDER_IN_SCHEDULER else "disabled (ECLIPSE_SCHEDULER_RENDER=0)",
     )
-    while True:
-        # First thing in the tick, and never waited on: (re)starting the render
-        # child is a poll()+maybe-a-spawn, so fetching is never behind it.
+    # Supervision runs on its own thread so a dead worker is noticed within
+    # RENDER_SUPERVISE_SECONDS regardless of how long the current fetch takes.
+    if RENDER_IN_SCHEDULER:
         ensure_render_worker()
+        threading.Thread(
+            target=_supervise_render_worker_forever, name="render-supervisor", daemon=True
+        ).start()
+
+    while True:
         try:
             run_once()
         except Exception:
