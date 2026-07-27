@@ -29,10 +29,15 @@
 #   4. Only then: `docker compose -f docker-compose.prod.yml up -d`, which
 #      runs the loop below WITH --apply.
 #
-# HARD PREREQUISITE, from TASKS.md rollout step 4: the site list in
-# config/sites.yaml must be settled before --apply is ever used. Once raw is
-# discarded, a site that was not in the extraction list at fetch time can
-# never be added retroactively for that run.
+# HARD PREREQUISITE, from TASKS.md rollout step 4: the extraction site list
+# must be settled before --apply is ever used. Once raw is discarded, a site
+# that was not in the extraction list at fetch time can never be added
+# retroactively for that run.
+#   RESOLVED 2026-07-27: extraction now uses the curated 29 places in
+#   config/placenames.json (145 series including the WNW strips), loaded by
+#   src/config.py's load_sites(). The blocker is cleared; this note stays as
+#   the reason the rule exists, because it still applies to any FUTURE change
+#   to that list - widening it later does not recover discarded runs.
 
 services:
   pipeline:
@@ -63,3 +68,42 @@ services:
       # manifests live under the same root and are the product - they are what
       # survives the raw data being discarded.
       - ${ECLIPSE_DATA_DIR:-./data}:/app/data
+
+  # Serves the rendered frames and the tool pages. Nothing else on this box
+  # does - the pipeline only produces files. Bound to LOOPBACK only: the
+  # tunnel reaches it over the compose network as http://frames:8137, so the
+  # box needs no public inbound port at all. The published 127.0.0.1 port
+  # exists purely so `ssh -L 8137:localhost:8137` can verify the app before
+  # any of it is public.
+  frames:
+    image: eclipse-weather:latest
+    container_name: eclipse-frames
+    restart: unless-stopped
+    depends_on: [pipeline]
+    command:
+      - /app/.venv/bin/python
+      - scripts/serve_frames.py
+      - "8137"
+      - /app/data/viz/tool1_frames
+    ports:
+      - "127.0.0.1:8137:8137"
+    volumes:
+      # Read-only: this process must never be able to modify the product it
+      # serves. It is the one component reachable (via the tunnel) from the
+      # public internet.
+      - ${ECLIPSE_DATA_DIR:-./data}:/app/data:ro
+
+  # Cloudflare Tunnel connector. Remote-managed (config_src: cloudflare), the
+  # same pattern as the redacted-host/redacted-host-2/the-vps tunnels in the defocus.fi
+  # repo - ingress lives Cloudflare-side, so adding a hostname needs no change
+  # here. Dials outbound only; combined with the loopback bind above, this box
+  # serves the public internet without a single open inbound port.
+  #
+  # The token is a SECRET: put it in a .env file beside this compose file on
+  # the VPS (gitignored), never in this file.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: eclipse-cloudflared
+    restart: unless-stopped
+    depends_on: [frames]
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
