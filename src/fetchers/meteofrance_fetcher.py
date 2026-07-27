@@ -67,7 +67,7 @@ from datetime import datetime
 
 import httpx
 
-from src.fetchers.base import FetchResult, raw_output_dir
+from src.fetchers.base import FetchResult, have_usable_file, raw_output_dir
 from src.fetchers.registry import register
 
 logger = logging.getLogger(__name__)
@@ -155,7 +155,10 @@ def _download_groups(
     with httpx.Client(timeout=_HTTP_TIMEOUT, follow_redirects=True) as client:
         for group in groups:
             dest = out_dir / f"{model_name}_{paquet}_{group}.grib2"
-            if dest.exists() and dest.stat().st_size > 0:
+            # On disk and structurally intact, or deliberately reclaimed by
+            # production after its frames were verified (src/pipeline/) -
+            # either way this must not be downloaded again.
+            if have_usable_file(dest):
                 files_written.append(dest)
                 continue
             ok, err = _download(client, _build_url(spec, run_init, paquet, group), dest)

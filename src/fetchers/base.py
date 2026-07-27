@@ -276,6 +276,21 @@ def _discard_broken(path: Path, reason: str) -> None:
         sidecar.unlink(missing_ok=True)
 
 
+def _is_reclaimed(path: Path) -> bool:
+    """Whether production's reclaim pipeline deliberately deleted this file
+    after verifying its frames. Imported lazily: src.pipeline is
+    production-only and must never become a hard dependency of the desktop
+    fetch path (the desktop never reclaims, so this is always False there)."""
+    try:
+        from src.pipeline.journal import is_reclaimed
+    except ImportError:  # pipeline package not deployed - desktop/dev
+        return False
+    try:
+        return is_reclaimed(path)
+    except OSError:
+        return False
+
+
 def have_usable_file(dest_path: Path, min_age_s: float = _MID_WRITE_GRACE_S) -> bool:
     """Every fetcher's per-file idempotency check, in place of a bare
     `dest_path.exists()`. True means "don't download this now": the file is
@@ -288,7 +303,20 @@ def have_usable_file(dest_path: Path, min_age_s: float = _MID_WRITE_GRACE_S) -> 
     Never deletes a file it merely does not recognise: anything non-empty that
     is not a .grib/.grib2 is reported usable and left untouched, and an
     unreadable file is left alone too (we cannot tell, so we do no harm).
+
+    ALSO true for a file production deliberately deleted after verifying its
+    frames were rendered (src/pipeline/journal.py's tombstone). That case is
+    checked FIRST, before anything here can form an opinion about the file:
+    a reclaimed file is absent BY DESIGN, and must never be mistaken for
+    either a missing fetch or a corrupt one. Without it, the 48-hour top-up
+    window would re-download, once an hour, every step production has
+    already rendered and discarded - which is the whole point of reclaiming
+    them. On the desktop nothing is ever reclaimed, no tombstone exists, and
+    this reduces to the plain structural check.
     """
+    if _is_reclaimed(dest_path):
+        return True
+
     try:
         stat = dest_path.stat()
     except OSError:
@@ -401,3 +429,11 @@ class FetchResult:
     def covering_steps(self) -> dict[str, int]:
         """Just the steps that are actually reachable, valid_time_iso -> step_hours."""
         return {vt: s[0] for vt, s in self.steps.items() if s is not None}
+
+
+# Production's pipeline and its verification suite refer to this name. It is
+# the same question have_usable_file() answers - "must this NOT be downloaded
+# again?" - kept as an alias rather than a second implementation, so the
+# reclaim tombstone and the corrupt-file check can never drift apart and
+# disagree about the same file.
+raw_file_present = have_usable_file

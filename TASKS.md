@@ -1002,6 +1002,43 @@ started. Laid out 2026-07-23 per explicit user direction.
       single source, production's discard-after-render pipeline just needs
       to pick which steps to render (eclipse-hour steps first) and discard
       the rest, not maintain two parallel fetch paths.
+      **Built 2026-07-27 (`src/pipeline/`, `config/production.yaml`,
+      `docker-compose.prod.yml`, `scripts/verify_pipeline.py`) — NOT
+      deployed, and deletion never yet run against real data.** Separate
+      entrypoint (`python -m src.pipeline.run`), so the desktop's
+      `src/scheduler/run.py` keeps its keep-forever behaviour untouched.
+      Design decisions worth knowing before trusting it:
+      - **Dry-run is the default everywhere.** Real deletion needs `--apply`
+        AND `reclaim.enabled` in `config/production.yaml`.
+      - **Deletion is per STEP, not per run**, which is what dissolves the
+        conflict with the 48h top-up window: a run stays eligible for
+        top-ups while its already-rendered steps are discarded. Discarded
+        files get a `.reclaimed.json` tombstone in the run directory, and
+        `raw_file_present()` (new, in `src/fetchers/base.py`, wired into all
+        4 step-driven fetchers) treats a tombstoned file as "already have
+        it" — so a top-up never re-downloads what was deliberately dropped,
+        and "absent because deleted" is distinguishable from "absent because
+        never fetched".
+      - **Completeness = frames on disk.** Since `render_frame()` stopped
+        writing placeholder PNGs, a complete PNG (magic + IEND checked, so a
+        truncated file counts as unrendered) for every `supported_fields()`
+        entry of every step in a file IS the proof. A missing frame holds
+        the raw; it never deletes speculatively.
+      - **Peak-disk bound**: fetches are issued as forecast-hour windows by
+        narrowing the per-cycle cap in the model_config dict passed to the
+        fetcher (no fetcher rewrite — they already derive steps from
+        `full_range_steps()` and are per-file idempotent). Measured
+        2026-07-27: worst reclaimable model in flight ~0.6 GB, vs 16 GB for
+        a whole `aifs_ens` run.
+      - **Rain lookback is pre-wired but inert** (`src/pipeline/fields.py`):
+        precipitation is published as an accumulation, so a rain frame
+        differences step n against step n-1 and step n-1's raw must outlive
+        its own frames by one step. The reclaim rule already enforces that
+        successor condition and already treats a frame whose lookback input
+        is gone as *unproducible* rather than *missing* (otherwise such a run
+        pins its raw forever). Registering `"rain": 1` in that table is all
+        the delete logic will need.
+      - Site-list blocker above is **still open** and still gates `--apply`.
 - [ ] **5. Status/monitoring UI page.** What's been fetched, what's been
       rendered, any errors per model/run, and predicted next-run
       availability (derivable from `models.yaml`'s `cycles`/

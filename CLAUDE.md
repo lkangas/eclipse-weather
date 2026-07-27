@@ -92,6 +92,16 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
   storage — a missed run is unrecoverable. Own directory, own port, isolated
   from any other services on the box. Box chosen 2026-07-22 — see private ops
   notes, not this repo.
+  **Disk footprint UPDATE (measured 2026-07-27):** the 48 GB figure below is
+  stale by ~8.5x — the desktop archive is now **408 GB** (`aifs_ens` alone
+  **304 GB**, ~19 runs at ~16 GB each), against 954 GB of disk. At the
+  current ~64 GB/day that is **~7.4 days of headroom with 16 days to go to
+  the eclipse**, so the desktop now needs the same delete-after-render
+  treatment production was designed for, not just production. The pipeline
+  exists (`src/pipeline/`, TASKS.md rollout step 4) and is dry-run-only until
+  someone runs it with `--apply`; `python -m src.pipeline.run --sweep` reports
+  exactly what it would delete, read-only. Everything below still describes
+  the per-run/per-model shape correctly — only the totals moved.
   **Disk footprint (measured, not estimated, 2026-07-23):** since the
   2026-07-23 archiver consolidation, `data/raw/` holds every fetcher's FULL
   forecast range (not just 3 eclipse-hour steps) — this is much larger than

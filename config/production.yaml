@@ -1,0 +1,86 @@
+# Production (VPS) deployment policy for the fetch -> render -> verify ->
+# reclaim pipeline (src/pipeline/, TASKS.md rollout step 4).
+#
+# NOT model metadata. config/models.yaml stays the single source of truth for
+# cycles / forecast lengths / steps / URLs / params / publication lags
+# (CLAUDE.md hard constraint #2) - nothing in this file may restate any of
+# that. What lives here is purely deployment policy: how much disk this box
+# has, how aggressively raw data may be reclaimed, and how finely a fetch is
+# chunked to bound peak disk. The desktop does not read this file at all -
+# it keeps its "fetch and keep forever" behaviour (see CLAUDE.md's dev-phase
+# "disk isn't constrained here" direction), because only src/pipeline/ reads
+# it and only the production compose file runs src/pipeline/.
+#
+# Every value can be overridden by an env var (see src/pipeline/settings.py)
+# so a compose file can tune a box without editing the repo.
+
+reclaim:
+  # Master switch. Even with this true, real deletion additionally requires
+  # the orchestrator to be invoked with --apply; plan/dry-run is the default
+  # everywhere, always.
+  enabled: true
+
+  # A raw file must be at least this old before it is even considered, so a
+  # file still being written (by a concurrently-running desktop scheduler, or
+  # by a fetcher in another process) can never be reclaimed mid-write.
+  min_file_age_seconds: 120
+
+  # A step whose frames are absent may only be accepted as "genuinely has no
+  # data" (rather than "not rendered yet") after this many independent render
+  # passes agreed, AND only when another step carried by the SAME raw file
+  # rendered successfully - i.e. the file is provably readable and the gap is
+  # structural (arome_france/arpege_europe group files start at +1h, not +0h).
+  # For one-file-per-step models this condition can never be met, which is the
+  # correct behaviour: a present-but-unrenderable file is a corruption
+  # suspicion, and corrupt raw must be re-fetched, never silently deleted.
+  min_no_data_observations: 2
+
+  # Never reclaim a raw file that carries one of the eclipse archive valid
+  # times (models.yaml eclipse.archive_valid_hours_utc) until that run has
+  # been extracted into points.parquet. Site-level extraction is the one
+  # product that cannot be recomputed from rendered PNGs.
+  require_extraction_for_eclipse_steps: true
+
+disk:
+  # The orchestrator refuses to start a new fetch chunk when free space would
+  # drop below this after the chunk. It reclaims first, and if that is still
+  # not enough it skips the model and raises an alert rather than filling the
+  # disk (a full disk breaks every model at once; skipping one model loses
+  # one run of one model).
+  min_free_gb: 15
+
+  # Used only when the box has no archived run of a model yet to measure a
+  # real bytes-per-step from. Deliberately pessimistic.
+  fallback_bytes_per_step_mb: 350
+
+chunking:
+  # A fetch is issued as a sequence of forecast-hour windows, rendering and
+  # reclaiming after each, so peak raw footprint is one window - not one run.
+  # See src/pipeline/chunking.py for which fetch kinds honour this (the ones
+  # that iterate full_range_steps(): herbie, ecmwf-opendata, http_bz2) and
+  # which cannot (http_grib's fixed group files, geotiff, open_meteo_json).
+  default_chunk_hours: 24
+  per_model_chunk_hours:
+    aifs_ens: 6        # ~0.3 GB/step, 4 cycles/day - the model this whole design exists for
+    ecmwf_ens: 6
+    ecmwf_hres: 12
+    aifs_single: 24
+    gfs: 24
+    gefs_extended: 24
+    icon_eu: 24
+    icon_global: 24
+
+  # Safety valve: at most this many chunks per run per pass (null = no cap).
+  # Each extra chunk re-walks the already-satisfied lower steps, which is
+  # cheap (stat()s) but does re-request steps the provider has not published
+  # yet, so this bounds how often a genuinely-absent step is retried.
+  max_chunks_per_pass: null
+
+frames:
+  # Rendered PNGs plus the manifests ARE the product; raw data is only a means
+  # to them. They are ~130 KB each and the whole archive to date is well under
+  # a GB, so the default is to keep every frame for the life of the project.
+  # max_run_age_days is the emergency valve only (null = keep everything);
+  # Tools 2 and 3 are run-over-run evolution views, so pruning old runs
+  # directly removes rows from those charts.
+  max_run_age_days: null

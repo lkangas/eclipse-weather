@@ -1,0 +1,65 @@
+# PRODUCTION (VPS) compose file - the fetch -> render -> verify -> reclaim
+# pipeline. Kept entirely separate from docker-compose.yml, which is the
+# desktop archiver and must keep its "fetch and keep raw forever" behaviour
+# (CLAUDE.md's dev-phase "disk isn't constrained here" direction). Running
+# this file on the desktop would start deleting raw data there, which is
+# exactly what the split prevents: different file, different command,
+# different container name.
+#
+# Same image, different entrypoint. Nothing about the archiver changes.
+#
+# ROLLOUT - do these in order, and do not skip step 3:
+#
+#   1. docker compose -f docker-compose.prod.yml run --rm pipeline \
+#          /app/.venv/bin/python -m scripts.verify_pipeline
+#      Fixture-based checks of the completeness rule and the dry-run default.
+#      Touches nothing real. Must print "all checks passed".
+#
+#   2. docker compose -f docker-compose.prod.yml run --rm pipeline \
+#          /app/.venv/bin/python -m src.pipeline.run --sizing
+#      Peak in-flight raw per model, measured against this box's own archive.
+#      Confirms disk.min_free_gb is comfortably above it.
+#
+#   3. docker compose -f docker-compose.prod.yml run --rm pipeline \
+#          /app/.venv/bin/python -m src.pipeline.run --sweep --verbose
+#      THE dry run: every raw file, the decision, and the reason. Read it.
+#      Deletes nothing. Re-read it after any change to models.yaml, to a
+#      fetcher's output filenames, or to supported_fields().
+#
+#   4. Only then: `docker compose -f docker-compose.prod.yml up -d`, which
+#      runs the loop below WITH --apply.
+#
+# HARD PREREQUISITE, from TASKS.md rollout step 4: the site list in
+# config/sites.yaml must be settled before --apply is ever used. Once raw is
+# discarded, a site that was not in the extraction list at fetch time can
+# never be added retroactively for that run.
+
+services:
+  pipeline:
+    build: .
+    image: eclipse-weather:latest
+    container_name: eclipse-pipeline
+    restart: unless-stopped
+    command:
+      - /app/.venv/bin/python
+      - -m
+      - src.pipeline.run
+      - --loop
+      - --apply
+    environment:
+      - ECLIPSE_T=${ECLIPSE_T:-2026-08-12T18:30:00Z}
+      # Deadman's switch. A pass pings /start, then the bare URL on success or
+      # /fail on error, so a pipeline that hangs mid-pass shows up as a
+      # started-but-unfinished check rather than as silence - the failure mode
+      # that matters most during Aug 5-12.
+      - HEALTHCHECK_URL=${HEALTHCHECK_URL:-}
+      # Every config/production.yaml value is overridable here; these are the
+      # two worth having in front of you.
+      - ECLIPSE_DISK_MIN_FREE_GB=${ECLIPSE_DISK_MIN_FREE_GB:-15}
+      - ECLIPSE_RECLAIM_ENABLED=${ECLIPSE_RECLAIM_ENABLED:-true}
+    volumes:
+      # MUST be a real mount, never container storage: a missed run is
+      # unrecoverable (CLAUDE.md hard constraint #1). Rendered frames and
+      # manifests live under the same root and are the product - they are what
+      # survives the raw data being discarded.
+      - ${ECLIPSE_DATA_DIR:-./data}:/app/data
