@@ -76,6 +76,7 @@
     border-left: 1px solid #d8d4c8;
   }
   .rainOpt input[type=checkbox] { accent-color: #2f5f8b; }
+  .rainOpt.disabled { opacity: 0.4; }
   .placeholderNote {
     font-size: 9.5px;
     color: #a8a498;
@@ -302,6 +303,31 @@
     padding: 6px;
     box-sizing: border-box;
   }
+  /* The rain overlay is a separate transparent PNG stacked on the base frame
+     rather than baked into it: one overlay per step works over ANY base
+     (cloud composite, total, temp), where baking would mean rendering every
+     base x rain-on/off combination. Both are rendered from the same bbox at
+     the same size, so exact overlap needs no positioning maths - only that
+     the two <img> boxes resolve identically, which is why they share a
+     wrapper and both use object-fit: contain. */
+  #mapStack {
+    position: relative;
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    justify-content: center;
+  }
+  #mapRainImg {
+    position: absolute;
+    inset: 0;
+    max-width: 100%;
+    width: auto;
+    height: 100%;
+    margin: 0 auto;
+    object-fit: contain;
+    pointer-events: none;
+    display: none;
+  }
   #mapAreaImg {
     max-width: 100%;
     flex: 1 1 0;
@@ -358,7 +384,10 @@
 
 <div id="mapArea">
   <div class="placeholder-tag" id="mapAreaTag">loading manifest…</div>
-  <img id="mapAreaImg" alt="">
+  <div id="mapStack">
+    <img id="mapAreaImg" alt="">
+    <img id="mapRainImg" alt="" aria-hidden="true">
+  </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
 </div>
@@ -441,6 +470,7 @@ const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
+const mapRainImg = document.getElementById("mapRainImg");
 const rainCheckbox = document.getElementById("rainCheckbox");
 const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
@@ -553,7 +583,10 @@ function resolveField(model, step, mode) {
   if (mode === "cloudProb") {
     return hasData.prob_hml_composite ? "prob_hml_composite" : null;
   }
-  return null; // temp - placeholder, no field to resolve yet
+  if (mode === "temp") {
+    return hasData.temp ? "temp" : null;
+  }
+  return null;
 }
 
 const preloadedModels = new Set();
@@ -746,15 +779,14 @@ function updateCursorUI() {
   const model = MODELS.find(m => m.id === selectedModel);
   const step = nearestStep(model, cursorTime);
 
-  placeholderNote.textContent = rainOn ? "rain overlay: not yet implemented" : "";
-
-  if (quantityMode === "temp") {
-    setMapTag("not available");
-    mapAreaImg.style.display = "none";
-    setMapText(mapAreaTitle, model.label);
-    setMapText(mapAreaSub, "temperature: not yet implemented");
-    return;
-  }
+  // Rain is GFS-only: it is the one model publishing an INSTANTANEOUS rate,
+  // and the others would need differencing accumulations. Disable rather than
+  // silently draw nothing, or "no rain forecast" and "this model cannot do
+  // rain" look identical.
+  const modelHasRain = model.steps.some(h => (model.hasDataByStep[h] || {}).rain);
+  rainCheckbox.disabled = !modelHasRain;
+  rainCheckbox.closest("label").classList.toggle("disabled", !modelHasRain);
+  placeholderNote.textContent = modelHasRain ? "" : "no rain data for this model";
 
   const field = step === null ? null : resolveField(model, step, quantityMode);
   const images = step === null ? null : model.imagesByStep[step];
@@ -768,11 +800,20 @@ function updateCursorUI() {
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
+    const rainUrl = rainOn && modelHasRain && images ? images.rain : null;
+    if (rainUrl) {
+      mapRainImg.src = rainUrl;
+      mapRainImg.style.display = "block";
+    } else {
+      mapRainImg.style.display = "none";
+      mapRainImg.removeAttribute("src");
+    }
     setMapText(mapAreaTitle, "");
     setMapText(mapAreaSub, "");
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
+    mapRainImg.style.display = "none";
     setMapText(mapAreaTitle, model.label);
     setMapText(mapAreaSub, step === null
       ? "no step available"
