@@ -104,10 +104,17 @@ def steps_in_chunk(
 
 
 def measured_run_bytes(model_id: str) -> int:
-    """Total raw bytes of the largest archived run of this model on this box,
-    or 0 if there is none. Used for models whose raw carries no step number
-    (open_meteo_json's forecast.json, aemet's GeoTIFF bundle), where a
-    per-step figure is meaningless."""
+    """Total raw bytes of the largest run of this model this box has SEEN.
+
+    On-disk bytes plus whatever has already been reclaimed from that run, read
+    from its tombstone. Counting only what is still present makes production
+    measure ~nothing - reclaiming is its whole job - so every model fell back
+    to a flat 350 MB/step there. That produced a "worst single in-flight run"
+    of 71 GB against 31 GB free on the VPS, which reads as a hard failure and
+    is pure artefact: the same models measure 17.74 GB on the desktop, which
+    keeps its raw. A box that deletes its evidence should be asked what it
+    deleted, not handed a constant.
+    """
     from src import config
     from src.pipeline import raw_layout
 
@@ -128,8 +135,25 @@ def measured_run_bytes(model_id: str) -> int:
             )
         except OSError:
             continue
+        total += _reclaimed_bytes(model_id, run_dir.name)
         best = max(best, total)
     return best
+
+
+def _reclaimed_bytes(model_id: str, run_stamp: str) -> int:
+    """Bytes already deleted from this run, per its tombstone. 0 if none."""
+    from datetime import UTC, datetime
+
+    from src.pipeline import journal
+    try:
+        run_init = datetime.strptime(run_stamp, "%Y%m%d%H").replace(tzinfo=UTC)
+    except ValueError:
+        return 0
+    try:
+        return int((journal.load_tombstone(model_id, run_init).get("totals") or {})
+                   .get("bytes") or 0)
+    except Exception:
+        return 0
 
 
 def bytes_per_step(model_id: str, fallback: int) -> int:
