@@ -44,6 +44,20 @@ def render_steps(
     eventually becomes distinguishable from one that simply has not been
     rendered yet. See src/pipeline/reclaim.py.
     """
+    # A model with no reader cannot be rendered at all, whatever
+    # supported_fields() says. It says "hml_composite" for the four Open-Meteo
+    # point models because models.yaml confirms their cloud LEVELS - true, and
+    # irrelevant: those levels arrive as JSON point series, there is no grid to
+    # draw, and render_frame() raises KeyError on the missing reader.
+    #
+    # src/scheduler/run.py has always guarded this with `renderable =
+    # set(_MODEL_READERS)`; this path never did, so every pass logged four
+    # tracebacks and recorded four run errors. Non-fatal - they are caught
+    # upstream and the pass continues - but noise in `errors` is exactly what
+    # makes a real failure invisible during Aug 5-12.
+    if model_id not in frame_renderer._MODEL_READERS:
+        return {}
+
     fields = frame_renderer.supported_fields(model_id)
     results: dict[int, dict[str, bool]] = {}
     for step in steps:
