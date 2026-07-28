@@ -6,7 +6,7 @@ is the same picture for every model, run and step. Rendering it once and
 serving it as a static file is what lets the tools show it without adding a
 per-frame cost to a ~30,000-frame archive.
 
-EVERY colour, gamma and boundary here is imported from frame_renderer rather
+EVERY colour and boundary here is imported from frame_renderer rather
 than restated. That is the whole design constraint: a legend that disagrees
 with the map is worse than no legend, and the two drift apart the moment they
 hold their own copies of the numbers. If a ramp changes there, re-run this.
@@ -35,9 +35,7 @@ import numpy as np
 
 from src.config import eclipse_config
 from src.viz.frame_renderer import (
-    _CLOUD_GAMMA,
     _COMPOSITE_CHANNELS,
-    _PROB_GAMMA,
     _TEMP_BAND_C,
     _TEMP_EMPHASIS_C,
     _TEMP_VMAX_C,
@@ -84,74 +82,42 @@ def _finish(fig, path: Path) -> Path:
     return path
 
 
-def _percent_ticks(ax, axes_top) -> None:
-    ax.set_ylim(0, 100)
-    ax.set_yticks([0, 20, 40, 60, 80, 100])
-    ax.set_yticklabels(["0", "20", "40", "60", "80", "100"], fontsize=LABEL_SIZE, color=INK)
-    ax.yaxis.tick_right()
-    ax.tick_params(axis="y", length=2, pad=1.5, colors=INK)
+def render_cloud_levels(out_dir: Path) -> Path:
+    """One bar, three solid blocks: which HUE means which cloud LEVEL.
+
+    Not a magnitude scale, deliberately. The composite has no single magnitude
+    axis - it lights one RGB channel per level and blends them over white, so
+    three gradient strips were needed to describe it and still could not
+    describe a blended pixel. The question a reader actually has in front of
+    this map is "what does the green mean", and that is categorical.
+
+    It also collapses the cloud and probability legends into one image: the
+    gradients differed only by their gamma stretch (0.40 vs 0.60), and with no
+    gradient there is nothing left to differ.
+
+    Colours come from _COMPOSITE_CHANNELS, which is what the renderer blends,
+    so the legend cannot drift from the map.
+    """
+    fig, axes_top, _ = _new_fig()
+    ax = _ramp_axes(fig, 0.12, 0.40, axes_top)
+
+    # _COMPOSITE_CHANNELS is high -> mid -> low; the bar reads bottom-up as
+    # low -> mid -> high, matching the physical stacking of the atmosphere.
+    for i, (level, rgb) in enumerate(reversed(_COMPOSITE_CHANNELS)):
+        ax.axhspan(i, i + 1, color=rgb, linewidth=0)
+        ax.text(1.35, i + 0.5, level.capitalize(), transform=ax.get_yaxis_transform(),
+                ha="left", va="center", fontsize=LABEL_SIZE + 0.5, color=INK)
+
+    ax.set_ylim(0, len(_COMPOSITE_CHANNELS))
     ax.set_xticks([])
+    ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_linewidth(0.5)
         spine.set_edgecolor(INK)
 
-
-def render_cloud_composite(out_dir: Path, gamma: float, name: str, title: str) -> Path:
-    """Three strips - high/mid/low - because the composite is not a 1-D ramp.
-
-    The map lights one RGB channel per level and blends them over white, so a
-    single ramp could only ever describe one of the three. Each strip is that
-    channel on its own: white at 0 %, its full channel colour at 100 %, warped
-    by exactly the gamma the map applies. Where levels overlap the map shows
-    the product of these, which no static legend can enumerate - the strips
-    say what each PURE level looks like, which is what a reader needs to
-    decode a mixed pixel.
-    """
-    fig, axes_top, _ = _new_fig()
-    n = len(_COMPOSITE_CHANNELS)
-    gap = 0.05
-    total_w = 0.52
-    each_w = (total_w - gap * (n - 1)) / n
-    grad = np.linspace(0, 1, 256).reshape(-1, 1)
-
-    for i, (level, rgb) in enumerate(_COMPOSITE_CHANNELS):
-        left = 0.06 + i * (each_w + gap)
-        ax = _ramp_axes(fig, left, each_w, axes_top)
-        # Position is LINEAR in percent; colour carries the gamma. That is the
-        # standard colorbar contract - evenly spaced labels, warped ramp - and
-        # it is what makes the stretch visible instead of hiding it.
-        alpha = grad**gamma
-        strip = np.ones((256, 1, 3)) * (1 - alpha[..., None]) + np.array(rgb) * alpha[..., None]
-        ax.imshow(strip, origin="lower", aspect="auto", extent=(0, 1, 0, 100))
-        ax.set_ylim(0, 100)
-        ax.set_xticks([])
-        if i == n - 1:
-            _percent_ticks(ax, axes_top)
-        else:
-            ax.set_yticks([])
-            for spine in ax.spines.values():
-                spine.set_linewidth(0.5)
-                spine.set_edgecolor(INK)
-        ax.set_xlabel(level[0].upper(), fontsize=LABEL_SIZE + 0.5, color=INK, labelpad=2)
-
-    fig.text(0.5, 0.995, f"{title} %", ha="center", va="top", fontsize=TITLE_SIZE,
+    fig.text(0.5, 0.995, "Cloud", ha="center", va="top", fontsize=TITLE_SIZE,
              color=INK, fontweight="bold")
-    return _finish(fig, out_dir / f"{name}.png")
-
-
-def render_cloud_total(out_dir: Path) -> Path:
-    """Single Blues ramp - the fallback field for models with no native
-    low/mid/high (ecmwf_hres, ecmwf_ens, aemet_harmonie)."""
-    fig, axes_top, _ = _new_fig()
-    ax = _ramp_axes(fig, 0.10, 0.48, axes_top)
-    norm = mcolors.PowerNorm(gamma=_CLOUD_GAMMA, vmin=0, vmax=100)
-    grad = np.linspace(0, 100, 256).reshape(-1, 1)
-    ax.imshow(plt.get_cmap("Blues")(norm(grad)), origin="lower", aspect="auto",
-              extent=(0, 1, 0, 100))
-    _percent_ticks(ax, axes_top)
-    fig.text(0.5, 0.995, "Total %", ha="center", va="top", fontsize=TITLE_SIZE,
-             color=INK, fontweight="bold")
-    return _finish(fig, out_dir / "cloud_total.png")
+    return _finish(fig, out_dir / "cloud_levels.png")
 
 
 def render_temp(out_dir: Path) -> Path:
@@ -193,10 +159,11 @@ def main() -> None:
     args = ap.parse_args()
     out = Path(args.out)
 
+    # Two bars only. `total` gets none - a plain Blues ramp on a field that is
+    # just "cloud, 0-100 %" tells a reader nothing they cannot see, and one
+    # legend per quantity is a cost to keep in sync forever.
     made = [
-        render_cloud_composite(out, _CLOUD_GAMMA, "cloud_composite", "Cloud"),
-        render_cloud_composite(out, _PROB_GAMMA, "cloud_prob_composite", "P(cloud)"),
-        render_cloud_total(out),
+        render_cloud_levels(out),
         render_temp(out),
     ]
     for p in made:
