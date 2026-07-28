@@ -375,6 +375,8 @@ models:
     cycles: {"00": 180, "06": 120, "12": 180, "18": 120}
     steps: [{to_h: 78, every_h: 1}, {to_h: 180, every_h: 3}]
     publication_lag_h: [2.5, 4]
+    retention_h: 24   # DWD keeps ~24 h (see source.retention, T10). Machine-readable because
+                       # the coverage matrix must tell 'not fetched yet' from 'can never be fetched'.
     first_covering: "2026-08-05T12Z"
     cloud:
       levels: {params: [CLCL, CLCM, CLCH], layers_hPa: "sfc-800 / 800-400 / 400-0", status: confirmed,
@@ -428,6 +430,8 @@ models:
     cycles: {"00": 120, "06": 120, "12": 120, "18": 120}   # short 03/09/15/21 cycles ignored
     steps: [{to_h: 78, every_h: 1}, {to_h: 120, every_h: 3}]
     publication_lag_h: [2.5, 4]
+    retention_h: 24   # DWD keeps ~24 h (see source.retention, T10). Machine-readable because
+                       # the coverage matrix must tell 'not fetched yet' from 'can never be fetched'.
     first_covering: "2026-08-07T18Z"
     hourly_at_t_from: "2026-08-09T18Z"
     cloud:

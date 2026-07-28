@@ -61,6 +61,21 @@ def _latest_only(cfg: dict) -> bool:
                 .get("serves_latest_run_only"))
 
 
+def _past_upstream_retention(cfg: dict, run_init: datetime, now: datetime) -> bool:
+    """Has upstream already deleted this run?
+
+    Same question `_latest_only` asks, one step less absolute: DWD keeps ICON
+    for only ~24 h, so a run older than that 404s exactly like a past AEMET
+    cycle. Only models whose retention is shorter than this matrix's own window
+    carry `retention_h` - everything else outlives the window and cannot
+    reach this branch.
+    """
+    retention_h = cfg.get("retention_h")
+    if not retention_h:
+        return False
+    return (now - run_init).total_seconds() / 3600 > float(retention_h)
+
+
 def _publish_complete_h(cfg: dict) -> float:
     """Hours after init by which this model has published its whole range.
 
@@ -230,13 +245,19 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
                 overdue_h = (now - due).total_seconds() / 3600
                 if overdue_h <= OVERDUE_AFTER_H:
                     state = "available"
-                elif _latest_only(cfg):
-                    # A source that serves only its current run cannot be asked
-                    # for a past cycle, so "overdue" is wrong: it implies
-                    # someone could still fetch it. Once the window moved on,
-                    # that cycle is simply gone. Saying so stops six permanently
-                    # unfixable cells sitting red for up to 48 h and training
-                    # the eye to ignore the colour that means act now.
+                elif _latest_only(cfg) or _past_upstream_retention(cfg, run_init, now):
+                    # Nothing can still fetch this, so "overdue" is wrong: it
+                    # implies someone could. Two ways to get here - a source
+                    # that serves only its current run (aemet_harmonie), or one
+                    # whose retention has simply expired (ICON, ~24 h at DWD
+                    # against this matrix's 48 h window).
+                    #
+                    # Saying so stops permanently unfixable cells sitting red
+                    # for up to 48 h and training the eye to ignore the colour
+                    # that means act now. The ICON half of this became visible
+                    # when temp was added: those runs had been complete on
+                    # cloud alone, and requiring a field DWD no longer serves
+                    # made them incomplete forever.
                     state = "missed"
                 else:
                     state = "overdue"
