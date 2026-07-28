@@ -857,23 +857,33 @@ function applyQuantityMode(mode) {
   // fully disabled with nothing selectable.
   const probIdx = MODELS.findIndex(m => m.id === PROB_ONLY_MODEL);
 
+  // Grey every row the current quantity cannot answer. Was cloudProb-only;
+  // temp needs it too now that the two ECMWF ensembles have it disabled on
+  // cost grounds, so it keys off modelSupportsMode rather than naming models.
+  builtRows.forEach(({ model, row }) => {
+    row.classList.toggle("disabled", !modelSupportsMode(model.id, mode));
+  });
+
   if (mode === "cloudProb" && probIdx !== -1) {
     if (!wasForced) rowBeforeProbForce = clickedRowIdx; // remember for when we leave
-    builtRows.forEach(({ model, row }) => {
-      row.classList.toggle("disabled", model.id !== PROB_ONLY_MODEL);
-    });
     if (clickedRowIdx !== probIdx) {
       selectRowForSingleView(probIdx); // ends in updateUI()
       return;
     }
   } else {
-    builtRows.forEach(({ row }) => row.classList.remove("disabled"));
     const restore = rowBeforeProbForce;
     rowBeforeProbForce = null;
     if (wasForced && restore !== null && restore !== clickedRowIdx && builtRows[restore]) {
       selectRowForSingleView(restore); // ends in updateUI()
       return;
     }
+  }
+  // A greyed row is pointer-events:none, so one clicked BEFORE the mode changed
+  // stays selected and the single view would render nothing.
+  if (builtRows[clickedRowIdx]
+      && !modelSupportsMode(builtRows[clickedRowIdx].model.id, mode)) {
+    const idx = builtRows.findIndex(r => modelSupportsMode(r.model.id, mode));
+    if (idx !== -1) { selectRowForSingleView(idx); return; }
   }
   updateUI();
 }

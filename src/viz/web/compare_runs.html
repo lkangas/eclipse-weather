@@ -580,7 +580,14 @@ function resolveField(images, hasData, mode) {
 // Cloud prob mode, so a false here only happens against a manifest that has
 // no aifs_ens to force-select at all.
 function modelSupportsMode(modelId, mode) {
-  if (mode === "temp") return false;
+  if (mode === "temp") {
+    // From the manifest, not a hardcoded list: temp is off for the two ECMWF
+    // ensembles on COST grounds (models.yaml surface_temp.enabled), and that
+    // is reversible by flipping one config key.
+    const m = MODELS[modelId];
+    return !!m && (m.runs || []).some(r =>
+      (r.steps || []).some(h => ((r.hasDataByStep || {})[h] || {}).temp));
+  }
   if (mode === "cloudProb") return modelId === PROB_ONLY_MODEL;
   return true;
 }
@@ -816,17 +823,25 @@ function applyQuantityMode(mode) {
   // explains why nothing is shown instead.
   const probAvailable = Object.prototype.hasOwnProperty.call(MODELS, PROB_ONLY_MODEL);
 
+  // Grey the options this quantity cannot answer. Tool 1 greys ROWS; here the
+  // rows are runs of one model, so the model picker is what carries it.
+  Array.from(modelSelect.options).forEach(o => {
+    o.disabled = !modelSupportsMode(o.value, mode);
+  });
+
   if (mode === "cloudProb" && probAvailable) {
     if (!wasForced) modelBeforeProbForce = selectedModelId; // remember for when we leave
-    Array.from(modelSelect.options).forEach(o => { o.disabled = o.value !== PROB_ONLY_MODEL; });
     if (selectedModelId !== PROB_ONLY_MODEL) {
       switchModel(PROB_ONLY_MODEL); // ends in updateCursorUI via selectRun
       return;
     }
   } else {
-    Array.from(modelSelect.options).forEach(o => { o.disabled = false; });
     const restore = modelBeforeProbForce;
     modelBeforeProbForce = null;
+    if (!modelSupportsMode(selectedModelId, mode)) {
+      const first = Object.keys(MODELS).find(id => modelSupportsMode(id, mode));
+      if (first) { switchModel(first); return; }
+    }
     if (wasForced && restore && restore !== selectedModelId && MODELS[restore]) {
       switchModel(restore); // ends in updateCursorUI via selectRun
       return;

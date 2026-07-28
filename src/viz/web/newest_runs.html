@@ -442,6 +442,20 @@ function isProbRow(rowId) {
   return !!entry && entry.modelId === PROB_ONLY_MODEL;
 }
 
+// Can this ROW answer `mode` at all? Read off the manifest, never a hardcoded
+// model list: temp is disabled for the two ECMWF ensembles on COST grounds
+// (models.yaml surface_temp.enabled), a decision reversible by flipping one
+// config key - a list here would then silently disagree with the data.
+// Cloud cover is the one mode every model can answer.
+function rowSupportsMode(rowId, mode) {
+  if (mode === "cloudProb") return isProbRow(rowId);
+  if (mode === "temp") {
+    const e = MODELS.find(m => m.id === rowId);
+    return !!e && e.steps.some(h => (e.hasDataByStep[h] || {}).temp);
+  }
+  return true;
+}
+
 const rowsEl = document.getElementById("rows");
 const axisTrack = document.getElementById("axisTrack");
 const stackWrap = document.getElementById("stackWrap");
@@ -731,11 +745,15 @@ function applyQuantityMode(mode) {
   const wasForced = quantityMode === "cloudProb";
   quantityMode = mode;
 
+  // Grey every row the current quantity cannot answer. This was cloudProb-only;
+  // temp needs it too, so it keys off rowSupportsMode instead of growing a
+  // second per-mode branch that could drift from the first.
+  document.querySelectorAll(".row").forEach(r => {
+    r.classList.toggle("disabled", !rowSupportsMode(r.dataset.modelId, mode));
+  });
+
   if (mode === "cloudProb") {
     if (!wasForced) modelBeforeProbForce = selectedModel; // remember for when we leave
-    document.querySelectorAll(".row").forEach(r => {
-      r.classList.toggle("disabled", !isProbRow(r.dataset.modelId));
-    });
     // Any row of the prob-capable model will do - a model contributing both a
     // newest and a longer-run row has two, either of which has prob frames.
     const probRow = MODELS.find(m => m.modelId === PROB_ONLY_MODEL);
@@ -743,11 +761,16 @@ function applyQuantityMode(mode) {
       selectModel(probRow.id);
     }
   } else {
-    document.querySelectorAll(".row").forEach(r => r.classList.remove("disabled"));
     if (wasForced && modelBeforeProbForce && !isProbRow(modelBeforeProbForce)) {
       selectModel(modelBeforeProbForce);
     }
     modelBeforeProbForce = null;
+  }
+  // A disabled row is pointer-events:none, so a row selected BEFORE the mode
+  // changed can still be the selected one - and would render nothing at all.
+  if (!rowSupportsMode(selectedModel, mode)) {
+    const first = MODELS.find(m => rowSupportsMode(m.id, mode));
+    if (first) selectModel(first.id);
   }
   updateCursorUI();
 }

@@ -177,6 +177,15 @@ models:
              present across all 50 real pf members (same zero-cf-messages pattern already known from this model's
              own cloud fetch)."}
     surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    enabled: false,
+                    disabled_note: "Measured 2026-07-28: ECMWF open-data ships EVERY member for a scalar
+                      field - one 2t step decodes to 50 GRIB messages, all 2t, one per member - so a
+                      single step costs ~33 MB against 0.5 MB for the same quantity from GFS. That is
+                      ~11.2 GB/day for a field we only ever take the mean of; the two ensembles together
+                      are 19.0 of 21.5 GB/day across all models. The data is real and confirmed - status
+                      above is deliberately untouched - it is the COST that fails, so this is an explicit
+                      opt-out, not a metadata correction. The ensembles earn their keep on cloud
+                      PROBABILITY, which is unaffected. Set true to re-enable.",
                     status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request as rain above - t2m present across all
                       50 members."}
@@ -287,6 +296,15 @@ models:
              control-shaped (no member dim) and a (50, lat, lon) perturbed-member array, same structure as
              ecmwf_ens/aifs_single's own fields."}
     surface_temp: {param: 2t, cfgrib_var: t2m, height: 2m, units: K, step_type: instant,
+                    enabled: false,
+                    disabled_note: "Measured 2026-07-28: ECMWF open-data ships EVERY member for a scalar
+                      field - one 2t step decodes to 51 GRIB messages, all 2t, one per member - so a
+                      single step costs ~32 MB against 0.5 MB for the same quantity from GFS. That is
+                      ~7.7 GB/day for a field we only ever take the mean of; the two ensembles together
+                      are 19.0 of 21.5 GB/day across all models. The data is real and confirmed - status
+                      above is deliberately untouched - it is the COST that fails, so this is an explicit
+                      opt-out, not a metadata correction. The ensembles earn their keep on cloud
+                      PROBABILITY, which is unaffected. Set true to re-enable.",
                     status: confirmed, task: T37, corrected: T45,
                     note: "T37 (2026-07-23): confirmed live, same request/shape as rain above."}
     notes: "T02: may be the first entry in this registry with CONFIRMED native L/M/H at ensemble scale out to 15

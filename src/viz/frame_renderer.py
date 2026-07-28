@@ -762,6 +762,9 @@ def _extra_fields(model_id: str, model_config: dict) -> list[str]:
     which is what lets the tools grey the control rather than draw nothing and
     leave "no rain forecast" indistinguishable from "not supported".
 
+    Temp is additionally gated on `enabled` (default true) - a cost opt-out,
+    not a metadata judgement; see models.yaml.
+
     Both are ALSO gated on the reader actually implementing them. models.yaml
     says which models have the data; _TEMP_CAPABLE_READERS / _RAIN_CAPABLE_READERS
     say which readers can currently read it. Advertising a field whose reader
@@ -771,7 +774,15 @@ def _extra_fields(model_id: str, model_config: dict) -> list[str]:
     """
     reader = _MODEL_READERS.get(model_id)
     out = []
-    if ((model_config.get("surface_temp") or {}).get("status") == "confirmed"
+    temp_cfg = model_config.get("surface_temp") or {}
+    # `enabled: false` is a COST opt-out, kept separate from `status` on
+    # purpose: status records what the research verified, and the two
+    # ensembles' 2t is genuinely there and genuinely correct. Overloading
+    # status to mean "we don't want it" would falsify the record and quietly
+    # re-enable the field the moment someone re-confirmed the metadata.
+    # See the disabled_note in models.yaml for the measured numbers.
+    if (temp_cfg.get("status") == "confirmed"
+            and temp_cfg.get("enabled", True)
             and reader in _TEMP_CAPABLE_READERS):
         out.append("temp")
     if ((model_config.get("rain") or {}).get("rate") is True
