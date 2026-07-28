@@ -176,10 +176,22 @@ def bytes_per_step(model_id: str, fallback: int) -> int:
 def peak_raw_bytes(
     model_id: str, model_config: dict, run_init: datetime, chunk_hours: int, fallback: int
 ) -> int:
-    """The raw footprint this design guarantees for one in-flight run of this
-    model: one window's worth for a chunkable fetcher, one whole run for the
-    rest, plus the lookback steps a differenced field (rain - see
-    src/pipeline/fields.py) keeps alive across the window boundary."""
+    """Worst-case raw on disk for one in-flight run of this model.
+
+    THE WHOLE RUN, even for a chunkable fetcher. This used to return one
+    window's worth, describing an intent the orchestrator does not implement:
+    reclaim is not run after each chunk, it is run when the pre-fetch headroom
+    check says the NEXT window would not fit (see orchestrator.process_run).
+    Until then every fetched window stays on disk. Measured on the live VPS
+    2026-07-28: aifs_ens reached 17 GB across 61 chunks while this function
+    reported 0.26 GB - a 65x under-report, on the one model big enough to fill
+    the disk, in the number the rollout tells you to check the floor against.
+
+    What chunking actually bounds is the INCREMENT between headroom checks -
+    how much can be committed before the pipeline gets another chance to stop -
+    which print_sizing() now reports in its own column. The disk floor, not the
+    window size, is what keeps this box safe.
+    """
     from src.pipeline import fields as field_deps
     from src.pipeline import verify
 
@@ -192,15 +204,43 @@ def peak_raw_bytes(
         if verify.is_renderable(model_id)
         else 0
     )
+    # Whole run either way - see the docstring. Prefer a real measured run
+    # size where one exists; a bytes-per-step extrapolation is meaningless for
+    # the models whose files carry no step number at all (a single JSON, a
+    # GeoTIFF bundle), and merely second-best for the others.
+    measured = measured_run_bytes(model_id)
+    if measured:
+        return measured
+    whole = per_step * len(full_range_steps(model_config, run_init))
     if not is_chunkable(model_config):
-        # Not windowable, so the whole run is the unit. Prefer a real measured
-        # run size: these are the models whose files carry no step number at
-        # all (a single JSON, a GeoTIFF bundle), where a bytes-per-step figure
-        # is meaningless.
-        measured = measured_run_bytes(model_id)
-        return measured or per_step * len(full_range_steps(model_config, run_init))
-    widest = 0
-    previous = None
+        return whole
+    del carry  # only meaningful for the old one-window answer; a whole run
+    # already contains every lookback input a differenced field could want.
+    return whole
+
+
+def window_increment_bytes(
+    model_id: str, model_config: dict, run_init: datetime, chunk_hours: int, fallback: int
+) -> int:
+    """Raw committed by ONE window - what chunking actually bounds.
+
+    The pipeline checks headroom before each window and reclaims if the next
+    one would not fit, so this is the most that can be added between two
+    chances to stop. Includes the lookback steps a differenced field keeps
+    alive across the window boundary (src/pipeline/fields.py)."""
+    from src.pipeline import fields as field_deps
+    from src.pipeline import verify
+
+    per_step = bytes_per_step(model_id, fallback)
+    caps = chunk_caps(model_config, run_init, chunk_hours)
+    if not caps or not is_chunkable(model_config):
+        return 0
+    carry = (
+        field_deps.max_lookback(verify.expected_fields(model_id))
+        if verify.is_renderable(model_id)
+        else 0
+    )
+    widest, previous = 0, None
     for cap in caps:
         widest = max(widest, len(steps_in_chunk(model_config, run_init, cap, previous)))
         previous = cap

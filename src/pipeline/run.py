@@ -127,7 +127,11 @@ def print_sizing(settings, now: datetime) -> None:
     from src.fetchers.base import cycle_run_inits
 
     print("\n=== peak in-flight raw footprint per model (measured) ===")
-    print(f"{'model':<16} {'chunk':>7} {'B/step':>10} {'steps/window':>13} {'PEAK':>10}  mode")
+    print("PEAK is the WHOLE RUN: reclaim runs when the pre-fetch headroom check")
+    print("says the next window would not fit, not after every window, so fetched")
+    print("windows accumulate until then. WINDOW is what chunking does bound - the")
+    print("most that can be committed between two chances to stop.")
+    print(f"{'model':<16} {'chunk':>7} {'B/step':>10} {'WINDOW':>9} {'PEAK':>10}  mode")
     total_worst = 0
     for model_id, model_config in load_models()["models"].items():
         if "cycles" not in model_config or "fetch" not in model_config:
@@ -156,12 +160,20 @@ def print_sizing(settings, now: datetime) -> None:
         peak = chunking.peak_raw_bytes(
             model_id, model_config, run_init, ch, settings.fallback_bytes_per_step
         )
-        mode = "windowed" if chunking.is_chunkable(model_config) else "whole run (not windowable)"
-        print(f"{model_id:<16} {ch:>6}h {per_step / 1024**2:>9.0f}M {widest:>13} "
+        window = chunking.window_increment_bytes(
+            model_id, model_config, run_init, ch, settings.fallback_bytes_per_step
+        )
+        mode = (f"windowed, {widest} step(s)/window" if chunking.is_chunkable(model_config)
+                else "whole run (not windowable)")
+        win_s = f"{window / 1024**3:>8.2f}G" if window else "       -"
+        print(f"{model_id:<16} {ch:>6}h {per_step / 1024**2:>9.0f}M {win_s} "
               f"{peak / 1024**3:>9.2f}G  {mode}")
         total_worst = max(total_worst, peak)
     print(f"\nworst single in-flight run (reclaimable models): "
           f"{total_worst / 1024**3:.2f} GB (disk floor {settings.min_free_gb} GB on top)")
+    print("The floor is the real guarantee: the headroom check reclaims before "
+          "fetching a\nwindow that would breach it. This figure says how much "
+          "free space a single run\ncan consume before that happens.")
 
 
 def main() -> None:
