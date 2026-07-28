@@ -901,6 +901,18 @@ _COMPOSITE_SUBFIELDS = {
 _CLOUD_GAMMA = 0.40
 _PROB_GAMMA = 0.60
 
+# Which cloud level lights which RGB channel in the composite. A module
+# constant rather than three literals inside the render call, because the
+# colorbar has to state exactly this mapping - and a legend that disagrees
+# with the map is worse than no legend. Order is high/mid/low: high is drawn
+# into red, and the totality band is red too, which is why the band is drawn
+# on top with a distinct linestyle rather than by hue alone.
+_COMPOSITE_CHANNELS = (
+    ("high", (1.0, 0.0, 0.0)),
+    ("mid", (0.0, 0.65, 0.0)),
+    ("low", (0.0, 0.3, 1.0)),
+)
+
 
 def _gamma_for_field(field: str) -> float:
     return _PROB_GAMMA if field.startswith("prob_") else _CLOUD_GAMMA
@@ -1207,11 +1219,10 @@ def _render_composite_frame(
     b_alpha = np.clip(lval / 100, 0, 1) ** gamma
 
     canvas = np.ones(r_alpha.shape + (3,))
-    for alpha, color in (
-        (r_alpha, np.array([1.0, 0.0, 0.0])),   # high -> red
-        (g_alpha, np.array([0.0, 0.65, 0.0])),  # mid  -> green
-        (b_alpha, np.array([0.0, 0.3, 1.0])),   # low  -> blue
+    for alpha, (_level, rgb) in zip(
+        (r_alpha, g_alpha, b_alpha), _COMPOSITE_CHANNELS, strict=True
     ):
+        color = np.array(rgb)
         canvas = canvas * (1 - alpha[..., None]) + color * alpha[..., None]
 
     # imshow needs ascending lat order with origin="lower" to place
