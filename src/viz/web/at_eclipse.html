@@ -244,7 +244,6 @@
     flex-direction: column; gap: 4px; color: #7a776c; font-size: 12px;
     padding: 6px; box-sizing: border-box;
   }
-  #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
   #mapArea .placeholder-tag { font-size: 9.5px; color: #a8a498; text-transform: uppercase; letter-spacing: 0.09em; }
   #mapAreaImg {
     max-width: 100%;
@@ -406,8 +405,6 @@
     </div>
     <img id="legendImg" class="legendBar" alt="">
   </div>
-  <div class="big" id="mapAreaTitle"></div>
-  <div id="mapAreaSub">—</div>
 </div>
 
 <div id="gallery"></div>
@@ -612,8 +609,6 @@ function setMapTag(text) {
   mapAreaTag.style.display = text ? "" : "none";
 }
 const mapAreaImg = document.getElementById("mapAreaImg");
-const mapAreaTitle = document.getElementById("mapAreaTitle");
-const mapAreaSub = document.getElementById("mapAreaSub");
 const galleryEl = document.getElementById("gallery");
 
 let builtRows = []; // [{model, row, track, ticks: [{run, el}]}]
@@ -929,7 +924,6 @@ function applyQuantityMode(mode) {
 // (the short version the small gallery cells show) - the prob/temp
 // explanations are far too long to read inside a 160px cell.
 function describeRunAtTarget(model, run) {
-  const title = model.label + " · run " + fmtTime(run.runInit);
   const td = targetData(run); // never read covers/images/has_data off `run`
 
   // Answered before the coverage check on purpose: "this model has no such
@@ -938,21 +932,14 @@ function describeRunAtTarget(model, run) {
   if (!modelSupportsMode(model.id, quantityMode)) {
     const isTemp = quantityMode === "temp";
     return {
-      covers: td.covers, hasImage: false, imageUrl: null, rainUrl: null, title,
-      sub: isTemp ? "no temperature frames for this model yet" : PROB_HML_GAP,
+      covers: td.covers, hasImage: false, imageUrl: null, rainUrl: null,
       note: isTemp ? "no temp frames yet" : "no cloud prob. data",
     };
   }
 
   if (!td.covers) {
-    const gapH = Math.round((TARGET_VALID_TIME - run.runInit) / 3600000);
     return {
-      covers: false, hasImage: false, imageUrl: null, rainUrl: null, title,
-      sub: gapH >= 0
-        ? "run doesn't reach the target valid time yet (needs +" + gapH + "h)"
-        // Can only happen if the manifest's target has drifted behind an
-        // archived run - not a state today, but cheaper to word than to debug.
-        : "target valid time is " + Math.abs(gapH) + "h before this run's init",
+      covers: false, hasImage: false, imageUrl: null, rainUrl: null,
       note: "not yet covering",
     };
   }
@@ -964,21 +951,12 @@ function describeRunAtTarget(model, run) {
   const url = field ? td.images[field] : null;
   const rainUrl = (td.images || {}).rain || null;
 
-  // The nearest published step rarely lands exactly on the target valid time
-  // (misalignment_h); showing both makes it obvious when a frame is really
-  // an hour or two off rather than exactly at T.
-  let stamp = "valid " + fmtTime(TARGET_VALID_TIME);
-  if (td.step !== null && td.step !== undefined) stamp += "  ·  step +" + td.step + "h";
-  if (td.misalignmentH) stamp += " (" + td.misalignmentH + "h off)";
-
   return {
     covers: true,
     hasImage: !!url,
     imageUrl: url,
     rainUrl,
     field,
-    title,
-    sub: url ? stamp + "  ·  field: " + field : "no rendered frame for this run",
     note: url ? "" : "no rendered frame",
   };
 }
@@ -1064,8 +1042,6 @@ function updateUI() {
     setMapTag("click a row");
     mapAreaImg.style.display = "none";
     showLegendFor(null);
-    mapAreaTitle.textContent = "";
-    mapAreaSub.textContent = "—";
     return;
   }
   const { model } = builtRows[clickedRowIdx];
@@ -1074,8 +1050,6 @@ function updateUI() {
     setMapTag("no run in view");
     mapAreaImg.style.display = "none";
     showLegendFor(null);
-    mapAreaTitle.textContent = model.label;
-    mapAreaSub.textContent = "the extent slider has hidden every archived run of this model";
     return;
   }
   const info = describeRunAtTarget(model, run);
@@ -1093,8 +1067,6 @@ function updateUI() {
     mapAreaImg.style.display = "none";
     showLegendFor(null);
   }
-  mapAreaTitle.textContent = info.title;
-  mapAreaSub.textContent = info.sub;
 }
 
 function timeFromClientX(clientX) {

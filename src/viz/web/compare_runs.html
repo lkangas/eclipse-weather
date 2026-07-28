@@ -294,7 +294,6 @@
     padding: 6px;
     box-sizing: border-box;
   }
-  #mapArea .big { font-size: 14px; color: #232320; font-weight: 700; }
   #mapArea .placeholder-tag {
     font-size: 9.5px;
     color: #a8a498;
@@ -418,8 +417,6 @@
     </div>
     <img id="legendImg" class="legendBar" alt="">
   </div>
-  <div class="big" id="mapAreaTitle"></div>
-  <div id="mapAreaSub">—</div>
 </div>
 
 <script>
@@ -561,8 +558,6 @@ function showLegendFor(field) {
   legendImg.style.display = "block";
 }
 
-const mapAreaTitle = document.getElementById("mapAreaTitle");
-const mapAreaSub = document.getElementById("mapAreaSub");
 
 let builtRows = []; // [{run, track}], newest-on-top order — populated per model load
 
@@ -925,8 +920,6 @@ function updateCursorUI() {
     setMapTag("select a run");
     mapAreaImg.style.display = "none";
     showLegendFor(null);
-    mapAreaTitle.textContent = "";
-    mapAreaSub.textContent = "—";
     return;
   }
 
@@ -938,7 +931,6 @@ function updateCursorUI() {
   const field = resolveField(images, hasDataFlags, quantityMode);
   const url = field ? images[field] : null;
 
-  mapAreaTitle.textContent = MODELS[selectedModelId].label + " · run " + fmtTime(run.runInit);
   if (url) {
     setMapTag("");
     mapAreaImg.src = url;
@@ -948,16 +940,10 @@ function updateCursorUI() {
       mapAreaRainImg.src = images.rain;
       mapAreaRainImg.style.display = "block";
     }
-    mapAreaSub.textContent = "step +" + step + "h  ·  valid " + fmtTime(stepValidTime(run, step)) + "  ·  field: " + field;
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
     showLegendFor(null);
-    mapAreaSub.textContent = step === null
-      ? "no step available"
-      : (modelSupportsMode(selectedModelId, quantityMode)
-          ? "no rendered frame for this step"
-          : PROB_HML_GAP);
   }
 }
 
