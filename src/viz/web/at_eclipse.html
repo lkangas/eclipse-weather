@@ -854,9 +854,24 @@ function nearestRun(model, targetTime) {
   // to show for it.
   const visible = model.runs.filter(r => r.runInit - AXIS_START <= axisRightMs);
   if (!visible.length) return null;
-  return visible.reduce((best, r) =>
+  const closest = pool => pool.reduce((best, r) =>
     Math.abs(r.runInit - targetTime) < Math.abs(best.runInit - targetTime) ? r : best
   );
+
+  // Prefer runs that actually REACH the target. gefs_extended interleaves
+  // ordinary short runs between its extended ones, and by init time alone the
+  // cursor kept landing on a short one - which has no frame at the target, so
+  // the map blanked and came back as you dragged. The highlighted tick and the
+  // displayed map are the same decision, so making that decision
+  // coverage-aware fixes both: the cursor now only ever settles on a tick that
+  // has something to show.
+  const covering = visible.filter(r => targetData(r).covers);
+
+  // Fall back to the nearest run overall when NOTHING covers yet. That is a
+  // real state early in a model's life, and it must keep reading as "this run
+  // doesn't reach the target yet" rather than silently becoming "no run in
+  // view", which would be a different and wrong claim.
+  return covering.length ? closest(covering) : closest(visible);
 }
 
 function selectRowForSingleView(idx) {
