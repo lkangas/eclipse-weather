@@ -65,16 +65,30 @@
   td.n { text-align:right; }
   /* Lifecycle matrix: one labelled cell per cycle slot, oldest at the left so
      the row reads left-to-right the way the pipeline actually runs. */
-  .cov { display:flex; gap:2px; flex-wrap:nowrap; }
-  .cov span { font-size:9px; line-height:14px; height:14px; min-width:26px; text-align:center;
-              flex:none; border:1px solid transparent; box-sizing:border-box; letter-spacing:-.02em; }
+  /* position:relative so the NOW marker can be an absolute overlay - see below. */
+  .cov { display:flex; gap:2px; flex-wrap:nowrap; position:relative; }
+  /* FIXED width, not min-width: the 6h rows are aligned by counting cells, so a
+     cell that grew to fit its label would slide every row after it out of step. */
+  .cov span { font-size:9px; line-height:14px; height:14px; width:26px; text-align:center;
+              flex:none; border:1px solid transparent; box-sizing:border-box; letter-spacing:-.02em;
+              overflow:hidden; }
+  /* A 6h slot this model has no run for. Holds the column open so 12Z sits under
+     12Z in every 6-hourly row - gem_global runs only 00/12Z, and without these
+     its 12Z would sit wherever its 4 cells happened to fall. */
+  .cov span.slotgap { background:transparent; border-color:transparent; }
   /* Day boundary: a gap, so the hour labels have some time context without a
      header row that would not line up anyway (models run different cadences). */
   .cov span.newday { margin-left:7px; }
   /* NOW. Without it the row is just a list of states with no present moment,
-     and "what happens next" is not answerable from it at all. */
-  .cov b.now { flex:none; width:0; border-left:2px solid var(--warn); height:18px;
-               margin:0 3px; align-self:center; }
+     and "what happens next" is not answerable from it at all.
+     ABSOLUTELY POSITIONED, so it costs no horizontal space. As an inline flex
+     item it pushed everything after it sideways, and since each model crosses
+     into the future at its own slot (publication lag differs), that pushed each
+     row by a different amount - which is exactly the alignment being fixed
+     here. Now every row can keep its own marker position without disturbing
+     the grid. */
+  .cov b.now { position:absolute; top:50%; transform:translateY(-50%);
+               width:0; border-left:2px solid var(--warn); height:18px; }
   .nextcol { font-size:10px; white-space:nowrap; }
   .nextcol .due { color:var(--dim); }
   .nextcol .late { color:var(--warn); font-weight:700; }
@@ -452,24 +466,78 @@ function coverage(cov, activity) {
   // colour makes them findable in place.
   const rows = Object.entries(cov.models).sort((a, b) => a[0].localeCompare(b[0]));
 
+  // ---- shared 6-hourly slot grid -------------------------------------------
+  // Every model but arome_france runs on 00/06/12/18Z, so their columns can be
+  // one common time axis and 12Z reads straight down the page. Laid out per
+  // model instead, each row started at its own oldest run and nothing lined up,
+  // which made comparing two models at the same cycle a counting exercise.
+  //
+  // Membership is derived from the DATA, not a model list: a row qualifies if
+  // every run it has sits on a 6h boundary. gem_global runs only 00/12Z and
+  // still qualifies - it simply leaves 06/18Z empty, which is the point.
+  const SIX_H = 6 * 3600e3;
+  const isSixHourly = rs => rs.length > 0 && rs.every(r => {
+    const d = new Date(r.run_init);
+    return d.getUTCHours() % 6 === 0 && d.getUTCMinutes() === 0;
+  });
+  let slotMin = Infinity, slotMax = -Infinity;
+  rows.forEach(([, rs]) => {
+    if (!isSixHourly(rs)) return;
+    rs.forEach(r => {
+      const t = new Date(r.run_init).getTime();
+      if (t < slotMin) slotMin = t;
+      if (t > slotMax) slotMax = t;
+    });
+  });
+  const SLOTS = [];
+  if (slotMin <= slotMax) {
+    for (let t = slotMin; t <= slotMax; t += SIX_H) SLOTS.push(t);
+  }
+
+  // Cell geometry, mirrored from the CSS above so the NOW overlay can be placed
+  // in pixels. Kept together here rather than measured from the DOM: the row is
+  // rebuilt on every poll and a forced reflow per row per second is not worth a
+  // marker's position.
+  const CELL_W = 26, GAP = 2, NEWDAY_GAP = 7;
+
   $("cov").innerHTML = rows.map(([mid, rs]) => {
     let done = 0, prevDay = null, dividerDone = false;
     const cells = [];
-    rs.forEach(r => {
-      const st = r.state;                       // disk state, never overwritten
+    let x = 0, nowLeft = null;               // running left offset, in px
+
+    // arome_france is 3-hourly, so it has no place on the 6h grid. Per the
+    // brief it just runs from the left; only the aligned rows need to agree.
+    const aligned = isSixHourly(rs) && SLOTS.length > 0;
+    const byTime = new Map(rs.map(r => [new Date(r.run_init).getTime(), r]));
+    const seq = aligned ? SLOTS.map(t => byTime.get(t) || {slot: t}) : rs;
+
+    seq.forEach(item => {
+      const day = item.run_init ? item.day
+                : new Date(item.slot).toISOString().slice(5, 10);
+      const nd = prevDay && day !== prevDay ? " newday" : "";
+      if (nd) x += NEWDAY_GAP;
+      prevDay = day;
+
+      if (!item.run_init) {                  // empty slot: hold the column open
+        cells.push(`<span class="slotgap${nd}"></span>`);
+        x += CELL_W + GAP;
+        return;
+      }
+      const r = item;
+      const st = r.state;                    // disk state, never overwritten
       const busy = liveKey === mid + "|" + r.run_init ? livePhase : null;
       if (st === "done") done++;
       // The present sits between the last past run and the first future one.
-      if (!dividerDone && st === "future") { cells.push('<b class="now" title="now"></b>'); dividerDone = true; }
+      if (!dividerDone && st === "future") { nowLeft = x - GAP / 2; dividerDone = true; }
       const tip = `${r.day} ${r.hour} — ${st}` +
         (busy ? ` · ${busy} NOW` : "") +
         (r.frames ? `, ${r.frames} frame(s)` : "") +
         (r.raw_files ? `, ${r.raw_files} raw file(s)` : "");
-      const nd = prevDay && r.day !== prevDay ? " newday" : "";
-      prevDay = r.day;
       cells.push(`<span class="st-${st}${nd}${busy ? " working" : ""}" title="${tip}">${r.hour}</span>`);
+      x += CELL_W + GAP;
     });
-    if (!dividerDone) cells.push('<b class="now" title="now"></b>');
+    if (!dividerDone) nowLeft = x - GAP / 2;
+    cells.push(`<b class="now" title="now" style="left:${Math.max(0, nowLeft)}px"></b>`);
 
     // What this model is waiting on, or when its next run lands.
     const n = nextUp[mid] || {};
