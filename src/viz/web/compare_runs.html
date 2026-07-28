@@ -157,15 +157,27 @@
   .row.selected .rowLabel { color: #232320; font-weight: 700; }
   .rowLabel .age { color: #a8a498; margin-left: 4px; }
   .row.selected .rowLabel .age { color: #8a7a5a; }
+  /* Reads as a BUTTON, not as a faint glyph. It was 8px of #a8a498 - the same
+     grey as disabled text - so it looked like decoration and was easy to miss
+     entirely. The row is 13px and that height is load-bearing (layoutTicks
+     aligns ticks to it), so the chip is 11px and centred rather than the row
+     being grown to suit it. */
   .preloadBtn {
     width: 22px;
+    height: 11px;
+    align-self: center;
     flex: none;
-    font-size: 8px;
+    font-size: 9.5px;
+    line-height: 10px;
     text-align: center;
-    color: #a8a498;
+    color: #4a4638;
+    background: #e6e1d2;
+    border: 1px solid #c4bda9;
+    border-radius: 2px;
     cursor: pointer;
     font-variant-numeric: tabular-nums;
     position: relative;
+    box-sizing: border-box;
   }
   /* Invisible enlarged hit-box for touch - the 13px row height is load-bearing
      elsewhere (tick alignment in layoutTicks), so grow the tap target via an
@@ -179,9 +191,14 @@
     left: -4px;
     right: -4px;
   }
-  .preloadBtn:hover { color: #232320; }
-  .preloadBtn.loading { color: #8b3a2f; }
-  .preloadBtn.done { color: #2f6f3f; }
+  .preloadBtn:hover { color: #fff; background: #232320; border-color: #232320; }
+  /* Filled while working and when done, so progress is legible across the
+     whole column at a glance instead of needing the number read. The
+     percentage drops a point to keep "100%" inside 22px. */
+  .preloadBtn.loading {
+    color: #fff; background: #8b3a2f; border-color: #8b3a2f; font-size: 7.5px;
+  }
+  .preloadBtn.done { color: #fff; background: #2f6f3f; border-color: #2f6f3f; }
   .rowTrack {
     position: relative;
     flex: 1;
