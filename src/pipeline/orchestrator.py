@@ -138,26 +138,45 @@ def _reclaim_run(
                      c.path, c.bytes / 1024**2, c.steps)
 
 
-def _frames_complete(model_id: str, run_init: datetime) -> bool:
-    """Does this run already have frames for every field, across essentially
-    all its declared steps? Cheap: directory listings only, no raw touched."""
+def _frames_complete(model_id: str, run_init: datetime,
+                     now: datetime | None = None) -> bool:
+    """Does this run already have every frame it can produce?
+
+    Cheap: directory listings only, no raw touched.
+
+    The rule lives in src/pipeline/completeness.py and is shared with the
+    dashboard - this used to hold its own hardcoded 0.9 while coverage.py held
+    COMPLETE_FRACTION, two copies of a judgement that has to agree. It is also
+    no longer a fraction: 90% of gefs_extended's declared steps is more than
+    its whole extended range, so a run missing +432..+480h read as done and was
+    skipped with fetch=False while the data sat on AWS.
+    """
     from src.config import get_model
     from src.fetchers.base import full_range_steps
+    from src.pipeline import completeness
     from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
     fields = supported_fields(model_id)
     if not fields:
         return False
-    expected = len(full_range_steps(get_model(model_id), run_init)) or 1
+    declared = full_range_steps(get_model(model_id), run_init)
     stamp = f"{run_init:%Y%m%d%H}_"
+    frames: dict[str, set[int]] = {}
     for fld in fields:
         d = OUTPUT_DIR / model_id / fld
         if not d.is_dir():
             return False
-        n = sum(1 for p in d.iterdir() if p.name.startswith(stamp))
-        if n < expected * 0.9:
-            return False
-    return True
+        steps = set()
+        for p in d.iterdir():
+            if not p.name.startswith(stamp) or p.suffix != ".png":
+                continue
+            try:
+                steps.add(int(p.stem.split("_", 1)[1]))
+            except (IndexError, ValueError):
+                continue
+        frames[fld] = steps
+    return completeness.is_complete(
+        model_id, run_init, declared, frames, fields, now or datetime.now(UTC))
 
 
 def _maybe_extract(
@@ -431,7 +450,7 @@ def run_once(
         # is the DESKTOP's job: anything needing raw (point series,
         # line-of-sight) is developed there, where raw is kept, and backfilled
         # to the VPS. Production renders maps.
-        if _frames_complete(model_id, run_init):
+        if _frames_complete(model_id, run_init, now):
             outcome = process_run(model_id, model_config, run_init, settings,
                                   apply=apply, now=now, fetch=False)
             result.outcomes.append(outcome)

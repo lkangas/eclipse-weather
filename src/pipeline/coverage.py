@@ -25,14 +25,18 @@ LOOKBACK_H = 48
 # already, and a pass can legitimately take a while to reach a given model.
 OVERDUE_AFTER_H = 3.0
 
-# Proportion of a run's declared steps that must have frames before it counts
-# as rendered. Not 1.0: a step that publishes nothing produces no frame by
-# design, so a healthy gfs run lands at 208/209.
-COMPLETE_FRACTION = 0.9
+# COMPLETE_FRACTION is gone. It was 0.9 - "a run is rendered when 90% of its
+# declared steps have frames" - and 10% of a run is not a small number of
+# steps: gefs_extended's entire +385..+840h range fits inside it. See
+# src/pipeline/completeness.py for what replaced it and why.
 
 
-def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
-    """{run_stamp: {field: n_frames}} from ONE listing per field directory.
+def _frame_index(model_id: str) -> dict[str, dict[str, set[int]]]:
+    """{run_stamp: {field: {steps}}} from ONE listing per field directory.
+
+    Step SETS rather than counts: completeness is now exact per step (see
+    src/pipeline/completeness.py), and a count cannot answer "which steps are
+    missing". Same single listing either way.
 
     The obvious implementation - ask "does this run have frames?" per run, per
     field - re-lists a directory holding thousands of files once per question,
@@ -41,7 +45,7 @@ def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
     while a long pass is still running.
     """
     from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
-    idx: dict[str, dict[str, int]] = {}
+    idx: dict[str, dict[str, set[int]]] = {}
     for field in supported_fields(model_id):
         d = OUTPUT_DIR / model_id / field
         if not d.is_dir():
@@ -49,9 +53,14 @@ def _frame_index(model_id: str) -> dict[str, dict[str, int]]:
         for p in d.iterdir():
             if p.suffix != ".png":
                 continue
-            stamp = p.name.split("_", 1)[0]
-            idx.setdefault(stamp, {})
-            idx[stamp][field] = idx[stamp].get(field, 0) + 1
+            parts = p.stem.split("_", 1)
+            if len(parts) != 2:
+                continue
+            try:
+                step = int(parts[1])
+            except ValueError:
+                continue
+            idx.setdefault(parts[0], {}).setdefault(field, set()).add(step)
     return idx
 
 
@@ -147,6 +156,7 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         due_time,
         full_range_steps,
     )
+    from src.pipeline import completeness
     from src.viz.frame_renderer import _MODEL_READERS, supported_fields
 
     now = now or datetime.now(UTC)
@@ -156,24 +166,23 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         if "cycles" not in cfg or "fetch" not in cfg:
             continue
         renderable = model_id in _MODEL_READERS
-        n_fields = len(supported_fields(model_id)) if renderable else 0
+        fields = supported_fields(model_id) if renderable else []
         index = _frame_index(model_id) if renderable else {}
         rows = []
         for run_init in cycle_run_inits(cfg["cycles"], now, lookback_hours=lookback_h):
             due = due_time(cfg.get("publication_lag_h", [0, 0]), run_init)
             per_field = index.get(f"{run_init:%Y%m%d%H}", {})
-            frames = sum(per_field.values())
+            frames = sum(len(v) for v in per_field.values())
             raw_n, tombstoned = _raw_state(model_id, run_init)
-            # Completeness has to be about STEPS, not fields. "every field has
-            # at least one frame" called a run complete after its first chunk
-            # of 17, so a run 6% processed looked finished. Steps that
-            # genuinely publish nothing produce no frame by design (gfs f000),
-            # so this is a proportion rather than equality.
-            expected = len(full_range_steps(cfg, run_init)) or 1
-            complete = (
-                renderable and n_fields and len(per_field) == n_fields
-                and min(per_field.values()) >= expected * COMPLETE_FRACTION
-            )
+            # Completeness is about STEPS, exactly - see
+            # src/pipeline/completeness.py, which the orchestrator uses for the
+            # same judgement. It used to be a 0.9 proportion here and a
+            # separate hardcoded 0.9 there; the tolerance was wide enough to
+            # swallow gefs_extended's whole extended range, so a run missing
+            # +432..+480h read "done" and was never fetched again.
+            declared = full_range_steps(cfg, run_init)
+            complete = renderable and completeness.is_complete(
+                model_id, run_init, declared, per_field, fields, now)
             # NO unproducible/"sealed" branch here, deliberately. Adding a
             # field to a model makes every already-rendered run incomplete -
             # 71 of them the moment gfs/gefs gained temp and rain - and the
