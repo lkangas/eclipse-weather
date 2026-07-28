@@ -294,7 +294,21 @@
     width: 100%; height: 100%; object-fit: contain; display: none;
   }
   .galleryCell .cellRainImg { position: absolute; inset: 0; pointer-events: none; }
-  #mapAreaStack { position: relative; flex: 1 1 0; min-height: 0; display: flex; justify-content: center; }
+  /* Row owns the flexible height; the stack keeps its own centring so the
+     rain overlay stays registered with the base image. Legend is a SIBLING,
+     sized by height (width auto) - the bar is 451 px tall, exactly a frame,
+     so equal height means it lines up by construction.
+     GALLERY VIEW GETS NO LEGEND: with a dozen models on screen the bar would
+     repeat a dozen times, and the cells are far too small for it to be read. */
+  #mapRow {
+    display: flex; align-items: stretch; justify-content: center;
+    gap: 4px; flex: 1 1 0; min-height: 0;
+  }
+  .legendBar {
+    height: 100%; width: auto; flex: 0 0 auto;
+    object-fit: contain; display: none;
+  }
+  #mapAreaStack { position: relative; flex: 1 1 0; min-height: 0; min-width: 0; display: flex; justify-content: center; }
   #mapAreaRainImg {
     position: absolute; inset: 0; margin: auto;
     max-width: 100%; max-height: 100%; width: auto;
@@ -385,9 +399,12 @@
 
 <div id="mapArea" style="display:none;">
   <div class="placeholder-tag" id="mapAreaTag">click a row</div>
-  <div id="mapAreaStack">
-    <img id="mapAreaImg" alt="">
-    <img id="mapAreaRainImg" alt="">
+  <div id="mapRow">
+    <div id="mapAreaStack">
+      <img id="mapAreaImg" alt="">
+      <img id="mapAreaRainImg" alt="">
+    </div>
+    <img id="legendImg" class="legendBar" alt="">
   </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
@@ -560,6 +577,26 @@ const legendTarget = document.getElementById("legendTarget");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
 const rainCheckbox = document.getElementById("rainCheckbox");
 const mapAreaRainImg = document.getElementById("mapAreaRainImg");
+const legendImg = document.getElementById("legendImg");
+
+// Legend belongs to a rendered FIELD, not to the quantity mode: cloud cover
+// resolves to hml_composite on most models but to plain `total` on the three
+// without native levels, and `total` deliberately has none. Cloud and
+// cloud-probability share one bar - identical level->hue mapping, and the bar
+// is categorical so their differing gamma never enters it.
+const LEGEND_BY_FIELD = {
+  hml_composite: "_legend/cloud_levels.png",
+  prob_hml_composite: "_legend/cloud_levels.png",
+  temp: "_legend/temp.png",
+};
+
+function showLegendFor(field) {
+  if (!legendImg) return;
+  const src = LEGEND_BY_FIELD[field];
+  if (!src) { legendImg.style.display = "none"; return; }
+  if (!legendImg.src.endsWith(src)) legendImg.src = src;
+  legendImg.style.display = "block";
+}
 const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
@@ -939,6 +976,7 @@ function describeRunAtTarget(model, run) {
     hasImage: !!url,
     imageUrl: url,
     rainUrl,
+    field,
     title,
     sub: url ? stamp + "  ·  field: " + field : "no rendered frame for this run",
     note: url ? "" : "no rendered frame",
@@ -986,6 +1024,7 @@ function updateUI() {
     });
   });
   if (viewMode === "gallery") {
+    showLegendFor(null);   // one bar per cell would be a dozen unreadable copies
     galleryCells.forEach(({ model, cell, imgEl, rainImgEl, bodyEl }) => {
       const run = nearestRun(model, cursorTime);
       // Dim the models that can't answer the current quantity at all (Cloud
@@ -1024,6 +1063,7 @@ function updateUI() {
   if (clickedRowIdx === null || !builtRows[clickedRowIdx]) {
     setMapTag("click a row");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     mapAreaTitle.textContent = "";
     mapAreaSub.textContent = "—";
     return;
@@ -1033,6 +1073,7 @@ function updateUI() {
   if (!run) {
     setMapTag("no run in view");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     mapAreaTitle.textContent = model.label;
     mapAreaSub.textContent = "the extent slider has hidden every archived run of this model";
     return;
@@ -1042,6 +1083,7 @@ function updateUI() {
     setMapTag("");
     mapAreaImg.src = info.imageUrl;
     mapAreaImg.style.display = "block";
+    showLegendFor(info.field);
     if (rainOn && info.rainUrl) {
       mapAreaRainImg.src = info.rainUrl;
       mapAreaRainImg.style.display = "block";
@@ -1049,6 +1091,7 @@ function updateUI() {
   } else {
     setMapTag(info.covers ? "not available" : "not yet covering");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
   }
   mapAreaTitle.textContent = info.title;
   mapAreaSub.textContent = info.sub;

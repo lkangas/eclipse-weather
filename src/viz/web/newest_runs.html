@@ -310,12 +310,33 @@
      the same size, so exact overlap needs no positioning maths - only that
      the two <img> boxes resolve identically, which is why they share a
      wrapper and both use object-fit: contain. */
+  /* The ROW owns the flexible height now; the stack fills it. The legend is a
+     sibling rather than a child so it is never covered by the rain overlay,
+     and sizing by HEIGHT (width auto) is what keeps it the same height as the
+     map at any window size - the bar is rendered 451 px tall, exactly a
+     frame's height, so at equal height it lines up by construction. */
+  #mapRow {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 4px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
   #mapStack {
     position: relative;
     flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
     display: flex;
     justify-content: center;
+  }
+  .legendBar {
+    height: 100%;
+    width: auto;
+    flex: 0 0 auto;
+    object-fit: contain;
+    display: none;
   }
   #mapRainImg {
     position: absolute;
@@ -384,9 +405,12 @@
 
 <div id="mapArea">
   <div class="placeholder-tag" id="mapAreaTag">loading manifest…</div>
-  <div id="mapStack">
-    <img id="mapAreaImg" alt="">
-    <img id="mapRainImg" alt="" aria-hidden="true">
+  <div id="mapRow">
+    <div id="mapStack">
+      <img id="mapAreaImg" alt="">
+      <img id="mapRainImg" alt="" aria-hidden="true">
+    </div>
+    <img id="legendImg" class="legendBar" alt="">
   </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
@@ -486,6 +510,29 @@ const mapAreaSub = document.getElementById("mapAreaSub");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
 const mapRainImg = document.getElementById("mapRainImg");
 const rainCheckbox = document.getElementById("rainCheckbox");
+const legendImg = document.getElementById("legendImg");
+
+// Which legend belongs to a rendered FIELD - not to the quantity mode. The
+// distinction matters for cloud cover, which resolves to hml_composite on most
+// models but to plain `total` on the three with no native levels, and `total`
+// deliberately has no legend: a Blues ramp of "cloud, 0-100 %" tells a reader
+// nothing the map does not. Cloud and cloud-probability share one bar because
+// the level->hue mapping is identical; only the gamma differed, and the bar is
+// categorical so gamma never enters it.
+const LEGEND_BY_FIELD = {
+  hml_composite: "_legend/cloud_levels.png",
+  prob_hml_composite: "_legend/cloud_levels.png",
+  temp: "_legend/temp.png",
+};
+
+function showLegendFor(field) {
+  const src = LEGEND_BY_FIELD[field];
+  if (!src) { legendImg.style.display = "none"; return; }
+  // Assign once: reassigning an identical src still restarts decoding in some
+  // browsers, and this runs on every cursor move.
+  if (!legendImg.src.endsWith(src)) legendImg.src = src;
+  legendImg.style.display = "block";
+}
 const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
@@ -794,6 +841,7 @@ function updateCursorUI() {
   if (!selectedModel) {
     setMapTag("select a model");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     setMapText(mapAreaTitle, "");
     setMapText(mapAreaSub, "—");
     return;
@@ -823,6 +871,7 @@ function updateCursorUI() {
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
+    showLegendFor(field);
     const rainUrl = rainOn && modelHasRain && images ? images.rain : null;
     if (rainUrl) {
       mapRainImg.src = rainUrl;
@@ -836,6 +885,7 @@ function updateCursorUI() {
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     mapRainImg.style.display = "none";
     setMapText(mapAreaTitle, model.label);
     setMapText(mapAreaSub, step === null

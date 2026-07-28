@@ -306,10 +306,32 @@
      needs no arithmetic - both are the same bbox at the same size - but it
      DOES need the two boxes to resolve identically, hence one sizing rule
      applied to both and object-fit: contain on each. */
+  /* The ROW owns the flexible height; the stack keeps its own centring so the
+     rain overlay (absolutely positioned inside it) stays registered with the
+     base image. Legend is a SIBLING of the stack, never a child, so the
+     overlay can never cover it. Sized by HEIGHT with width auto: the bar is
+     rendered 451 px tall, exactly a frame's height, so at equal height it
+     lines up with the map by construction rather than by tuning. */
+  #mapRow {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    gap: 4px;
+    flex: 1 1 0;
+    min-height: 0;
+  }
+  .legendBar {
+    height: 100%;
+    width: auto;
+    flex: 0 0 auto;
+    object-fit: contain;
+    display: none;
+  }
   #mapAreaStack {
     position: relative;
     flex: 1 1 0;
     min-height: 0;
+    min-width: 0;
     display: flex;
     justify-content: center;
   }
@@ -389,9 +411,12 @@
 
 <div id="mapArea">
   <div class="placeholder-tag" id="mapAreaTag">select a run</div>
-  <div id="mapAreaStack">
-    <img id="mapAreaImg" alt="">
-    <img id="mapAreaRainImg" alt="">
+  <div id="mapRow">
+    <div id="mapAreaStack">
+      <img id="mapAreaImg" alt="">
+      <img id="mapAreaRainImg" alt="">
+    </div>
+    <img id="legendImg" class="legendBar" alt="">
   </div>
   <div class="big" id="mapAreaTitle"></div>
   <div id="mapAreaSub">—</div>
@@ -514,6 +539,28 @@ function setMapTag(text) {
 }
 const mapAreaImg = document.getElementById("mapAreaImg");
 const mapAreaRainImg = document.getElementById("mapAreaRainImg");
+const legendImg = document.getElementById("legendImg");
+
+// Which legend belongs to a rendered FIELD, not to the quantity mode. Cloud
+// cover resolves to hml_composite on most models but to plain `total` on the
+// three without native levels, and `total` deliberately has no legend - a
+// Blues ramp of "cloud, 0-100 %" tells a reader nothing the map does not.
+// Cloud and cloud-probability share one bar: the level->hue mapping is
+// identical, only the gamma differed, and the bar is categorical.
+const LEGEND_BY_FIELD = {
+  hml_composite: "_legend/cloud_levels.png",
+  prob_hml_composite: "_legend/cloud_levels.png",
+  temp: "_legend/temp.png",
+};
+
+function showLegendFor(field) {
+  if (!legendImg) return;
+  const src = LEGEND_BY_FIELD[field];
+  if (!src) { legendImg.style.display = "none"; return; }
+  if (!legendImg.src.endsWith(src)) legendImg.src = src;
+  legendImg.style.display = "block";
+}
+
 const mapAreaTitle = document.getElementById("mapAreaTitle");
 const mapAreaSub = document.getElementById("mapAreaSub");
 
@@ -877,6 +924,7 @@ function updateCursorUI() {
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) {
     setMapTag("select a run");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     mapAreaTitle.textContent = "";
     mapAreaSub.textContent = "—";
     return;
@@ -895,6 +943,7 @@ function updateCursorUI() {
     setMapTag("");
     mapAreaImg.src = url;
     mapAreaImg.style.display = "block";
+    showLegendFor(field);
     if (rainOn && modelHasRain && images.rain) {
       mapAreaRainImg.src = images.rain;
       mapAreaRainImg.style.display = "block";
@@ -903,6 +952,7 @@ function updateCursorUI() {
   } else {
     setMapTag("not available");
     mapAreaImg.style.display = "none";
+    showLegendFor(null);
     mapAreaSub.textContent = step === null
       ? "no step available"
       : (modelSupportsMode(selectedModelId, quantityMode)
