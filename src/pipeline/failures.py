@@ -40,7 +40,41 @@ DEAD_AFTER_ATTEMPTS = 3
 
 # A dead step is retried once a day even so: upstream backfills happen, and a
 # permanent skip would turn a transient outage into permanent data loss.
+#
+# 24 h is longer than what is left of a 48 h top-up window once a step has been
+# tried three times, so on its own this retry can fall OUTSIDE the window and
+# never happen. That is survivable only because _not_yet_published() below
+# stops the late-publishing case reaching here at all; if that gate is ever
+# removed, this number has to come down with it.
 DEAD_RETRY_AFTER_H = 24.0
+
+
+def _not_yet_published(model_id: str, run_init: datetime, now: datetime) -> bool:
+    """Is this run still inside its own publication window?
+
+    A step that upstream has not published YET is not a failure, and counting
+    it as one is how gefs_extended lost its extended range. GEFS publishes
+    385-840 h about 25-27 h after init (models.yaml full_range_published_by_h),
+    so the first three attempts at those steps always land before the data can
+    exist. Three attempts is the death sentence, and the 24 h retry then fell
+    past the 48 h top-up window - measured on the live VPS 2026-07-28: steps
+    +432..+480 h marked dead at 13 h old, next retry due at 49 h old, window
+    closed at 48 h. The files were on AWS the whole time; we had stopped asking.
+
+    The throttle still does its real job. Its motivating case, gefs_extended
+    f000/total and f000/levels, is a product that does not exist at ALL - it is
+    still missing once this window passes, so it still dies after three
+    attempts and still saves the retries.
+    """
+    from src.config import get_model
+    try:
+        cfg = get_model(model_id)
+    except Exception:
+        return False
+    horizon = cfg.get("full_range_published_by_h")
+    if not horizon:
+        return False
+    return (now - run_init).total_seconds() / 3600 < float(horizon)
 
 # "f000/total: downloaded file missing..." / "f123/levels: ..."
 _STEP_RE = re.compile(r"\bf(\d{1,4})/(\w+)\s*:")
@@ -92,6 +126,10 @@ def record(model_id: str, run_init: datetime, error: str | None,
     now = now or datetime.now(UTC)
     failures = parse_step_failures(error)
     if not failures:
+        return
+    # "Not published yet" is not a fault - see _not_yet_published(). Recording
+    # it would spend the step's three attempts before the data can exist.
+    if _not_yet_published(model_id, run_init, now):
         return
 
     path = _state_path(model_id, run_init)
