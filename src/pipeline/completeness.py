@@ -62,12 +62,30 @@ def no_data_steps(model_id: str, run_init: datetime, field: str,
     return out
 
 
-def excused_steps(model_id: str, run_init: datetime, field: str,
-                  now: datetime) -> set[int]:
-    """Steps that may be absent for `field` without the run being incomplete."""
+def excused_steps(model_id: str, run_init: datetime, field: str, now: datetime,
+                  rendered: set[int] | None = None) -> set[int]:
+    """Steps that may be absent for `field` without the run being incomplete.
+
+    `rendered` is this field's steps that DO have frames. Passing it lets a
+    single no-data observation count, provided the field renders fine elsewhere
+    in the same run - which proves the raw is readable and the fetch worked, so
+    "nothing here" is structural rather than a transient read failure. That is
+    reclaim.py's own siblings-rendered test, reused.
+
+    Without it the threshold is 2 observations, and that deadlocked: every
+    arome_france run sat at exactly 1 for its +0h cloud (a real structural gap,
+    T34 - the SP2 group file is named 00H06H but carries no +0h cloud message),
+    so no run ever counted complete and the pipeline re-fetched 48 hours of
+    them, 8 cycles a day, forever. A completeness rule must not depend on a
+    counter that can stall.
+    """
     from src.pipeline import failures
-    return failures.dead_steps(model_id, run_init, now) | no_data_steps(
-        model_id, run_init, field)
+    dead = failures.dead_steps(model_id, run_init, now)
+    if rendered:
+        # This field demonstrably renders from this run's raw, so one
+        # observation of "nothing at this step" is enough.
+        return dead | no_data_steps(model_id, run_init, field, min_observations=1)
+    return dead | no_data_steps(model_id, run_init, field)
 
 
 def missing_steps(model_id: str, run_init: datetime, declared: list[int],
@@ -76,7 +94,8 @@ def missing_steps(model_id: str, run_init: datetime, declared: list[int],
     """{field: steps that should have a frame and do not}. Empty == complete."""
     out: dict[str, set[int]] = {}
     for field, have in frames_by_field.items():
-        required = set(declared) - excused_steps(model_id, run_init, field, now)
+        required = set(declared) - excused_steps(
+            model_id, run_init, field, now, rendered=have)
         gap = required - have
         if gap:
             out[field] = gap
