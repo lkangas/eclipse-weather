@@ -31,11 +31,19 @@ from src.fetchers.base import full_range_steps
 #   gefs_extended  f012_c00_levels.grib2 / f012_c00_total.grib2
 _HERBIE_RE = re.compile(r"^f(\d{3})_.+\.grib2$")
 
-# ecmwf_opendata_fetcher's three request builders:
-#   ecmwf_hres  tcc_f012.grib2 / pl_f012.grib2
+# ecmwf_opendata_fetcher's request builders: {field}_f{step:03d}.grib2
+#   ecmwf_hres  tcc_f012.grib2 / pl_f012.grib2 / temp_f012.grib2
 #   ecmwf_ens   tcc_f012.grib2
 #   aifs_*      cloud_f012.grib2
-_ECMWF_RE = re.compile(r"^(?:tcc|pl|cloud)_f(\d{3})\.grib2$")
+#
+# ANY lowercase prefix, not an enumerated list. It used to name tcc|pl|cloud,
+# and adding temperature therefore made every temp_fNNN.grib2 an "unknown raw
+# filename" - which is HELD, never reclaimed. 463 such files on the VPS within
+# hours, quietly unreclaimable on a 50 GB disk, and drowning needs_attention
+# so a real fault could not be seen. A list that must be edited whenever a
+# field is added will be forgotten again; the shape is what identifies these
+# files, and everything in a run directory is this fetcher's own output.
+_ECMWF_RE = re.compile(r"^[a-z][a-z0-9]*_f(\d{3})\.grib2$")
 
 # dwd_bz2_fetcher: filename taken straight from models.yaml's url_template,
 #   icon-eu_europe_regular-lat-lon_single-level_2026072618_012_CLCL.grib2
