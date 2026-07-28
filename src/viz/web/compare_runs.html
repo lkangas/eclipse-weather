@@ -634,11 +634,31 @@ function modelSupportsMode(modelId, mode) {
   return true;
 }
 
-const preloadedRuns = new Set(); // run.runInit.getTime() values already preloaded
+// Keyed on MODEL + init time, not init time alone. Every model publishes on
+// the same cycle hours, so a bare timestamp collides across models: preloading
+// gfs 00Z put that timestamp in the set, and icon_eu's own 00Z run then looked
+// already-done and silently did nothing. The more runs you preloaded the more
+// cycle times were poisoned, which is why it degraded as you went rather than
+// failing outright.
+const preloadedRuns = new Set();
+
+function preloadKey(run) {
+  return selectedModelId + "|" + run.runInit.getTime();
+}
+
+// Reflect cached state onto a freshly built button. loadModel() rebuilds every
+// row, so switching away and back gave a "⤓" button for a run already in the
+// set - and preloadRun's early return left it that way, so it looked unloaded
+// AND refused to load.
+function markPreloaded(btnEl) {
+  btnEl.classList.remove("loading");
+  btnEl.classList.add("done");
+  btnEl.textContent = "✓";
+}
 
 function preloadRun(run, btnEl) {
-  const key = run.runInit.getTime();
-  if (preloadedRuns.has(key)) return;
+  const key = preloadKey(run);
+  if (preloadedRuns.has(key)) { markPreloaded(btnEl); return; }
   if (btnEl.classList.contains("loading")) return; // already in flight - a second
     // click here used to start an overlapping preload pass with its own
     // independent `loaded` counter, racing the first and making the shown
@@ -661,9 +681,7 @@ function preloadRun(run, btnEl) {
       btnEl.textContent = Math.round((loaded / urls.length) * 100) + "%";
       if (loaded === urls.length) {
         preloadedRuns.add(key);
-        btnEl.classList.remove("loading");
-        btnEl.classList.add("done");
-        btnEl.textContent = "✓";
+        markPreloaded(btnEl);
       }
     };
     img.src = url;
@@ -736,6 +754,7 @@ function loadModel(modelId) {
     const preloadBtn = document.createElement("div");
     preloadBtn.className = "preloadBtn";
     preloadBtn.textContent = "⤓";
+    if (preloadedRuns.has(preloadKey(run))) markPreloaded(preloadBtn);
     preloadBtn.title = "Preload all frames for this run (smoother scrubbing)";
     preloadBtn.addEventListener("click", e => {
       e.stopPropagation();
