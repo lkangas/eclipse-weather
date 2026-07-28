@@ -119,10 +119,16 @@ What follows from that:
 
 ## Housekeeping
 
-- [ ] **Rename `viz/tool1_frames/`** to something tool-neutral. Rendering was
-      decoupled from Tool 1 and the module already became `frame_renderer.py`;
-      only the directory name is stale. Touches ~12k files, the served URLs
-      and the static server's root, so it wants a quiet moment.
+- [x] **Rename `viz/tool1_frames/` -> `viz/frames/`** — done 2026-07-28.
+      Cheaper than feared: the manifests store RELATIVE image paths, so 32k
+      frames moved with a single `mv` and nothing had to be rewritten. Five
+      code references (`OUTPUT_DIR`, the review-grid script, the verify_pipeline
+      fixture, and the prod compose file's frames-server argument).
+      Two traps worth remembering for the next data move: the directory is
+      root-owned by the container on a DrvFs mount, so the host `mv` fails with
+      EPERM and the move has to run inside a container with the same bind
+      mount; and the desktop's frame server is a HOST process whose CWD *is*
+      the directory, so it must be restarted, not just the containers.
 - [ ] **Verify anything still built on T37.** Three of its `status: confirmed`
       entries have now proved wrong — ARPEGE rain was Evaporation, ECMWF's
       param was `t2m` not `2t`, Météo-France's temperature was skin and in the

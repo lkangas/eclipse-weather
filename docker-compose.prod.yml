@@ -87,7 +87,7 @@ services:
       - /app/.venv/bin/python
       - scripts/serve_frames.py
       - "8137"
-      - /app/data/viz/tool1_frames
+      - /app/data/viz/frames
     ports:
       - "127.0.0.1:8137:8137"
     volumes:

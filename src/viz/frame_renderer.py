@@ -71,7 +71,11 @@ from src.viz.cloud_field_comparison import TOTALITY_PATH_JSON, _crop
 
 log = logging.getLogger(__name__)
 
-OUTPUT_DIR = DATA_ROOT / "viz" / "tool1_frames"
+# "frames", not "tool1_frames": rendering was decoupled from Tool 1 long ago
+# (this module stopped being tool1_renderer.py at the same time) and all three
+# tools plus the production pipeline read from here. The name was the last
+# thing still claiming otherwise.
+OUTPUT_DIR = DATA_ROOT / "viz" / "frames"
 
 with open(TOTALITY_PATH_JSON, encoding="utf-8") as _f:
     _TOTALITY_PATH = json.load(_f)

@@ -37,7 +37,7 @@ from src.pipeline.settings import Settings  # noqa: E402
 from src.viz import frame_renderer  # noqa: E402
 
 # Redirect the rendered-frame tree into the same throwaway root.
-frame_renderer.OUTPUT_DIR = _TMP_ROOT / "viz" / "tool1_frames"
+frame_renderer.OUTPUT_DIR = _TMP_ROOT / "viz" / "frames"
 
 RAW = _TMP_ROOT / "raw"
 NOW = datetime.now(UTC)

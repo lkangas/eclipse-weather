@@ -21,7 +21,7 @@ import json
 
 from src.config import DATA_ROOT
 
-TOOL1_DIR = DATA_ROOT / "viz" / "tool1_frames"
+FRAMES_DIR = DATA_ROOT / "viz" / "frames"
 FIELDS = ["total", "low", "mid", "high", "prob_cloud"]
 MODELS = [
     ("gfs", "GFS"),
@@ -46,7 +46,7 @@ def _pick_step(steps: list[dict], field: str) -> dict | None:
 
 
 def main() -> None:
-    manifest = json.loads((TOOL1_DIR / "manifest.json").read_text())
+    manifest = json.loads((FRAMES_DIR / "manifest.json").read_text())
     by_id = {m["id"]: m for m in manifest["models"]}
 
     rows = []
@@ -70,7 +70,7 @@ def main() -> None:
         )
 
     out = {"generated_at": manifest["generated_at"], "fields": FIELDS, "models": rows}
-    out_path = TOOL1_DIR / "review_grid.json"
+    out_path = FRAMES_DIR / "review_grid.json"
     out_path.write_text(json.dumps(out, indent=2))
     print(f"wrote {out_path} ({len(rows)} models x {len(FIELDS)} fields)")
 
