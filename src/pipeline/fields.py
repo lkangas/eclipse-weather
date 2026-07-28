@@ -31,8 +31,15 @@ reclaim design has to honour, and does:
      for whoever implements it.
 
 Everything below is inert today (every entry is 0), by design: the mechanism
-is in place and tested so that adding rain is a one-line registration here
-plus the renderer work, not a retrofit of the deletion logic.
+is in place and tested so that adding a differenced field is a one-line
+registration here plus the renderer work, not a retrofit of the deletion logic.
+
+temp and rain were registered 2026-07-28 and are both 0. That is not a
+formality - an UNREGISTERED field falls to DEFAULT_LOOKBACK = 1, which made
+every step's raw a lookback input to its successor and held the entire archive
+from reclaim. scripts/verify_pipeline.py caught it before deployment; the
+lesson is that adding a field to supported_fields() without adding it here is
+silently fail-safe, not silently correct.
 
 MERGE SEAM: if src/viz/frame_renderer.py ever declares its fields' inputs
 itself, this table should read from there instead of restating it.
@@ -49,9 +56,16 @@ LOOKBACK_STEPS: dict[str, int] = {
     "high": 0,
     "hml_composite": 0,
     "prob_hml_composite": 0,
-    # When rain lands, register it here, e.g.:
-    #   "rain": 1,
-    #   "cloud_rain_composite": 1,
+    "temp": 0,
+    # rain is 0, NOT 1 - and the distinction is the whole reason PRATE was
+    # chosen. This table was written expecting rain to be a differenced
+    # accumulation (APCP at step n minus step n-1), which would make step n-1's
+    # raw an input to step n's frame and force a lookback of 1. What shipped
+    # reads the INSTANTANEOUS rate instead (models.yaml gfs.rain: PRATE,
+    # step_type instant, rate true), so every rain frame is self-contained.
+    # If an accumulation-differenced rain is ever added for another model, it
+    # needs its OWN field name registered at 1 - do not change this entry.
+    "rain": 0,
 }
 
 DEFAULT_LOOKBACK = 1

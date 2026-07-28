@@ -348,15 +348,28 @@ def test_chunking() -> None:
 
 def test_never_reclaims_unrenderable_models() -> None:
     print("\n[9] models with no renderer are never reclaimed")
-    for model in ("aemet_harmonie", "ukmo_global"):
+    # aemet_harmonie USED to be in this list. It gained a reader on 2026-07-27
+    # (the ESCALA colour-legend inversion), so it is renderable now and its raw
+    # is legitimately reclaimable once rendered - keeping it here asserted the
+    # opposite and failed the moment the reader landed. ukmo_global stays: it is
+    # an Open-Meteo point model with no grid to render at all.
+    for model in ("ukmo_global",):
         cfg = get_model(model)
         init = datetime(2026, 7, 26, 0, tzinfo=UTC)
-        write_raw(model, init, "aemet_harmonie_nubosidad_20260726T190000Z.tif")
+        write_raw(model, init, "ukmo_global_20260726T190000Z.json")
         mark_extracted(model, init)
         plan = reclaim.plan_run(model, cfg, init, SETTINGS, now=NOW)
         check(f"{model}: nothing reclaimable",
               not plan.to_reclaim and all(
                   c.decision == reclaim.HOLD_NOT_RENDERABLE for c in plan.candidates))
+
+    # The other half of the same rule: a model that DOES have a reader must not
+    # be treated as unrenderable. Without this, deleting a reader would silently
+    # move a model into the "hold everything forever" branch and no test would
+    # notice - which is how aemet_harmonie's own entry above went stale.
+    check("aemet_harmonie is renderable (has a reader)",
+          verify.expected_fields("aemet_harmonie") == ["total"],
+          str(verify.expected_fields("aemet_harmonie")))
 
 
 def test_lookback_successor_rule() -> None:
