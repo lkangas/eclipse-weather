@@ -344,6 +344,32 @@
   @media (pointer: coarse) {
     .row { height: 22px; }
     .viewToggle button { padding: 8px 12px; }
+
+    /* On a phone the page SCROLLS instead of being locked to the viewport.
+       The desktop layout is a fixed-height flex column with overflow:hidden -
+       controls and slider take what they need, #gallery/#mapArea absorb the
+       rest, and nothing ever scrolls. That is right for a mouse and wrong for
+       a 400px-wide screen: 14 gallery cells cannot be useful in the leftover
+       strip, so the only way in is to pinch-zoom, and because the body cannot
+       scroll, panning down runs past its bottom edge into empty canvas. That
+       is the "something limits the lower viewport" - the body simply ends.
+
+       Letting the document flow normally means the gallery is as tall as its
+       cells need, the whole page scrolls as one, and zooming stops being the
+       only way to read it. */
+    html, body { height: auto; }
+    body { overflow: visible; }
+
+    /* flex:1 shares a FIXED pool of leftover height; with the page scrolling
+       there is no pool to share, so both take their natural height instead. */
+    #gallery { flex: none; overflow-y: visible; }
+    #mapArea { flex: none; min-height: 300px; }
+
+    /* Cells now size themselves rather than splitting the viewport, so give
+       them enough height for the map to be legible - a 4:3 frame in a
+       two-column phone layout is ~160px tall before the title. */
+    .galleryCell { min-height: 210px; }
+
   }
 </style>
 </head>
