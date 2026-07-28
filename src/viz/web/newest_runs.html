@@ -147,15 +147,26 @@
     text-overflow: ellipsis;
   }
   .row.selected .rowLabel { color: #232320; font-weight: 700; }
+  /* Reads as a BUTTON, not a faint glyph - it was 8px of #a8a498, the same
+     grey as disabled text. Scaled to THIS page's 11px row (Tool 2's is 13px,
+     so its chip is a size up); the row height is load-bearing for tick
+     alignment, so the chip fits the row rather than the row growing. */
   .preloadBtn {
     width: 22px;
+    height: 10px;
+    align-self: center;
     flex: none;
-    font-size: 8px;
+    font-size: 9px;
+    line-height: 9px;
     text-align: center;
-    color: #a8a498;
+    color: #4a4638;
+    background: #e6e1d2;
+    border: 1px solid #c4bda9;
+    border-radius: 2px;
     cursor: pointer;
     font-variant-numeric: tabular-nums;
     position: relative;
+    box-sizing: border-box;
   }
   .preloadBtn::before {
     /* Invisible tap-target bump: the row (and so this button) is only 11px
@@ -170,9 +181,13 @@
     left: -4px;
     right: -4px;
   }
-  .preloadBtn:hover { color: #232320; }
-  .preloadBtn.loading { color: #8b3a2f; }
-  .preloadBtn.done { color: #2f6f3f; }
+  .preloadBtn:hover { color: #fff; background: #232320; border-color: #232320; }
+  /* Filled while working and when done, so progress reads down the whole
+     column at a glance. The percentage drops a point to keep "100%" in 22px. */
+  .preloadBtn.loading {
+    color: #fff; background: #8b3a2f; border-color: #8b3a2f; font-size: 7px;
+  }
+  .preloadBtn.done { color: #fff; background: #2f6f3f; border-color: #2f6f3f; }
   .rowTrack {
     position: relative;
     flex: 1;
