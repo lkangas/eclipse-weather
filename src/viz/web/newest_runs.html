@@ -37,7 +37,14 @@
   .controls {
     display: flex;
     align-items: center;
+    /* Two window sliders instead of one no longer fit on one line on a narrow
+       viewport - wrap rather than let body's overflow:hidden clip
+       #cursorReadout off the right edge. A wrapped second line just makes this
+       fixed-height block taller; #mapArea absorbs the difference. Same
+       reasoning, same fix as Tool 2's own controls row. */
+    flex-wrap: wrap;
     gap: 18px;
+    row-gap: 4px; /* after the `gap` shorthand, which would otherwise reset it */
     margin-bottom: 4px;
     font-size: 11.5px;
     border-bottom: 1px solid #d8d4c8;
@@ -95,16 +102,19 @@
     font-family: inherit;
     font-size: 11.5px;
   }
-  #extentInput {
-    width: 130px;
+  #extentInput, #startInput {
+    width: 110px;
     accent-color: #8b3a2f;
     vertical-align: middle;
   }
-  #extentReadout {
+  #extentReadout, #startReadout {
     font-variant-numeric: tabular-nums;
     color: #55534c;
     margin-left: 4px;
   }
+  /* The two window sliders read as one control, so they stay together when
+     the row wraps rather than splitting across lines. */
+  .windowGroup { display: flex; align-items: center; gap: 14px; }
   #cursorReadout {
     margin-left: auto;
     font-variant-numeric: tabular-nums;
@@ -402,10 +412,19 @@
   </div>
   <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
   <span class="placeholderNote" id="placeholderNote"></span>
-  <div>
-    <label for="extentInput">Extent</label>
-    <input type="range" id="extentInput" min="0" max="1" step="3600000" value="1">
-    <span id="extentReadout">384h</span>
+  <div class="windowGroup">
+    <div>
+      <label for="startInput">Start</label>
+      <input type="range" id="startInput" min="0" max="1" step="3600000" value="0"
+             title="Where the axis begins, as an offset from the oldest run shown">
+      <span id="startReadout">+0h</span>
+    </div>
+    <div>
+      <label for="extentInput">Extent</label>
+      <input type="range" id="extentInput" min="0" max="1" step="3600000" value="1"
+             title="How much time the axis covers from Start">
+      <span id="extentReadout">384h</span>
+    </div>
   </div>
   <div id="cursorReadout">—</div>
 </div>
@@ -434,7 +453,44 @@
 <script>
 let MODELS = [];        // [{id, label, runInit (Date), steps: [h,...], imagesByStep: {h: {...fields}}}]
 let AXIS_START = new Date(), AXIS_END = new Date(); // full span across all loaded models' runs/reach
-let axisRightMs = 0;    // current right edge, ms from AXIS_START - narrowed by the extent slider
+// The visible window, both edges as ms from AXIS_START. AXIS_START stays the
+// fixed anchor the sliders range over; the window inside it is what everything
+// drawn actually uses, via viewSpanMs()/inView() rather than by comparing
+// against AXIS_START directly.
+let axisLeftMs = 0;     // left edge - moved by the start slider
+let axisRightMs = 0;    // right edge - left + the extent slider's duration
+let fullSpanMs = 0;     // AXIS_END - AXIS_START: the whole axis, what both sliders span
+
+// Smallest window the sliders can produce. Also what keeps the two sliders
+// from crossing: start's max is fullSpanMs - MIN_WINDOW_MS and extent's min is
+// MIN_WINDOW_MS, so no combination can invert the window.
+const MIN_WINDOW_MS = 6 * 3600 * 1000;
+const WINDOW_STEP_MS = 3600 * 1000;   // both sliders move in whole hours
+
+// A range input snaps its value onto min + n*step, so it cannot represent a
+// max that isn't itself on that grid: with the eclipse floor putting AXIS_END
+// on a :30, "extent = everything" came out 30 minutes short of the axis and
+// the right-hand end of the newest run silently fell off. Round the axis up to
+// the next whole hour so the grid lands exactly on it - MIN_WINDOW_MS is a
+// whole number of hours too, so both sliders can reach both of their ends.
+function fullSpanFor(rawSpanMs) {
+  return Math.max(Math.ceil(rawSpanMs / WINDOW_STEP_MS) * WINDOW_STEP_MS, MIN_WINDOW_MS);
+}
+
+function viewSpanMs() { return axisRightMs - axisLeftMs; }
+
+// Is this time inside the visible window? Every "should I draw it" test goes
+// through here - ticks, the now line, the eclipse marker, nearest-step - so a
+// narrowed axis hides the same things everywhere.
+function inView(t) {
+  const d = t - AXIS_START;
+  return d >= axisLeftMs && d <= axisRightMs;
+}
+
+function clampToView(t) {
+  return new Date(Math.min(Math.max(t, AXIS_START.getTime() + axisLeftMs),
+                           AXIS_START.getTime() + axisRightMs));
+}
 let selectedModel = null;
 let cursorTime = new Date();
 // The eclipse moment, read from the manifest (which gets it from the
@@ -551,6 +607,8 @@ function showLegendFor(field) {
 const placeholderNote = document.getElementById("placeholderNote");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
+const startInput = document.getElementById("startInput");
+const startReadout = document.getElementById("startReadout");
 
 let builtRows = []; // [{model, track}] - populated once per manifest load, reused by every relayout
 
@@ -605,21 +663,46 @@ async function loadManifest() {
   // out T still is, and it shrinks day by day as the models' horizons
   // advance towards it. Sizing the axis to the data alone hides that.
   AXIS_END = new Date(Math.max(...reaches, AXIS_START.getTime(), axisEndFloor()));
-  axisRightMs = Math.max(AXIS_END - AXIS_START, 3600 * 1000);
+  fullSpanMs = fullSpanFor(AXIS_END - AXIS_START);
 
-  extentInput.min = 0;
-  extentInput.max = axisRightMs;
-  extentInput.step = 3600 * 1000;
-  extentInput.value = axisRightMs;
-  extentReadout.textContent = fmtDuration(axisRightMs);
+  startInput.min = 0;
+  startInput.max = fullSpanMs - MIN_WINDOW_MS;
+  startInput.step = WINDOW_STEP_MS;
+  startInput.value = 0;
+  extentInput.min = MIN_WINDOW_MS;
+  extentInput.max = fullSpanMs;
+  extentInput.step = WINDOW_STEP_MS;
+  extentInput.value = fullSpanMs;
+  syncWindowFromInputs();
 
   // Default cursor to "now" (clamped into the axis span) rather than the axis
   // start - the whole point of a shared absolute-time cursor is comparing
   // models around the current moment, not around whichever model happens to
   // have archived the oldest run.
-  cursorTime = new Date();
-  if (cursorTime < AXIS_START) cursorTime = new Date(AXIS_START);
-  if (cursorTime - AXIS_START > axisRightMs) cursorTime = new Date(AXIS_START.getTime() + axisRightMs);
+  cursorTime = clampToView(Date.now());
+}
+
+// Both sliders write into the same window, so they are always read together
+// rather than each guarding itself. Start is the left edge; Extent is a
+// DURATION, not a right edge, so moving Start pans the window instead of
+// stretching it - until the right edge reaches the end of the axis, where the
+// window trims instead. The extent slider's own value is deliberately left
+// alone by that trim, so panning back left restores the width you asked for.
+function syncWindowFromInputs() {
+  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0,
+                                    fullSpanMs - MIN_WINDOW_MS));
+  const wanted = Math.max(MIN_WINDOW_MS, parseInt(extentInput.value, 10) || fullSpanMs);
+  axisRightMs = Math.min(fullSpanMs, axisLeftMs + wanted);
+  startReadout.textContent = "+" + fmtDuration(axisLeftMs);
+  startReadout.title = fmtTime(new Date(AXIS_START.getTime() + axisLeftMs));
+  extentReadout.textContent = fmtDuration(viewSpanMs());
+}
+
+function onWindowInput() {
+  syncWindowFromInputs();
+  cursorTime = clampToView(cursorTime.getTime());
+  layoutTicks();
+  updateCursorUI();
 }
 
 function pickAxisIntervalMs(spanMs) {
@@ -632,7 +715,7 @@ function pickAxisIntervalMs(spanMs) {
 }
 
 function timeToPx(t, trackWidthPx) {
-  const frac = (t - AXIS_START) / axisRightMs;
+  const frac = (t - AXIS_START - axisLeftMs) / viewSpanMs();
   return Math.round(Math.min(1, Math.max(0, frac)) * trackWidthPx);
 }
 
@@ -738,7 +821,7 @@ function layoutTicks() {
     track.innerHTML = "";
     model.steps.forEach(h => {
       const vt = stepValidTime(model, h);
-      if (vt - AXIS_START > axisRightMs) return;
+      if (!inView(vt)) return;
       const tick = document.createElement("div");
       tick.className = "tick" + (h === 0 ? " isInit" : "");
       tick.style.left = timeToPx(vt, trackWidthPx) + "px";
@@ -748,8 +831,12 @@ function layoutTicks() {
   });
 
   axisTrack.innerHTML = "";
-  const intervalMs = pickAxisIntervalMs(axisRightMs);
-  for (let ms = 0; ms <= axisRightMs; ms += intervalMs) {
+  // Labels sit on multiples of the interval measured from AXIS_START, not
+  // from wherever the start slider currently is - so panning slides the same
+  // set of times along the axis instead of relabelling them on every move.
+  const intervalMs = pickAxisIntervalMs(viewSpanMs());
+  const firstMs = Math.ceil(axisLeftMs / intervalMs) * intervalMs;
+  for (let ms = firstMs; ms <= axisRightMs; ms += intervalMs) {
     const t = new Date(AXIS_START.getTime() + ms);
     const el = document.createElement("div");
     el.className = "axisTick";
@@ -762,7 +849,7 @@ function layoutTicks() {
   const wrapRect = stackWrap.getBoundingClientRect();
   const trackOffsetPx = trackRect.left - wrapRect.left;
   const now = new Date();
-  if (now >= AXIS_START && now - AXIS_START <= axisRightMs) {
+  if (inView(now)) {
     nowLine.style.display = "block";
     nowLine.style.left = Math.round(trackOffsetPx + timeToPx(now, trackRect.width)) + "px";
   } else {
@@ -773,8 +860,8 @@ function layoutTicks() {
   // deliberately not re-derived, so the marker lines up with the ticks
   // exactly the way the now line does. Expected to be hidden most of the
   // time: the eclipse is normally far beyond every model's forecast horizon,
-  // so it falls outside [AXIS_START, AXIS_START+axisRightMs].
-  if (ECLIPSE_TIME && ECLIPSE_TIME >= AXIS_START && ECLIPSE_TIME - AXIS_START <= axisRightMs) {
+  // so it falls outside the visible window.
+  if (ECLIPSE_TIME && inView(ECLIPSE_TIME)) {
     eclipseLine.style.display = "block";
     eclipseLine.style.left = Math.round(trackOffsetPx + timeToPx(ECLIPSE_TIME, trackRect.width)) + "px";
   } else {
@@ -783,12 +870,12 @@ function layoutTicks() {
 }
 
 function nearestStep(model, targetTime) {
-  // Only consider steps still inside the extent slider's current window
+  // Only consider steps still inside the window the sliders leave visible
   // (same fix as Tool 2's own nearestStep - see that file for the full
-  // rationale): without this, a step the slider has hidden past a cadence
+  // rationale): without this, a step the sliders have hidden past a cadence
   // gap can be picked as "nearest" even though nothing on the visible,
   // narrowed axis corresponds to it.
-  const visible = model.steps.filter(h => stepValidTime(model, h) - AXIS_START <= axisRightMs);
+  const visible = model.steps.filter(h => inView(stepValidTime(model, h)));
   if (!visible.length) return null;
   return visible.reduce((best, h) =>
     Math.abs(stepValidTime(model, h) - targetTime) < Math.abs(stepValidTime(model, best) - targetTime) ? h : best
@@ -914,7 +1001,7 @@ function updateCursorUI() {
 function timeFromClientX(clientX) {
   const rect = axisTrack.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  return new Date(AXIS_START.getTime() + frac * axisRightMs);
+  return new Date(AXIS_START.getTime() + axisLeftMs + frac * viewSpanMs());
 }
 
 // Two independent drag handles, each only grabbable near its OWN current
@@ -1074,7 +1161,7 @@ function advanceStep(direction) {
   if (!selectedModel) return;
   const model = MODELS.find(m => m.id === selectedModel);
   const visible = model.steps
-    .filter(h => stepValidTime(model, h) - AXIS_START <= axisRightMs)
+    .filter(h => inView(stepValidTime(model, h)))
     .sort((a, b) => a - b);
   if (!visible.length) return;
   const current = nearestStep(model, cursorTime);
@@ -1096,7 +1183,7 @@ const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
 window.addEventListener("keydown", e => {
   if (!_ARROW_KEYS.includes(e.key)) return;
   // Don't hijack arrow keys while the user is operating a focused control
-  // (the extent range slider has its own native arrow-key behavior).
+  // (the two window range sliders have their own native arrow-key behavior).
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   e.preventDefault();
@@ -1107,13 +1194,8 @@ window.addEventListener("keydown", e => {
   }
 });
 
-extentInput.addEventListener("input", () => {
-  axisRightMs = parseInt(extentInput.value, 10);
-  extentReadout.textContent = fmtDuration(axisRightMs);
-  cursorTime = new Date(Math.min(cursorTime.getTime(), AXIS_START.getTime() + axisRightMs));
-  layoutTicks();
-  updateCursorUI();
-});
+extentInput.addEventListener("input", onWindowInput);
+startInput.addEventListener("input", onWindowInput);
 
 let resizePending = false;
 window.addEventListener("resize", () => {

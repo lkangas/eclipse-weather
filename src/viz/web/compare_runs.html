@@ -107,17 +107,20 @@
     font-family: inherit;
     font-size: 11.5px;
   }
-  #extentInput {
-    width: 160px;
+  #extentInput, #startInput {
+    width: 120px;
     accent-color: #8b3a2f;
     vertical-align: middle;
   }
-  #extentReadout {
+  #extentReadout, #startReadout {
     font-variant-numeric: tabular-nums;
     color: #55534c;
     margin-left: 4px;
     white-space: nowrap;
   }
+  /* The two window sliders read as one control, so they stay together when
+     the row wraps rather than splitting across lines. */
+  .windowGroup { display: flex; align-items: center; gap: 14px; }
   #cursorReadout {
     margin-left: auto;
     font-variant-numeric: tabular-nums;
@@ -401,10 +404,19 @@
   <label class="rainOpt"><input type="checkbox" id="rainCheckbox"> Rain</label>
   <span class="placeholderNote" id="placeholderNote"></span>
   <span class="truncNote" id="truncNote"></span>
-  <div>
-    <label for="extentInput">Extent</label>
-    <input type="range" id="extentInput" min="0" max="100" value="100">
-    <span id="extentReadout">—</span>
+  <div class="windowGroup">
+    <div>
+      <label for="startInput">Start</label>
+      <input type="range" id="startInput" min="0" max="100" value="0"
+             title="Where the axis begins, as an offset from the oldest run shown">
+      <span id="startReadout">+0h</span>
+    </div>
+    <div>
+      <label for="extentInput">Extent</label>
+      <input type="range" id="extentInput" min="0" max="100" value="100"
+             title="How much time the axis covers from Start">
+      <span id="extentReadout">—</span>
+    </div>
   </div>
   <div id="cursorReadout">—</div>
 </div>
@@ -511,7 +523,44 @@ let selectedModelId = null;
 let selectedRunIdx = null; // index into the currently-built row list
 let cursorTime = NOW;      // Date
 let AXIS_START = NOW, AXIS_END = NOW; // full span for the current model
-let axisRightMs = 0;       // current right edge, narrowed by the extent slider
+// The visible window, both edges as ms from AXIS_START. AXIS_START stays the
+// fixed anchor the sliders range over; the window inside it is what everything
+// drawn actually uses, via viewSpanMs()/inView() rather than by comparing
+// against AXIS_START directly.
+let axisLeftMs = 0;        // left edge - moved by the start slider
+let axisRightMs = 0;       // right edge - left + the extent slider's duration
+let fullSpanMs = 0;        // AXIS_END - AXIS_START: the whole axis, what both sliders span
+
+// Smallest window the sliders can produce. Also what keeps the two sliders
+// from crossing: start's max is fullSpanMs - MIN_WINDOW_MS and extent's min is
+// MIN_WINDOW_MS, so no combination can invert the window.
+const MIN_WINDOW_MS = 6 * 3600 * 1000;
+const WINDOW_STEP_MS = 3600 * 1000;   // both sliders move in whole hours
+
+// A range input snaps its value onto min + n*step, so it cannot represent a
+// max that isn't itself on that grid: with the eclipse floor putting AXIS_END
+// on a :30, "extent = everything" came out 30 minutes short of the axis and
+// the right-hand end of the newest run silently fell off. Round the axis up to
+// the next whole hour so the grid lands exactly on it - MIN_WINDOW_MS is a
+// whole number of hours too, so both sliders can reach both of their ends.
+function fullSpanFor(rawSpanMs) {
+  return Math.max(Math.ceil(rawSpanMs / WINDOW_STEP_MS) * WINDOW_STEP_MS, MIN_WINDOW_MS);
+}
+
+function viewSpanMs() { return axisRightMs - axisLeftMs; }
+
+// Is this time inside the visible window? Every "should I draw it" test goes
+// through here - ticks, the now line, the eclipse marker, nearest-step - so a
+// narrowed axis hides the same things everywhere.
+function inView(t) {
+  const d = t - AXIS_START;
+  return d >= axisLeftMs && d <= axisRightMs;
+}
+
+function clampToView(t) {
+  return new Date(Math.min(Math.max(t, AXIS_START.getTime() + axisLeftMs),
+                           AXIS_START.getTime() + axisRightMs));
+}
 
 // Quantity is a 3-way radio (temp/cloudCover/cloudProb) + an independent rain
 // overlay checkbox - identical control to newest_runs.html's. NOT a field name:
@@ -533,6 +582,8 @@ const modelSelect = document.getElementById("modelSelect");
 const quantityRadios = document.querySelectorAll('input[name="quantityMode"]');
 const rainCheckbox = document.getElementById("rainCheckbox");
 const placeholderNote = document.getElementById("placeholderNote");
+const startInput = document.getElementById("startInput");
+const startReadout = document.getElementById("startReadout");
 const extentInput = document.getElementById("extentInput");
 const extentReadout = document.getElementById("extentReadout");
 const rowsEl = document.getElementById("rows");
@@ -583,6 +634,10 @@ function fmtTime(d) {
 }
 function fmtRunLabel(d) {
   return d.toISOString().slice(5, 16).replace("T", " ") + "Z";
+}
+function fmtDuration(ms) {
+  const h = ms / 3600000;
+  return h < 48 ? h.toFixed(0) + "h" : (h / 24).toFixed(1) + "d";
 }
 function fmtAge(runInit) {
   const h = Math.round((NOW - runInit) / 3600000);
@@ -749,12 +804,19 @@ function loadModel(modelId) {
   const reaches = runsNewestFirst.map(r => stepValidTime(r, Math.max(...r.steps)));
   AXIS_END = new Date(Math.max(...reaches.map(d => d.getTime()), axisEndFloor()));
 
-  const fullSpanMs = AXIS_END - AXIS_START;
-  extentInput.min = 0;
+  // Both sliders are re-ranged and reset per model - AXIS_START is this
+  // model's own oldest drawn run, so an offset carried over from the previous
+  // model would mean something else entirely here.
+  fullSpanMs = fullSpanFor(AXIS_END - AXIS_START);
+  startInput.min = 0;
+  startInput.max = fullSpanMs - MIN_WINDOW_MS;
+  startInput.step = WINDOW_STEP_MS; // 1h granularity
+  startInput.value = 0;
+  extentInput.min = MIN_WINDOW_MS;
   extentInput.max = fullSpanMs;
-  extentInput.step = 3600 * 1000; // 1h granularity
+  extentInput.step = WINDOW_STEP_MS;
   extentInput.value = fullSpanMs;
-  axisRightMs = fullSpanMs;
+  syncWindowFromInputs();
 
   rowsEl.innerHTML = "";
   builtRows = [];
@@ -787,9 +849,32 @@ function loadModel(modelId) {
     builtRows.push({ run, row, track });
   });
 
-  cursorTime = new Date(Math.min(Math.max(cursorTime.getTime(), AXIS_START.getTime()), AXIS_START.getTime() + axisRightMs));
+  cursorTime = clampToView(cursorTime.getTime());
   layoutTicks();
   selectRun(0); // newest run by default
+}
+
+// Both sliders write into the same window, so they are always read together
+// rather than each guarding itself. Start is the left edge; Extent is a
+// DURATION, not a right edge, so moving Start pans the window instead of
+// stretching it - until the right edge reaches the end of the axis, where the
+// window trims instead. The extent slider's own value is deliberately left
+// alone by that trim, so panning back left restores the width you asked for.
+function syncWindowFromInputs() {
+  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0,
+                                    fullSpanMs - MIN_WINDOW_MS));
+  const wanted = Math.max(MIN_WINDOW_MS, parseInt(extentInput.value, 10) || fullSpanMs);
+  axisRightMs = Math.min(fullSpanMs, axisLeftMs + wanted);
+  startReadout.textContent = "+" + fmtDuration(axisLeftMs);
+  startReadout.title = fmtTime(new Date(AXIS_START.getTime() + axisLeftMs));
+  extentReadout.textContent = fmtDuration(viewSpanMs());
+}
+
+function onWindowInput() {
+  syncWindowFromInputs();
+  cursorTime = clampToView(cursorTime.getTime());
+  layoutTicks();
+  updateCursorUI();
 }
 
 function pickAxisIntervalMs(spanMs) {
@@ -802,7 +887,7 @@ function pickAxisIntervalMs(spanMs) {
 }
 
 function timeToPx(t, trackWidthPx) {
-  const frac = (t - AXIS_START) / axisRightMs;
+  const frac = (t - AXIS_START - axisLeftMs) / viewSpanMs();
   return Math.round(Math.min(1, Math.max(0, frac)) * trackWidthPx);
 }
 
@@ -812,7 +897,7 @@ function layoutTicks() {
     track.innerHTML = "";
     run.steps.forEach(h => {
       const vt = stepValidTime(run, h);
-      if (vt - AXIS_START > axisRightMs) return;
+      if (!inView(vt)) return;
       const tick = document.createElement("div");
       tick.className = "tick" + (h === 0 ? " isInit" : "");
       tick.style.left = timeToPx(vt, trackWidthPx) + "px";
@@ -823,8 +908,12 @@ function layoutTicks() {
   });
 
   axisTrack.innerHTML = "";
-  const intervalMs = pickAxisIntervalMs(axisRightMs);
-  for (let ms = 0; ms <= axisRightMs; ms += intervalMs) {
+  // Labels sit on multiples of the interval measured from AXIS_START, not
+  // from wherever the start slider currently is - so panning slides the same
+  // set of times along the axis instead of relabelling them on every move.
+  const intervalMs = pickAxisIntervalMs(viewSpanMs());
+  const firstMs = Math.ceil(axisLeftMs / intervalMs) * intervalMs;
+  for (let ms = firstMs; ms <= axisRightMs; ms += intervalMs) {
     const t = new Date(AXIS_START.getTime() + ms);
     const el = document.createElement("div");
     el.className = "axisTick";
@@ -837,7 +926,7 @@ function layoutTicks() {
   const trackRect = axisTrack.getBoundingClientRect();
   const wrapRect = stackWrap.getBoundingClientRect();
   const trackOffsetPx = trackRect.left - wrapRect.left;
-  if (NOW >= AXIS_START && NOW - AXIS_START <= axisRightMs) {
+  if (inView(NOW)) {
     nowLine.style.display = "block";
     nowLine.style.left = Math.round(trackOffsetPx + nowPx) + "px";
   } else {
@@ -848,8 +937,8 @@ function layoutTicks() {
   // deliberately not re-derived, so the marker lines up with the ticks
   // exactly the way the now line does. Expected to be hidden most of the
   // time: the eclipse is normally far beyond every model's forecast horizon,
-  // so it falls outside [AXIS_START, AXIS_START+axisRightMs].
-  if (ECLIPSE_TIME && ECLIPSE_TIME >= AXIS_START && ECLIPSE_TIME - AXIS_START <= axisRightMs) {
+  // so it falls outside the visible window.
+  if (ECLIPSE_TIME && inView(ECLIPSE_TIME)) {
     eclipseLine.style.display = "block";
     eclipseLine.style.left = Math.round(trackOffsetPx + timeToPx(ECLIPSE_TIME, trackWidthPx)) + "px";
   } else {
@@ -858,15 +947,15 @@ function layoutTicks() {
 }
 
 function nearestStep(run, targetTime) {
-  // Only consider steps still inside the extent slider's current window -
-  // cursorTime itself is always clamped to [AXIS_START, AXIS_START+axisRightMs]
-  // (see timeFromClientX), but without this filter the "nearest" step could
-  // be one the extent slider has hidden (e.g. a real step just past a cadence
+  // Only consider steps still inside the window the sliders leave visible -
+  // cursorTime itself is always clamped to that window (see timeFromClientX),
+  // but without this filter the "nearest" step could
+  // be one the sliders have hidden (e.g. a real step just past a cadence
   // gap - 240h/246h for gefs_extended - that's closer in raw distance than
   // the last VISIBLE step). That desyncs the displayed step/valid-time from
   // anything actually drawn on the (narrowed) axis - reads as the cursor not
   // lining up with the model's hours at all.
-  const visible = run.steps.filter(h => stepValidTime(run, h) - AXIS_START <= axisRightMs);
+  const visible = run.steps.filter(h => inView(stepValidTime(run, h)));
   if (!visible.length) return null;
   return visible.reduce((best, h) => {
     const bestDiff = Math.abs(stepValidTime(run, best) - targetTime);
@@ -986,7 +1075,7 @@ function updateCursorUI() {
 function timeFromClientX(clientX) {
   const rect = axisTrack.getBoundingClientRect();
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
-  return new Date(AXIS_START.getTime() + frac * axisRightMs);
+  return new Date(AXIS_START.getTime() + axisLeftMs + frac * viewSpanMs());
 }
 
 // Two independent drag handles, each only grabbable near its OWN current
@@ -1132,7 +1221,7 @@ function advanceStep(direction) {
   if (selectedRunIdx === null || !builtRows[selectedRunIdx]) return;
   const run = builtRows[selectedRunIdx].run;
   const visible = run.steps
-    .filter(h => stepValidTime(run, h) - AXIS_START <= axisRightMs)
+    .filter(h => inView(stepValidTime(run, h)))
     .sort((a, b) => a - b);
   if (!visible.length) return;
   const current = nearestStep(run, cursorTime);
@@ -1154,8 +1243,8 @@ const _ARROW_KEYS = ["ArrowRight", "ArrowLeft", "ArrowUp", "ArrowDown"];
 window.addEventListener("keydown", e => {
   if (!_ARROW_KEYS.includes(e.key)) return;
   // Don't hijack arrow keys while the user is operating a focused control
-  // (the model select, the quantity radios and the extent slider all have
-  // their own native arrow-key behavior).
+  // (the model select, the quantity radios and the two window sliders all
+  // have their own native arrow-key behavior).
   const tag = document.activeElement && document.activeElement.tagName;
   if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
   e.preventDefault();
@@ -1168,14 +1257,8 @@ window.addEventListener("keydown", e => {
   }
 });
 
-extentInput.addEventListener("input", () => {
-  axisRightMs = parseInt(extentInput.value, 10);
-  const spanH = axisRightMs / 3600000;
-  extentReadout.textContent = spanH < 48 ? spanH.toFixed(0) + "h" : (spanH / 24).toFixed(1) + "d";
-  cursorTime = new Date(Math.min(cursorTime.getTime(), AXIS_START.getTime() + axisRightMs));
-  layoutTicks();
-  updateCursorUI();
-});
+extentInput.addEventListener("input", onWindowInput);
+startInput.addEventListener("input", onWindowInput);
 
 let resizePending = false;
 window.addEventListener("resize", () => {
