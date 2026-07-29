@@ -463,6 +463,62 @@ def test_lookback_successor_rule() -> None:
         field_deps.LOOKBACK_STEPS.update(saved)
 
 
+def test_unfetched_steps_are_not_evidence() -> None:
+    """A step with no raw must not be journaled as "this field has no data".
+
+    The bug this pins down, measured on the live VPS 2026-07-29: Meteo-France
+    publishes AROME in 6-hour group files, the fetch landed with only
+    SP1/SP2_00H06H on disk, and steps 7..51 - which had no raw AT ALL - were
+    rendered anyway, reported has_data=False, journaled as no-data, and then
+    excused by completeness.py. The run was declared finished with 6 of its 51
+    cloud frames and the top-up never ran again. Three AROME runs lost most of
+    their range that way before anyone looked.
+    """
+    from src.pipeline import render as pipeline_render
+
+    print("\n[11] steps with no raw are not journaled as no-data")
+    model, cfg = "arome_france", get_model("arome_france")
+    init = unique_init(hours_back=6, cycle_hours=3)
+    declared = full_range_steps(cfg, init)
+    fetched, unfetched = [s for s in declared if s <= 6], [s for s in declared if s > 6]
+    check("fixture has both fetched and unfetched steps",
+          bool(fetched) and bool(unfetched), f"{len(fetched)}/{len(unfetched)}")
+
+    # Only the first group file landed - exactly the live case.
+    write_raw(model, init, "arome_france_SP2_00H06H.grib2")
+    write_raw(model, init, "arome_france_SP1_00H06H.grib2")
+
+    have = pipeline_render._steps_with_raw(model, init, declared)
+    check("steps inside the fetched group are renderable", set(fetched) <= have,
+          str(sorted(have)[:8]))
+    check("steps with no raw are excluded", not (set(unfetched) & have),
+          str(sorted(s for s in unfetched if s in have)[:8]))
+
+    # ...and therefore cannot be excused: the run must still read incomplete,
+    # which is what keeps the top-up fetching the rest of the range.
+    from src.pipeline import completeness
+    frames = {f: set(fetched) for f in verify.expected_fields(model)}
+    check("run with an unfetched range is NOT complete",
+          not completeness.is_complete(model, init, declared, frames,
+                                       list(frames), NOW),
+          str({k: len(v) for k, v in frames.items()}))
+
+    # Fail-safe: a filename raw_layout cannot parse must not make every step
+    # look unfetched - that would stop the journal recording anything at all.
+    other = unique_init(hours_back=7, cycle_hours=3)
+    write_raw(model, other, "something_new.grib2")
+    check("unparseable filenames fall back to rendering every step",
+          pipeline_render._steps_with_raw(model, other, declared) == set(declared))
+
+    # A run whose raw is entirely gone (reclaimed, tombstone only) renders
+    # nothing rather than journaling its whole range as no-data.
+    empty = unique_init(hours_back=8, cycle_hours=3)
+    (RAW / model / empty.strftime("%Y%m%d%H")).mkdir(parents=True, exist_ok=True)
+    (RAW / model / empty.strftime("%Y%m%d%H") / ".reclaimed.json").write_text("{}")
+    check("fully reclaimed run renders nothing",
+          pipeline_render._steps_with_raw(model, empty, declared) == set())
+
+
 def main() -> int:
     print(f"fixture root: {_TMP_ROOT}")
     try:
@@ -474,6 +530,7 @@ def main() -> int:
         test_chunking()
         test_never_reclaims_unrenderable_models()
         test_lookback_successor_rule()
+        test_unfetched_steps_are_not_evidence()
     finally:
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
 

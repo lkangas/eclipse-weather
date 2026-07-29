@@ -59,14 +59,66 @@ def render_steps(
         return {}
 
     fields = frame_renderer.supported_fields(model_id)
+    renderable = _steps_with_raw(model_id, run_init, steps)
     results: dict[int, dict[str, bool]] = {}
     for step in steps:
+        if step not in renderable:
+            continue
         results[step] = {}
         for fld in fields:
             _, has_data = frame_renderer.render_frame(model_id, run_init, step, fld)
             results[step][fld] = has_data
     journal.record_render_pass(model_id, run_init, results)
     return results
+
+
+def _steps_with_raw(model_id: str, run_init: datetime, steps: list[int]) -> set[int]:
+    """Which of `steps` actually have raw on disk to render from.
+
+    A step whose raw was never fetched says NOTHING about whether the field
+    exists in it - but render_frame() reports it exactly the way it reports a
+    readable file that genuinely lacks the field: has_data=False. Journaling
+    that as a no-data observation turns "not fetched yet" into "structurally
+    absent", and completeness.py then excuses the step forever, so the top-up
+    that would have fetched it never runs again.
+
+    Measured on the live VPS 2026-07-29. Meteo-France publishes AROME in 6-hour
+    group files; the 07-29 06Z fetch landed when only SP1/SP2_00H06H existed,
+    so steps 7..51 had no raw at all. They were rendered anyway, journaled as
+    no-data, excused, and the run was declared complete with 6 of its 51 cloud
+    frames. The 07-28 06Z and 18Z runs went the same way (12 and 18 frames);
+    every other cycle that day happened to be fetched after full publication
+    and got all 51. Before the completeness rewrite the fraction rule kept
+    re-fetching these runs, which is why this only started on 07-28.
+
+    Skipping the render also saves the reader calls, but that is a side
+    benefit - the point is not to record evidence we do not have.
+    """
+    from src.config import DATA_RAW, get_model
+    from src.pipeline import raw_layout
+
+    run_dir = DATA_RAW / model_id / f"{run_init:%Y%m%d%H}"
+    try:
+        names = [p.name for p in run_dir.iterdir()
+                 if p.is_file() and not raw_layout.is_marker(p.name)]
+    except OSError:
+        names = []
+    if not names:
+        # Nothing fetched, or every file already reclaimed (the tombstone is a
+        # marker, so it is excluded above). Either way there is nothing here to
+        # render and nothing to conclude from it.
+        return set()
+
+    by_step = raw_layout.group_files_by_step(model_id, get_model(model_id), run_init, names)
+    if not by_step:
+        # Files are present but raw_layout cannot name their steps - a new
+        # fetcher, or a renamed output. Fall back to today's behaviour rather
+        # than declaring every step unfetched: that would stop the journal
+        # recording anything at all, and a run that can never record a no-data
+        # observation is a run that can never be complete. Same fail-safe
+        # direction as raw_layout's own "unknown filename is never reclaimed".
+        return set(steps)
+    return {s for s in steps if s in by_step}
 
 
 def regenerate_manifests() -> list[str]:
