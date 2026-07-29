@@ -519,6 +519,40 @@ def test_unfetched_steps_are_not_evidence() -> None:
           pipeline_render._steps_with_raw(model, empty, declared) == set())
 
 
+def test_never_published_step_is_not_declared() -> None:
+    """A step the source never distributes at all must not appear in the
+    declared range in the first place - excusing it after the fact needs a
+    no-data OBSERVATION, and this kind of gap can never produce one.
+
+    The bug this pins down, found 2026-07-30: aemet_harmonie's bundle starts
+    at run_init+1h and never carries the analysis hour, no request is ever
+    made for it, and no fetch failure is ever recorded for it - so once
+    render_steps() stopped rendering steps with no raw (the AROME/GEFS fix
+    just above), step 0 could never be journaled as no-data either, and
+    completeness.py declared every run of this model incomplete forever.
+    2026-07-29T12Z sat reporting "fetched" for hours with all 48 of its
+    fetchable frames already rendered.
+
+    `first_step_h` (models.yaml) is the fix: it drops the floor in
+    _available_steps_for_cycle() before anything downstream ever sees it, so
+    there is no gap left to excuse.
+    """
+    print("\n[12] a step the source never distributes is not a declared step")
+    model, cfg = "aemet_harmonie", get_model("aemet_harmonie")
+    init = unique_init(hours_back=9, cycle_hours=6)
+    declared = full_range_steps(cfg, init)
+    check("first_step_h keeps step 0 out of the declared range", 0 not in declared,
+          str(declared[:3]))
+    check("every OTHER step is still declared", declared == list(range(1, 49)),
+          f"{declared[0]}..{declared[-1]}, n={len(declared)}")
+
+    from src.pipeline import completeness
+    frames = {f: set(declared) for f in verify.expected_fields(model)}
+    check("a run with every fetchable step rendered reads complete",
+          completeness.is_complete(model, init, declared, frames, list(frames), NOW),
+          str({k: len(v) for k, v in frames.items()}))
+
+
 def main() -> int:
     print(f"fixture root: {_TMP_ROOT}")
     try:
@@ -531,6 +565,7 @@ def main() -> int:
         test_never_reclaims_unrenderable_models()
         test_lookback_successor_rule()
         test_unfetched_steps_are_not_evidence()
+        test_never_published_step_is_not_declared()
     finally:
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
 

@@ -202,8 +202,16 @@ def _infer_run_init(model_config: dict, valid_times: list[datetime]) -> datetime
 def _expected_raster_count(model_config: dict) -> int:
     """How many hourly Nubosidad rasters a complete bundle holds, from
     models.yaml's `steps:` rather than a hardcoded 48 (hard constraint #2).
-    Step 0 is excluded: AEMET does not distribute the analysis hour."""
-    return len([s for s in generate_available_steps(model_config["steps"]) if s > 0])
+
+    Excludes step 0 via `first_step_h` (models.yaml) rather than a local
+    `s > 0` filter, so this fetcher's own idea of a complete bundle can never
+    drift from full_range_steps()'s - the two disagreeing is exactly how
+    completeness.py ended up expecting a step this fetcher never requests.
+    """
+    return len([
+        s for s in generate_available_steps(model_config["steps"])
+        if s >= model_config.get("first_step_h", 0)
+    ])
 
 
 def _bundle_token(url: str) -> str | None:

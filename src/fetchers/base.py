@@ -120,8 +120,25 @@ def _available_steps_for_cycle(model_config: dict, run_init: datetime) -> list[i
     06/12/18Z only reach 384h; ecmwf_hres and ukmo_global have similar
     splits) - this must additionally cap `steps:`'s shared cadence spec, or
     a short cycle gets asked for steps its run was never going to publish.
+
+    `first_step_h` (models.yaml, default 0) drops steps the source never
+    distributes at all, as opposed to a step that simply has not arrived
+    YET. aemet_harmonie is the known case: its bundle starts at run_init+1h,
+    the analysis hour is never in it, no request is ever made for it, and no
+    fetch failure is ever recorded for it either - so completeness.py had no
+    way to tell "permanently absent" from "not fetched yet" and declared
+    every run incomplete forever. aemet_geotiff_fetcher.py already excluded
+    step 0 from its OWN bundle-size check (`_expected_raster_count`) but
+    that knowledge stayed local to the fetcher; every other consumer of
+    full_range_steps() - completeness, coverage.py's dashboard, the tool
+    manifests - still expected it. Filtering here is the one place all of
+    them share, so `_expected_raster_count` now reuses this instead of
+    re-stating "s > 0" a second time.
     """
     available = generate_available_steps(model_config["steps"])
+    floor = model_config.get("first_step_h", 0)
+    if floor:
+        available = [s for s in available if s >= floor]
     cycle_max = model_config.get("cycles", {}).get(f"{run_init.hour:02d}")
     if cycle_max is not None:
         available = [s for s in available if s <= cycle_max]

@@ -928,6 +928,14 @@ models:
                                       # contains 48 hourly valid times starting at run_init+1h (analysis/t+0 hour
                                       # itself isn't distributed). Cadence confirmed; exact publication_lag still
                                       # only single-sampled (see publication_lag_h note).
+    first_step_h: 1                  # the fact behind the note above, structured: no request is ever made for
+                                      # step 0 and no raster ever exists for it, so it must not be a declared step
+                                      # at all — see src/fetchers/base.py's _available_steps_for_cycle(). Without
+                                      # this, completeness.py had no way to distinguish "this source never
+                                      # publishes step 0" from "step 0 has not arrived yet", and every run of this
+                                      # model sat one step short of complete forever (found 2026-07-30, aemet_
+                                      # harmonie 2026-07-29T12Z stuck reporting "fetched" for hours with all 48
+                                      # available frames rendered).
     publication_lag_h: [2, 4]         # single-sample estimate (T07c) still not re-confirmed across all 4 cycles
     first_covering: "2026-08-10T18Z"
     cloud:
