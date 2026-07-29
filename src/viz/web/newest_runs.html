@@ -460,6 +460,7 @@ let AXIS_START = new Date(), AXIS_END = new Date(); // full span across all load
 let axisLeftMs = 0;     // left edge - moved by the start slider
 let axisRightMs = 0;    // right edge - left + the extent slider's duration
 let fullSpanMs = 0;     // AXIS_END - AXIS_START: the whole axis, what both sliders span
+let startMaxMs = 0;     // how far right the start slider may go - see startSliderMax()
 
 // Smallest window the sliders can produce. Also what keeps the two sliders
 // from crossing: start's max is fullSpanMs - MIN_WINDOW_MS and extent's min is
@@ -475,6 +476,20 @@ const WINDOW_STEP_MS = 3600 * 1000;   // both sliders move in whole hours
 // whole number of hours too, so both sliders can reach both of their ends.
 function fullSpanFor(rawSpanMs) {
   return Math.max(Math.ceil(rawSpanMs / WINDOW_STEP_MS) * WINDOW_STEP_MS, MIN_WINDOW_MS);
+}
+
+// How far right the start slider may travel, given the last thing actually
+// drawn on the axis (`lastDataMs`, ms from AXIS_START).
+//
+// axisEndFloor() keeps the eclipse on the axis even when no model forecasts
+// anywhere near it, so the axis can extend well past the last step - and
+// every millisecond of start travel spent in that empty stretch does nothing
+// but remove rows from the left until the axis is blank. Capping at the last
+// data point means full travel puts the newest step against the left edge:
+// the furthest right that still shows something.
+function startSliderMax(lastDataMs) {
+  const cap = Math.min(fullSpanMs - MIN_WINDOW_MS, lastDataMs);
+  return Math.max(0, Math.floor(cap / WINDOW_STEP_MS) * WINDOW_STEP_MS);
 }
 
 function viewSpanMs() { return axisRightMs - axisLeftMs; }
@@ -664,9 +679,13 @@ async function loadManifest() {
   // advance towards it. Sizing the axis to the data alone hides that.
   AXIS_END = new Date(Math.max(...reaches, AXIS_START.getTime(), axisEndFloor()));
   fullSpanMs = fullSpanFor(AXIS_END - AXIS_START);
+  // Ticks are step valid times here, so the last thing drawn is the furthest
+  // any loaded run reaches - NOT AXIS_END, which the eclipse floor may have
+  // pushed well past it.
+  startMaxMs = startSliderMax(Math.max(...reaches) - AXIS_START);
 
   startInput.min = 0;
-  startInput.max = fullSpanMs - MIN_WINDOW_MS;
+  startInput.max = startMaxMs;
   startInput.step = WINDOW_STEP_MS;
   startInput.value = 0;
   extentInput.min = MIN_WINDOW_MS;
@@ -689,8 +708,7 @@ async function loadManifest() {
 // window trims instead. The extent slider's own value is deliberately left
 // alone by that trim, so panning back left restores the width you asked for.
 function syncWindowFromInputs() {
-  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0,
-                                    fullSpanMs - MIN_WINDOW_MS));
+  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0, startMaxMs));
   const wanted = Math.max(MIN_WINDOW_MS, parseInt(extentInput.value, 10) || fullSpanMs);
   axisRightMs = Math.min(fullSpanMs, axisLeftMs + wanted);
   startReadout.textContent = "+" + fmtDuration(axisLeftMs);

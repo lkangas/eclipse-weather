@@ -603,6 +603,7 @@ let AXIS_START, AXIS_END;
 let axisLeftMs = 0;     // left edge - moved by the start slider
 let axisRightMs = 0;    // right edge - left + the extent slider's duration
 let fullSpanMs = 0;     // AXIS_END - AXIS_START: the whole axis, what both sliders span
+let startMaxMs = 0;     // how far right the start slider may go - see startSliderMax()
 
 // Smallest window the sliders can produce. Also what keeps the two sliders
 // from crossing: start's max is fullSpanMs - MIN_WINDOW_MS and extent's min is
@@ -617,6 +618,37 @@ const WINDOW_STEP_MS = 3600 * 1000;   // both sliders move in whole hours
 // a whole number of hours too, so both sliders can reach both of their ends.
 function fullSpanFor(rawSpanMs) {
   return Math.max(Math.ceil(rawSpanMs / WINDOW_STEP_MS) * WINDOW_STEP_MS, MIN_WINDOW_MS);
+}
+
+// How far right the start slider may travel.
+//
+// Letting it reach fullSpanMs - MIN_WINDOW_MS is wrong HERE in a way it is
+// not in Tools 1/2: this axis is stretched to the eclipse on purpose so the
+// marker is always visible, and the eclipse is weeks past the newest run - so
+// roughly two thirds of the axis is empty BY DESIGN. A start slider spanning
+// all of it spent most of its travel in that emptiness, where every row is
+// blank and every gallery cell reads "no run in view". More than half the
+// control did nothing but destroy the view.
+//
+// The bound is the OLDEST of the models' newest runs, not the newest run
+// overall. Every row here is a model and the tool exists to compare models at
+// one instant, so a window that empties ten of eleven rows is no more useful
+// than one that empties all of them - and bounding by the newest run overall
+// does exactly that, since arome_france cycles 8x a day and everyone else
+// does not. This bound guarantees the opposite: at full travel every model
+// still has at least its own newest run in view.
+//
+// Tools 1/2 deliberately use a different bound (the last step drawn): their
+// axis is VALID time, where scrolling past a short-range model's horizon to
+// study the long-range ones is a legitimate thing to want.
+function startSliderMax() {
+  const newestPerModel = MODELS
+    .filter(m => m.runs.length)
+    .map(m => Math.max(...m.runs.map(r => r.runInit.getTime())));
+  if (!newestPerModel.length) return 0;
+  const cap = Math.min(fullSpanMs - MIN_WINDOW_MS,
+                       Math.min(...newestPerModel) - AXIS_START);
+  return Math.max(0, Math.floor(cap / WINDOW_STEP_MS) * WINDOW_STEP_MS);
 }
 
 function viewSpanMs() { return axisRightMs - axisLeftMs; }
@@ -784,8 +816,9 @@ function init() {
   const farthestTargetMs = Math.max(...TARGETS.map(t => t.validTime.getTime()));
   AXIS_END = new Date(Math.max(farthestTargetMs + 12 * 3600 * 1000, ...allRunInits));
   fullSpanMs = fullSpanFor(AXIS_END - AXIS_START);
+  startMaxMs = startSliderMax();
   startInput.min = 0;
-  startInput.max = fullSpanMs - MIN_WINDOW_MS;
+  startInput.max = startMaxMs;
   startInput.step = WINDOW_STEP_MS;
   startInput.value = 0;
   extentInput.min = MIN_WINDOW_MS;
@@ -876,8 +909,7 @@ function init() {
 // window trims instead. The extent slider's own value is deliberately left
 // alone by that trim, so panning back left restores the width you asked for.
 function syncWindowFromInputs() {
-  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0,
-                                    fullSpanMs - MIN_WINDOW_MS));
+  axisLeftMs = Math.max(0, Math.min(parseInt(startInput.value, 10) || 0, startMaxMs));
   const wanted = Math.max(MIN_WINDOW_MS, parseInt(extentInput.value, 10) || fullSpanMs);
   axisRightMs = Math.min(fullSpanMs, axisLeftMs + wanted);
   startReadout.textContent = "+" + fmtDuration(axisLeftMs);
