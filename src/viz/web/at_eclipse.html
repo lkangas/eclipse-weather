@@ -284,7 +284,15 @@
     gap: 4px;
     font-size: 10px;
     color: #7a776c;
+    /* Every cell is a click target: it selects that model's row and opens it
+       full-size in the single view. Only the dimmed .unsupported cells are
+       not, since the quantity they'd have to show doesn't exist for them. */
+    cursor: zoom-in;
   }
+  .galleryCell:hover { border-color: #8b3a2f; }
+  /* The row this cell would open, marked so gallery and stack agree on what
+     "clicked" means without having to open the single view to find out. */
+  .galleryCell.clicked { border-color: #8b3a2f; box-shadow: inset 0 0 0 1px #8b3a2f; }
   .galleryCell .cellTitle { font-weight: 700; color: #232320; font-size: 10.5px; }
   /* Rain ships as its own transparent PNG rather than baked into the base
      frame, so it overlays any base (cloud composite, total, temp) without a
@@ -336,7 +344,8 @@
   /* The quantity simply doesn't exist for this model (Cloud prob. on a
      non-ensemble, or Temp on anything) - dimmed so the gallery reads as
      "these can't answer" at a glance, rather than as broken cells. */
-  .galleryCell.unsupported { opacity: 0.5; }
+  .galleryCell.unsupported { opacity: 0.5; cursor: default; }
+  .galleryCell.unsupported:hover { border-color: #232320; }
 
   /* Touch-target bump for coarse pointers only (fingers, not mice) - keeps
      desktop mouse users pixel-identical to before. .row is 15px tall (fine
@@ -809,9 +818,21 @@ function init() {
 
   galleryEl.innerHTML = "";
   galleryCells = [];
-  MODELS.forEach(model => {
+  MODELS.forEach((model, idx) => {
     const cell = document.createElement("div");
     cell.className = "galleryCell";
+    // Clicking a cell is the natural "show me this one bigger" gesture, so it
+    // does exactly what clicking the model's row does and then opens the
+    // single view. galleryCells is built from MODELS in the same order as
+    // builtRows, so the gallery index IS the row index.
+    //
+    // Routed through trySelectRow rather than selectRowForSingleView so the
+    // Cloud prob. lock holds here too: a refused click must not switch the
+    // view either, or you'd land in the single view still looking at the
+    // model the lock kept selected, as if the click had picked it.
+    cell.addEventListener("click", () => {
+      if (trySelectRow(idx)) setViewMode("single");
+    });
     const titleEl = document.createElement("div");
     titleEl.className = "cellTitle";
     titleEl.textContent = model.label;
@@ -994,6 +1015,10 @@ function selectRowForSingleView(idx) {
   document.querySelectorAll(".row").forEach(r => {
     r.classList.toggle("clicked", parseInt(r.dataset.idx, 10) === idx);
   });
+  // The gallery is the same selection seen another way, so it carries the
+  // same mark - otherwise arrow-keying through models in gallery view moves
+  // a selection with nothing on screen showing where it went.
+  galleryCells.forEach((c, i) => c.cell.classList.toggle("clicked", i === idx));
   updateUI();
 }
 
