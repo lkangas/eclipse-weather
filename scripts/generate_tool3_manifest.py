@@ -38,7 +38,12 @@ import re
 from datetime import UTC, datetime, timedelta
 
 from src.config import get_model
-from src.fetchers.base import eclipse_t, full_range_steps, nearest_step
+from src.fetchers.base import (
+    eclipse_t,
+    end_of_range_tolerance_h,
+    full_range_steps,
+    nearest_step,
+)
 from src.viz.frame_renderer import OUTPUT_DIR, supported_fields
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -178,7 +183,15 @@ def _run_entry(
     """
     available = full_range_steps(model_config, run_init)
     offset_hours = (target_valid_time - run_init).total_seconds() / 3600
-    hit = nearest_step(available, offset_hours)
+    # The target is the eclipse's 18:30, which no model publishes a step for -
+    # every covering run in every model is really showing 18:00, half an hour
+    # early. A run whose LAST step is that same 18:00 was being refused purely
+    # for ending there rather than continuing past it, while another model's
+    # identical 18:00 frame was shown because its range happened to extend
+    # further. end_of_range_tolerance_h() makes the end of a run behave like
+    # the middle of it; see nearest_step() for the measured case (aifs_ens).
+    hit = nearest_step(available, offset_hours,
+                       tolerance_h=end_of_range_tolerance_h(available))
     if hit is None:
         # Target is before this init, or beyond the run's max reach.
         return {"run_init": _iso_z(run_init), **_NOT_COVERING}

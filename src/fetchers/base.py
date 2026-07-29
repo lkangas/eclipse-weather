@@ -62,17 +62,55 @@ def generate_available_steps(steps_spec: list[dict]) -> list[int]:
 
 
 def nearest_step(
-    available_steps: list[int], target_offset_hours: float
+    available_steps: list[int], target_offset_hours: float,
+    tolerance_h: float = 0.0,
 ) -> tuple[int, float] | None:
     """Nearest available forecast-hour step to a target offset. Returns
     (step, |misalignment_hours|), or None if the target is before init or
-    beyond the model's max reach (run doesn't cover it yet)."""
+    beyond the model's max reach (run doesn't cover it yet).
+
+    `tolerance_h` extends how far PAST the last step the target may sit and
+    still resolve to that last step. It exists because the strict test makes
+    the end of a run behave unlike the middle of it: inside the range this
+    function happily returns a step up to half the cadence away from the
+    target (a 6-hourly model can answer with a frame 3 h off), but one hour
+    past the last step it refuses outright.
+
+    Measured case, 2026-07-29: aifs_ens runs to +360 h, so its 07-28 18Z run
+    ends at 2026-08-12 18:00Z - thirty minutes before the eclipse. GFS from
+    the SAME init resolved to its own +360 and showed the very same 18:00Z
+    frame, because GFS keeps going to +384 and 360.5 h therefore fell inside
+    its range. Two identical pictures, one shown and one refused, decided by
+    a step neither of them used.
+
+    Default 0.0 keeps every existing caller bit-identical - in particular
+    steps_for_run() and the fetchers/extractors built on it, whose targets
+    are the whole-hour archive valid times where this never bit. Only a
+    caller with a target BETWEEN steps (the tools' 18:30 eclipse moment)
+    needs to opt in.
+    """
     if target_offset_hours < 0:
         return None
-    if target_offset_hours > max(available_steps):
+    if target_offset_hours > max(available_steps) + tolerance_h:
         return None
     step = min(available_steps, key=lambda s: abs(s - target_offset_hours))
     return step, abs(step - target_offset_hours)
+
+
+def end_of_range_tolerance_h(available_steps: list[int]) -> float:
+    """Half the final step spacing - the tolerance that makes nearest_step()
+    treat the end of a run the same way it treats the middle.
+
+    Half, specifically, because that is already the worst misalignment the
+    interior can produce: with steps every 6 h, any target lands within 3 h
+    of one of them. Allowing the same 3 h past the last step admits exactly
+    the runs that end just short of the target and refuses the ones that end
+    genuinely short. 0.0 for a run with fewer than two steps, which has no
+    spacing to halve.
+    """
+    if len(available_steps) < 2:
+        return 0.0
+    return (available_steps[-1] - available_steps[-2]) / 2
 
 
 def _available_steps_for_cycle(model_config: dict, run_init: datetime) -> list[int]:
