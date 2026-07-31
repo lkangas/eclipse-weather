@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from src.config import DATA_RAW, eclipse_config
+from src.config import DATA_RAW, eclipse_config, get_model
 
 log = logging.getLogger(__name__)
 
@@ -461,6 +461,19 @@ def should_attempt_fetch(model_name: str, run_init: datetime, now: datetime) -> 
     Always true for a run with nothing on disk. For a run that already has
     files, true only while it is young enough to still be gaining steps and
     the last attempt is far enough behind - see the note above.
+
+    The retry interval itself is `fetch_retry_interval_h` (models.yaml),
+    defaulting to FETCH_RETRY_INTERVAL_H. Only worth tightening for a model
+    whose re-attempt on an INCOMPLETE run stays cheap when most steps are
+    still unpublished - the safety property the note above depends on. That
+    is true of a model with a small, fixed request count regardless of how
+    much has arrived (arome_france: 9 group windows x 2 packages = 18
+    requests, worst case) or one gated behind a single cheap HEAD before any
+    real download (aemet_harmonie). It is NOT true of a model that requests
+    one file per (step, param) - icon_eu's own 92 steps x several params is
+    the same shape as gefs_extended's ~154-file case this note names, so it
+    keeps the 1h default rather than being tightened alongside the other two
+    dense short-range models.
     """
     if not already_fetched(model_name, run_init):
         return True
@@ -469,7 +482,8 @@ def should_attempt_fetch(model_name: str, run_init: datetime, now: datetime) -> 
     last = _last_fetch_attempt(model_name, run_init)
     if last is None:
         return True  # fetched before this top-up logic existed - give it one pass
-    return (now - last) >= timedelta(hours=FETCH_RETRY_INTERVAL_H)
+    interval_h = get_model(model_name).get("fetch_retry_interval_h", FETCH_RETRY_INTERVAL_H)
+    return (now - last) >= timedelta(hours=interval_h)
 
 
 @dataclass

@@ -616,6 +616,30 @@ def test_wholly_excused_field_still_reads_complete() -> None:
               model, init, declared, per_field_as_coverage_finds_it, fields, NOW))
 
 
+def test_retry_interval_per_model() -> None:
+    """The dense short-range models get polled more often; everything else
+    keeps the 1h default that protects a per-step fetcher (icon_eu,
+    gefs_extended) from re-requesting a long tail of not-yet-published files
+    every few minutes - see should_attempt_fetch()'s own note for why that
+    tail is the actual risk, not the polling itself.
+    """
+    print("\n[14] fetch_retry_interval_h overrides only where a retry stays cheap")
+    from src.fetchers.base import should_attempt_fetch, record_fetch_attempt
+
+    # hours_back/cycle_hours picked to stay clear of every other unique_init()
+    # call's neighbourhood above - unique_init's own collision-avoidance walks
+    # backwards by cycle_hours on a hit, and enough hits can walk a "6 hours
+    # ago" init past the 48h top-up window entirely, which then fails this
+    # check for an unrelated reason (sealed, not the interval).
+    init = unique_init(hours_back=4, cycle_hours=1)
+    for model, tightened in (("arome_france", True), ("aemet_harmonie", True),
+                             ("icon_eu", False), ("gfs", False)):
+        record_fetch_attempt(model, init, now=NOW - timedelta(minutes=20))
+        due_at_20min = should_attempt_fetch(model, init, NOW)
+        check(f"{model}: retry due after 20 min = {tightened}",
+              due_at_20min == tightened, f"got {due_at_20min}")
+
+
 def main() -> int:
     print(f"fixture root: {_TMP_ROOT}")
     try:
@@ -630,6 +654,7 @@ def main() -> int:
         test_unfetched_steps_are_not_evidence()
         test_never_published_step_is_not_declared()
         test_wholly_excused_field_still_reads_complete()
+        test_retry_interval_per_model()
     finally:
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
 

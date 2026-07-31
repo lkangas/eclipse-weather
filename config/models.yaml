@@ -849,6 +849,13 @@ models:
       # Real value: 8 cycles/day (00/03/06/09/12/15/18/21), uniform 51h on every one.
     steps: [{to_h: 51, every_h: 1}]   # T05: this guess was already correct
     publication_lag_h: [2, 4]   # unchanged, not re-verified this pass
+    fetch_retry_interval_h: 0.25   # found 2026-07-31: dense short-range model (TODO.md's own priority
+                                   # list - AROME/ICON-EU/HARMONIE), so a newly-published group should show
+                                   # up fast. Safe to poll 4x more often than the 1h default: a re-attempt
+                                   # on an incomplete run costs at most 9 group windows x 2 packages = 18
+                                   # requests (see src/fetchers/meteofrance_fetcher.py), nowhere near the
+                                   # per-step-file volume that makes tight polling risky for gefs_extended
+                                   # or icon_eu (see should_attempt_fetch()'s own note).
     first_covering: "2026-08-10T18Z"   # unchanged — still correct given uniform 51h
     coverage_limit: >
       CORRECTED T05 — NOT limited to NE Spain + Balearics as previously assumed. Confirmed by two independent
@@ -937,6 +944,12 @@ models:
                                       # harmonie 2026-07-29T12Z stuck reporting "fetched" for hours with all 48
                                       # available frames rendered).
     publication_lag_h: [2, 4]         # single-sample estimate (T07c) still not re-confirmed across all 4 cycles
+    fetch_retry_interval_h: 0.25      # found 2026-07-31: dense short-range priority model (see arome_france's
+                                      # own note). Cheap to poll often - every attempt is one HEAD request that
+                                      # skips the download entirely unless the bundle's token has actually
+                                      # changed (aemet_geotiff_fetcher.py's _bundle_token check), so tightening
+                                      # this doesn't multiply download volume the way it would for a per-step
+                                      # fetcher.
     first_covering: "2026-08-10T18Z"
     cloud:
       total: {param: nubosidad, format: geotiff, status: confirmed, provenance: total_only,
