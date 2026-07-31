@@ -553,6 +553,69 @@ def test_never_published_step_is_not_declared() -> None:
           str({k: len(v) for k, v in frames.items()}))
 
 
+def test_wholly_excused_field_still_reads_complete() -> None:
+    """A field that is genuinely and permanently absent from one specific run
+    - every declared step independently confirmed no-data - must still let
+    that run read complete, and the orchestrator's fetch-skip decision and
+    coverage.py's dashboard must reach the SAME verdict from it.
+
+    The bug this pins down, found 2026-07-31: arome_france 2026-07-30T15Z
+    fetched its raw fine and rendered temp 52/52, but every one of
+    hml_composite's 52 steps came back no-data (a real, one-off loss in that
+    cycle's cloud package - not a fetch or code problem). The orchestrator's
+    own per-run listing already built an explicit empty set for hml_composite
+    (its directory exists globally, from every other run), so its
+    completeness check correctly said done and stopped re-fetching. But
+    coverage.py's dashboard listing only ever creates a run's key when it
+    finds a matching FILE, so hml_composite had no key there at all -
+    is_complete()'s missing-key guard then read the run as incomplete
+    forever. The pipeline had already finished; the dashboard just never
+    found out, and reported "fetched" - implying outstanding work - for a run
+    with none left.
+    """
+    print("\n[13] a field with zero real frames, but every step excused, "
+          "still completes - and the dashboard agrees with the fetcher")
+    from src.pipeline import completeness
+    from src.pipeline.orchestrator import _frames_complete
+
+    model, cfg = "arome_france", get_model("arome_france")
+    init = unique_init(hours_back=10, cycle_hours=6)
+    declared = full_range_steps(cfg, init)
+    fields = verify.expected_fields(model)
+    check("fixture model has a second field to leave wholly absent",
+          len(fields) >= 2, str(fields))
+    present_field, absent_field = fields[0], fields[1]
+
+    for step in declared:
+        write_frame(model, init, step, present_field)
+    # absent_field: no frame ever written, but every step independently
+    # confirmed no-data (the render journal's OWN mechanism - see
+    # completeness.py's MIN_NO_DATA_OBSERVATIONS), which is what excuses it.
+    for step in declared:
+        journal.record_render_pass(model, init, {step: {absent_field: False}})
+        journal.record_render_pass(model, init, {step: {absent_field: False}})
+
+    # coverage.py's own listing shape: a run's key only ever appears when a
+    # FILE is found, so the wholly-absent field has no key at all here.
+    per_field_as_coverage_finds_it = {present_field: set(declared)}
+    check("dashboard's own listing has no key for the absent field",
+          absent_field not in per_field_as_coverage_finds_it)
+
+    backfilled = completeness.backfill_known_fields(
+        model, fields, per_field_as_coverage_finds_it)
+    check("backfill adds the absent field once its directory exists",
+          absent_field in backfilled and backfilled[absent_field] == set())
+    check("dashboard verdict, after backfill: complete",
+          completeness.is_complete(model, init, declared, backfilled, fields, NOW))
+
+    check("orchestrator verdict: complete (must agree with the dashboard)",
+          _frames_complete(model, init, NOW))
+
+    check("WITHOUT the backfill the dashboard used to disagree - regression guard",
+          not completeness.is_complete(
+              model, init, declared, per_field_as_coverage_finds_it, fields, NOW))
+
+
 def main() -> int:
     print(f"fixture root: {_TMP_ROOT}")
     try:
@@ -566,6 +629,7 @@ def main() -> int:
         test_lookback_successor_rule()
         test_unfetched_steps_are_not_evidence()
         test_never_published_step_is_not_declared()
+        test_wholly_excused_field_still_reads_complete()
     finally:
         shutil.rmtree(_TMP_ROOT, ignore_errors=True)
 

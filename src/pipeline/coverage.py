@@ -171,7 +171,12 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         rows = []
         for run_init in cycle_run_inits(cfg["cycles"], now, lookback_hours=lookback_h):
             due = due_time(cfg.get("publication_lag_h", [0, 0]), run_init)
-            per_field = index.get(f"{run_init:%Y%m%d%H}", {})
+            # backfill_known_fields: a field with real, permanent, all-steps-
+            # excused zero frames for THIS run must still read complete - see
+            # its own docstring for the arome_france 2026-07-30T15Z case this
+            # closes.
+            per_field = completeness.backfill_known_fields(
+                model_id, fields, index.get(f"{run_init:%Y%m%d%H}", {}))
             frames = sum(len(v) for v in per_field.values())
             raw_n, tombstoned = _raw_state(model_id, run_init)
             # Completeness is about STEPS, exactly - see

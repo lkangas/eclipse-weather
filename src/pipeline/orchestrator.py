@@ -161,11 +161,11 @@ def _frames_complete(model_id: str, run_init: datetime,
         return False
     declared = full_range_steps(get_model(model_id), run_init)
     stamp = f"{run_init:%Y%m%d%H}_"
-    frames: dict[str, set[int]] = {}
+    present: dict[str, set[int]] = {}
     for fld in fields:
         d = OUTPUT_DIR / model_id / fld
         if not d.is_dir():
-            return False
+            continue
         steps = set()
         for p in d.iterdir():
             if not p.name.startswith(stamp) or p.suffix != ".png":
@@ -174,7 +174,12 @@ def _frames_complete(model_id: str, run_init: datetime,
                 steps.add(int(p.stem.split("_", 1)[1]))
             except (IndexError, ValueError):
                 continue
-        frames[fld] = steps
+        present[fld] = steps
+    # backfill_known_fields, not a bare `frames = present`: coverage.py's
+    # dashboard build() must reach the exact same verdict from its own,
+    # differently-shaped listing - see that function's docstring for why the
+    # two disagreeing was a real, live bug (arome_france 2026-07-30T15Z).
+    frames = completeness.backfill_known_fields(model_id, fields, present)
     return completeness.is_complete(
         model_id, run_init, declared, frames, fields, now or datetime.now(UTC))
 

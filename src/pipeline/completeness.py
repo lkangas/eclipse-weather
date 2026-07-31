@@ -102,6 +102,45 @@ def missing_steps(model_id: str, run_init: datetime, declared: list[int],
     return out
 
 
+def backfill_known_fields(model_id: str, fields: list[str],
+                          present: dict[str, set[int]]) -> dict[str, set[int]]:
+    """Add an explicit empty set for a field this model HAS rendered before
+    (its output directory exists) but that produced nothing for this
+    particular run - as opposed to a field that has never rendered for any
+    run of this model at all, which is_complete()'s missing-key guard below
+    exists to catch and must keep catching.
+
+    Without this, a field that is genuinely and permanently absent from one
+    specific run - every declared step correctly excused by dead_steps()/
+    no_data_steps() - could still never read complete, for the same reason a
+    field that has not STARTED rendering cannot: both have zero files on
+    disk, and nothing here could tell them apart.
+
+    Found 2026-07-31: orchestrator._frames_complete() built its own per-run
+    listing that already did this (an inline `if not d.is_dir(): return
+    False` per field, else `frames[fld] = steps` unconditionally - so an
+    empty set from a real listing still became a key). coverage.py's
+    _frame_index() builds its listing differently - one pass per field
+    across every run of the model, only ever creating a run's key when it
+    finds a matching file - so a field with zero frames for one run got no
+    key there at all. The two disagreed: the orchestrator had correctly
+    stopped re-fetching arome_france 2026-07-30T15Z (temp rendered 52/52,
+    hml_composite's own 52/52 steps all independently confirmed no-data - a
+    real, one-off loss in that cycle's cloud package, not a fetch problem),
+    while the dashboard kept reporting it as "fetched", implying work still
+    outstanding when none was left to do. This is exactly the class of bug
+    completeness.py itself was written to close - two copies of the same
+    judgement, silently arriving at different answers - just one level
+    further down than the original fraction-vs-fraction duplication.
+    """
+    from src.viz.frame_renderer import OUTPUT_DIR
+    out = dict(present)
+    for fld in fields:
+        if fld not in out and (OUTPUT_DIR / model_id / fld).is_dir():
+            out[fld] = set()
+    return out
+
+
 def is_complete(model_id: str, run_init: datetime, declared: list[int],
                 frames_by_field: dict[str, set[int]], fields: list[str],
                 now: datetime) -> bool:
