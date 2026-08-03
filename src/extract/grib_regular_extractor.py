@@ -79,7 +79,7 @@ import xarray as xr
 from src.config import DATA_RAW
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
-from src.fetchers.base import format_init_dir, steps_for_run
+from src.fetchers.base import all_valid_times_for_run, format_init_dir
 
 log = logging.getLogger(__name__)
 
@@ -152,7 +152,7 @@ def _read_value(ds: xr.Dataset | None, var: str, lat: float, lon_360: float) -> 
 
 
 def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
-    steps = steps_for_run(model_config, run_init)
+    steps = all_valid_times_for_run(model_config, run_init)
     out_dir = DATA_RAW / "gfs" / format_init_dir(run_init)
     rows: list[PointRow] = []
 
@@ -197,7 +197,7 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
 
 
 def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[PointRow]:
-    steps = steps_for_run(model_config, run_init)
+    steps = all_valid_times_for_run(model_config, run_init)
     out_dir = DATA_RAW / "gefs_extended" / format_init_dir(run_init)
     rows: list[PointRow] = []
 

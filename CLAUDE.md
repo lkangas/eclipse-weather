@@ -61,8 +61,15 @@ isn't tied to the eclipse date at all.
     cloud_low:f32  cloud_mid:f32  cloud_high:f32  cloud_total:f32   # percent 0-100
     provenance:str(native|derived|total_only)  fetched_at:ts[UTC]
 
-Archive valid times: **15, 18, 21 UTC on eclipse day** (18:30 is interpolated
-between 18 and next step; 15 UTC supports trend + WNW-sightline views).
+Extraction covers **every valid time each run publishes** (changed
+2026-08-03), not just eclipse-day hours — the raw fetch has been full-range
+since the
+2026-07-23 archiver consolidation, but point extraction stayed narrowed to
+15/18/21 UTC on eclipse day until this change (18:30 is interpolated between
+18 and next step; 15 UTC supports trend + WNW-sightline views). Those 3
+hours remain the ones the eclipse-day views (Tool 2, site_ranking) pick out
+of the full set — they just no longer bound what's *stored*. Applies to new
+runs going forward only; no backfill of already-extracted runs.
 Iberia bbox: **36–44° N, 10° W–5° E**.
 
 ## Domain notes that affect design

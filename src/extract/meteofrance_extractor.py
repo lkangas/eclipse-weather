@@ -76,7 +76,7 @@ import xarray as xr
 from src.config import DATA_RAW
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
-from src.fetchers.base import format_init_dir, steps_for_run
+from src.fetchers.base import all_valid_times_for_run, format_init_dir
 
 logger = logging.getLogger(__name__)
 
@@ -118,7 +118,7 @@ def _step_hour_index(ds: xr.Dataset) -> dict[int, int]:
 
 
 def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
-    steps = steps_for_run(model_config, run_init)
+    steps = all_valid_times_for_run(model_config, run_init)
     covering = {vt: s for vt, s in steps.items() if s is not None}
     if not covering:
         logger.info(

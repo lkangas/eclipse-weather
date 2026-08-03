@@ -158,6 +158,37 @@ def steps_for_run(model_config: dict, run_init: datetime) -> dict[str, tuple[int
     return result
 
 
+def all_valid_times_for_run(model_config: dict, run_init: datetime) -> dict[str, tuple[int, float]]:
+    """The full-range counterpart to steps_for_run(): every step this run
+    actually publishes (up to data_horizon(), same cutoff full_range_steps()
+    already uses for raw fetch + map rendering) mapped to ITS OWN real valid
+    time, not just the 3 eclipse-day archive hours.
+
+    Same (valid_time_iso -> (step, misalignment)) shape as steps_for_run() on
+    purpose - every extractor call site that consumes steps_for_run() already
+    discards the misalignment (each step's own valid time has none, by
+    construction, so it's always 0.0 here) and only uses the dict shape to
+    iterate (valid, step) pairs, so this is a drop-in replacement wherever an
+    extractor should capture the whole run instead of just the archive hours.
+
+    Added 2026-08-03 after a design review: the raw fetch has covered the
+    full forecast range since the 2026-07-23 archiver consolidation, but
+    point extraction into points.parquet was still narrowed to 3 hours/run,
+    which meant nothing analogous to a full per-run forecast curve was ever
+    queryable without re-reading raw GRIB by hand. points.parquet is tiny
+    (measured 2026-08-03: 1.6 MB for 486k rows) - this doesn't come close to
+    a real storage concern even at 40-60x more rows per run.
+    """
+    horizon = data_horizon()
+    result = {}
+    for step in _available_steps_for_cycle(model_config, run_init):
+        valid_time = run_init + timedelta(hours=step)
+        if valid_time > horizon:
+            continue
+        result[valid_time.isoformat()] = (step, 0.0)
+    return result
+
+
 def data_horizon() -> datetime:
     """Latest valid time worth having at all (eclipse.data_horizon in
     models.yaml). Beyond it the forecast is of no use to this project, so

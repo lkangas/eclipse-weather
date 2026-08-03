@@ -113,7 +113,7 @@ import xarray as xr
 
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
-from src.fetchers.base import raw_output_dir, steps_for_run
+from src.fetchers.base import all_valid_times_for_run, raw_output_dir
 
 log = logging.getLogger(__name__)
 
@@ -140,13 +140,14 @@ def _percent_scale(cloud_field_config: dict, field_label: str) -> float:
 
 
 def _valid_times_by_step(model_config: dict, run_init: datetime) -> dict[int, list[datetime]]:
-    """Reduce steps_for_run()'s valid_time -> (step, misalignment) map down to
-    step -> [valid_times], dropping valid times this run doesn't cover yet,
-    and de-duplicating file opens when more than one archive valid time
-    nearest-maps to the same step (observed for real: AIFS's 6-hourly
-    cadence puts both the 18Z and 21Z archive valid times at the same
-    nearest step for some run_inits)."""
-    steps_map = steps_for_run(model_config, run_init)
+    """Reduce all_valid_times_for_run()'s valid_time -> (step, misalignment)
+    map down to step -> [valid_times]. Widened 2026-08-03 from the original
+    3-eclipse-hour-only steps_for_run() to every step this run publishes -
+    see that function's own docstring. The de-dup-by-step grouping stays
+    (harmless/rare now that valid times are each step's own real one rather
+    than several archive targets nearest-mapping to the same step, but cheap
+    to keep either way)."""
+    steps_map = all_valid_times_for_run(model_config, run_init)
     by_step: dict[int, list[datetime]] = {}
     for valid_iso, resolved in steps_map.items():
         if resolved is None:

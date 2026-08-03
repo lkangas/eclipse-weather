@@ -91,7 +91,7 @@ import xarray as xr
 from src.config import DATA_ROOT, eclipse_config
 from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
 from src.extract.registry import register
-from src.fetchers.base import raw_output_dir, steps_for_run
+from src.fetchers.base import all_valid_times_for_run, raw_output_dir
 
 log = logging.getLogger(__name__)
 
@@ -133,14 +133,14 @@ def _expected_filename(url_template: str, *, hh: str, yyyymmddhh: str, fff: str,
 
 
 def _valid_times_by_step(model_config: dict, run_init: datetime) -> dict[int, list[datetime]]:
-    """Reduce steps_for_run()'s valid_time -> (step, misalignment) map down to
-    step -> [valid_times], dropping valid times this run doesn't cover yet and
-    de-duplicating file reads when more than one archive valid time nearest-
-    maps to the same step. `valid` written to PointRow is always this archive
-    TARGET valid time (matches grib_regular_extractor's/ecmwf_extractor's
-    convention -- required for the run-evolution "fixed valid time, slide
-    run_init" view to line rows up correctly across runs)."""
-    steps_map = steps_for_run(model_config, run_init)
+    """Reduce all_valid_times_for_run()'s valid_time -> (step, misalignment)
+    map down to step -> [valid_times]. Widened 2026-08-03 from the original
+    3-eclipse-hour-only steps_for_run() to every step this run publishes -
+    see that function's own docstring. `valid` written to PointRow is each
+    step's own real valid time now, not an archive TARGET time - still lines
+    up correctly across runs for the run-evolution view, which matches on
+    the valid timestamp itself, not on "was it a target"."""
+    steps_map = all_valid_times_for_run(model_config, run_init)
     by_step: dict[int, list[datetime]] = {}
     for valid_iso, resolved in steps_map.items():
         if resolved is None:
