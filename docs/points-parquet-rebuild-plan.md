@@ -101,36 +101,70 @@ and map rendering are unaffected — only `points.parquet` extraction skips it.
 
 ## 4. Desktop rebuild procedure
 
-The desktop keeps raw data forever (by design, for exactly this kind of
-work), so this is a **re-extraction from already-downloaded GRIB2/GeoTIFF**,
-no new network fetches:
+**Revised per explicit direction: NOT a historical backfill.** The rebuild
+seeds `points.parquet` with only each model's single **newest** run, verified
+against the VPS as ground truth — not "walk every run ever archived." Once
+that seed is in, the file grows the normal way: the running scheduler
+extracts each subsequent new run as it lands, same as it always has.
+
+Why "newest on disk" isn't good enough by itself, demonstrated for real
+today: the desktop archiver got stuck on GFS for ~18 hours (NOAA S3 503s/
+connection resets, compounded by the scheduler's single-threaded fetch loop
+blocking on the slow model), so "the newest run_init directory under
+`data/raw/gfs/`" was quietly a stale run, not the actual newest one GFS had
+published — the VPS had already fetched the real newest run while the
+desktop was still behind. A rebuild step that just picks the newest local
+directory would silently seed `points.parquet` from stale data and have no
+way to know it. Same root problem, different shape, as the corrupted-run
+picking bug found earlier today in the prototype scripts
+(`point_timeseries.py`'s `_pick_run_init()`) — worth treating as a general
+lesson, not just fixing here: **anywhere this codebase picks "the newest
+run" for anything, it needs a real freshness check, not an assumption that
+the newest thing on local disk is the newest thing that exists.**
+
+Procedure:
 
 1. Delete `data/points.parquet`.
 2. Delete every `.extracted` marker under `data/raw/*/*/`.
-3. Walk every already-fetched `(model, run_init)` pair on disk, in
-   chronological order, and run each model's real extractor
-   (`src/extract/registry.py` dispatch — the same functions the live
-   scheduler calls, not a separate backfill-only code path) against it,
-   appending to `points.parquet` as it goes.
+3. For each model: ask the VPS what its own newest fetched run is (source of
+   truth — see open question below), and compare against the desktop's
+   newest run on disk.
+   - If the desktop already has that same run_init fetched (and it's not
+     corrupted/partial — reuse the good-fraction file-integrity check
+     already built for this in the prototype scripts, not just "a directory
+     exists"), extract it.
+   - If the desktop is behind, **fetch that run first**, then extract it.
+     Do not extract an older run just because it's what's currently on
+     disk.
 4. From that point on, the running scheduler (`src/scheduler/run.py`)
-   extracts each new run automatically, same as it does today — no special
-   "backfill mode" to turn off afterward.
+   extracts each new run automatically as it lands, same as it does today.
+
+**Open question — how does the desktop actually query VPS status?** I don't
+currently have a mechanism for this and don't want to guess one. Possible
+answers: the VPS already exposes something (`src/pipeline/`'s
+`rendered_index.json`/`pipeline_status.json` are mentioned in `TODO.md` as
+already-existing data, just without a viewer page yet — if reachable from
+the desktop, e.g. over the network or synced some other way, that could
+serve directly) or this needs a small new piece of plumbing. Machine/network
+specifics belong in private ops notes, not this doc — but I need at least
+the shape of the answer (is there already a URL/file the desktop can read,
+or does one need building?) before writing the "ask the VPS" step for real.
 
 **Known coverage gap, not a bug:** temperature fetching itself (the raw
 `temp_f*.grib2`/`T_2M`/SP1 files, as opposed to extracting it) was only
-built starting 2026-07-27 (`TODO.md`'s "Rain and temperature" entry). Runs
-fetched before that date have no temp file to read at all — the rebuilt
-`points.parquet` will correctly show `temp_c=None` for those, not an error.
-Cloud fields are unaffected (fetched since each model's onboarding).
+built starting 2026-07-27 (`TODO.md`'s "Rain and temperature" entry). A run
+older than that has no temp file to read at all. Low risk now that the seed
+is "newest run only" rather than a deep backfill, but worth knowing if a
+model's newest run still somehow predates that.
 
-**Also already fixed (uncommitted), needed for step 3 above to actually
-recover the currently-stuck runs:** `mark_extracted()` in
+**Also already fixed (uncommitted), still needed:** `mark_extracted()` in
 `src/scheduler/run.py` no longer fires when an extractor returns zero rows.
-Without this, re-running step 3 would immediately re-poison the same runs
-that are stuck today (several `ecmwf_hres`/`icon_eu`/`icon_global`/
-`arome_france`/`arpege_europe` runs have real raw data on disk but were
-marked "done" with nothing extracted, under the old 3-hour-only logic, and
-would be silently skipped again without this fix).
+Without this, several models' currently-stuck runs
+(`ecmwf_hres`/`icon_eu`/`icon_global`/`arome_france`/`arpege_europe` all
+have runs with real raw data on disk but were marked "done" with nothing
+extracted, under the old 3-hour-only logic) stay stuck even after step 3
+fetches/finds a genuinely current run - the *next* run after that would hit
+the same bug again without this fix.
 
 ## 5. VPS deployment
 
@@ -231,31 +265,36 @@ it's watched from.
 ## 7. Known risks / slow points (carried over from today's investigation)
 
 - **`icon_global`** needs a `cdo` remap subprocess call per (parameter, step)
-  — now 5 params (4 cloud + temp) × up to ~93 steps per run ≈ 465 remap calls
-  for a single run. This is the slowest single model in the rebuild by a wide
-  margin. No fix proposed here; just sized so it's not mistaken for a hang.
+  — 5 params (4 cloud + temp) × up to ~93 steps ≈ 465 remap calls for one
+  run. Since the rebuild now seeds only a single newest run per model (not a
+  historical backfill), this is paid once, not once per archived run — but
+  it's still the slowest single model in the seed pass by a wide margin. No
+  fix proposed here; just sized so it's not mistaken for a hang.
 - **Corrupted/partial raw files** from the 2026-08-03 disk-full incident:
   some runs have a mix of good and zero-byte files. Extraction already skips
   a broken step's read (logs a warning, continues) rather than failing the
-  whole run — no data loss beyond that step, but it does mean some models'
-  rebuilt history will have real gaps at specific valid times, not an
-  extraction bug.
+  whole run. §4's freshness/integrity check before extracting is meant to
+  catch the case where the *whole* newest run is bad, not just one step of
+  an otherwise-good one.
 - **`ecmwf_ens`/`aifs_ens` temperature stays `None` everywhere**, deliberately
   (see §3) — not a bug to chase.
 
 ## 8. Rollout sequence (once this plan is approved)
 
-1. Finalize + commit the already-written extraction code (schema,
+1. Resolve §4's open question (how the desktop reads VPS status) - blocks
+   step 3 below specifically, not steps 1-2.
+2. Finalize + commit the already-written extraction code (schema,
    full-range widening, `mark_extracted` fix, `aemet_harmonie` exclusion,
    the 4 Open-Meteo extractors' widening) — desktop-only at this point,
    nothing deployed differently yet.
-2. Build the progress-JSON writer + browser page (§6).
-3. Run the desktop rebuild (§4), watching it in the browser instead of a
-   terminal.
-4. Verify results for real: spot-check a few (model, site) series, confirm
+3. Build the progress-JSON writer + browser page (§6).
+4. Run the desktop rebuild (§4: wipe, then VPS-verified newest-run-per-model
+   seed - fetching first wherever the desktop is behind), watching it in the
+   browser instead of a terminal.
+5. Verify results for real: spot-check a few (model, site) series, confirm
    row counts and temp_c coverage match §3's table, confirm dead models are
    actually gone if that's confirmed in scope.
-5. Only then: decide §5's open question and start on VPS pipeline changes.
+6. Only then: decide §5's open question and start on VPS pipeline changes.
 
 ---
 *Machine/deployment specifics (box names, hostnames, ports beyond localhost
