@@ -151,6 +151,39 @@ def _read_value(ds: xr.Dataset | None, var: str, lat: float, lon_360: float) -> 
     return None if val != val else val  # NaN check without a numpy import
 
 
+_KELVIN_TO_C = -273.15
+
+
+def _open_temp_dataset(path: Path) -> tuple[xr.Dataset, str] | None:
+    """(dataset, variable name) for a single-message 2 m temperature file -
+    shared by gfs/gefs_extended, whose fetcher (herbie_fetcher.py) writes
+    exactly one TMP message per temp file (search regex pinned to '2 m above
+    ground'). Variable name isn't hardcoded (cfgrib's shortName->var mapping
+    for TMP isn't asserted elsewhere in this file) - same "take the one
+    variable that's there" approach frame_renderer.py's _read_single_var
+    already uses for this exact file shape."""
+    if not path.exists():
+        return None
+    dss = cfgrib.open_datasets(str(path))
+    if not dss:
+        return None
+    var = next(iter(dss[0].data_vars), None)
+    if var is None:
+        return None
+    return dss[0], var
+
+
+def _read_temp_c(temp: tuple[xr.Dataset, str] | None, lat: float, lon_360: float) -> float | None:
+    """Nearest-gridpoint 2 m temperature in degrees C, from an already-opened
+    _open_temp_dataset() result (K -> C happens here, once per site read,
+    not baked into the dataset)."""
+    if temp is None:
+        return None
+    ds, var = temp
+    val = _read_value(ds, var, lat, lon_360)
+    return None if val is None else val + _KELVIN_TO_C
+
+
 def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
     steps = all_valid_times_for_run(model_config, run_init)
     out_dir = DATA_RAW / "gfs" / format_init_dir(run_init)
@@ -171,6 +204,7 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
         missing = {"total", "low", "mid", "high"} - layers.keys()
         if missing:
             log.warning("gfs %s: missing layer(s) %s", path, sorted(missing))
+        temp = _open_temp_dataset(out_dir / f"f{step:03d}_temp.grib2")
 
         for site in all_sample_points():
             lon_360 = _lon_360(site["lon"])
@@ -191,6 +225,7 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
                     cloud_total=values["total"],
                     provenance="native",
                     fetched_at=fetched_at,
+                    temp_c=_read_temp_c(temp, site["lat"], lon_360),
                 )
             )
     return rows
@@ -231,6 +266,7 @@ def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[Point
         missing = {"low", "mid", "high"} - level_layers.keys()
         if missing:
             log.warning("gefs_extended %s: missing layer(s) %s", levels_path, sorted(missing))
+        temp = _open_temp_dataset(out_dir / f"f{step:03d}_c00_temp.grib2")
 
         for site in all_sample_points():
             lon_360 = _lon_360(site["lon"])
@@ -252,6 +288,7 @@ def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[Point
                     cloud_total=total_val,
                     provenance="native",
                     fetched_at=fetched_at,
+                    temp_c=_read_temp_c(temp, site["lat"], lon_360),
                 )
             )
     return rows

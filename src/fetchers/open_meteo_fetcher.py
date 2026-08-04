@@ -47,7 +47,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -64,7 +64,9 @@ from src.fetchers.registry import register
 logger = logging.getLogger(__name__)
 
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
-HOURLY_VARS = ["cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high"]
+HOURLY_VARS = [
+    "cloud_cover", "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high", "temperature_2m",
+]
 REQUEST_TIMEOUT_S = 30.0
 
 # CLAUDE.md fetch politeness: exponential backoff, honor Open-Meteo's
@@ -75,7 +77,12 @@ REQUEST_TIMEOUT_S = 30.0
 # seconds later succeeded every time, so these were not permanent "this run
 # isn't available" 400s), none of which were literal HTTP 429s but all of the
 # same "back off and retry" character. get_with_retry() below is shared by
-# fetch_single_run() for this reason.
+# fetch_single_run() for this reason - and, since 2026-08-04, by fetch()
+# itself: a concurrent burst of catch-up fetches (multiple open_meteo_json
+# models firing within seconds of each other) hit the exact same transient-
+# failure shape on the plain-httpx.get() path fetch() used to have (jma_gsm/
+# cma_grapes_global both failed with 0 files written; re-running the
+# identical call moments later succeeded cleanly).
 MAX_RETRIES = 4
 RETRY_BACKOFF_BASE_S = 1.5
 
@@ -141,13 +148,21 @@ def _approx_run_init(model_config: dict, now: datetime) -> datetime:
     return run_inits[-1]
 
 
-def _valid_date_range() -> tuple[str, str]:
-    """ISO calendar-date bounds (UTC) covering every eclipse-day archive
-    valid time, for Open-Meteo's start_date/end_date params."""
-    valid_times = target_valid_times(eclipse_config()["archive_valid_hours_utc"])
-    start = min(vt.date() for vt in valid_times)
-    end = max(vt.date() for vt in valid_times)
-    return start.isoformat(), end.isoformat()
+def _wide_date_range(model_config: dict, run_init: datetime) -> tuple[str, str]:
+    """ISO calendar-date bounds (UTC) for Open-Meteo's start_date/end_date
+    params, covering this run's OWN forecast horizon - not just the eclipse
+    day. Changed 2026-08-04: the old _valid_date_range() (single eclipse-day
+    window) meant the raw forecast.json itself only ever held ~1 day of
+    hourly data, unlike the GRIB-based models where the raw fetch was always
+    full-range and only extraction was narrow - for these 4 models the FETCH
+    itself was the bottleneck. Requesting more days than the model's real
+    horizon is harmless: T16's fetch_single_run already confirmed live that
+    Open-Meteo returns HTTP 200 with silently-null values past the real
+    horizon, so this errs generous (max cycle length + 1 day margin) rather
+    than computing an exact per-cycle cutoff."""
+    max_hours = max(model_config.get("cycles", {}).values(), default=240)
+    end = run_init + timedelta(hours=max_hours, days=1)
+    return run_init.date().isoformat(), end.date().isoformat()
 
 
 def _model_id(model_config: dict) -> str:
@@ -174,7 +189,7 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
     """
     model_id = _model_id(model_config)
     lats, lons = _site_coords()
-    start_date, end_date = _valid_date_range()
+    start_date, end_date = _wide_date_range(model_config, run_init)
 
     steps = steps_for_run(model_config, run_init)
 
@@ -189,7 +204,7 @@ def fetch(model_name: str, model_config: dict, run_init: datetime) -> FetchResul
     }
 
     try:
-        resp = httpx.get(FORECAST_URL, params=params, timeout=REQUEST_TIMEOUT_S)
+        resp = _get_with_retry(FORECAST_URL, params)
     except httpx.HTTPError as exc:
         return FetchResult(
             model=model_name, run_init=run_init, steps=steps, status="error", error=str(exc)

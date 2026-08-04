@@ -122,6 +122,15 @@ def _cloud_params(model_config: dict) -> list[str]:
     return params
 
 
+def _temp_param(model_config: dict) -> str | None:
+    """models.yaml's surface_temp.param (e.g. "T_2M"), or None if this model
+    has no confirmed/enabled temp field."""
+    st = model_config.get("surface_temp") or {}
+    if st.get("status") != "confirmed" or not st.get("enabled", True):
+        return None
+    return st.get("param")
+
+
 def _expected_filename(url_template: str, *, hh: str, yyyymmddhh: str, fff: str, param: str) -> str:
     """The local filename dwd_bz2_fetcher wrote for this (step, param) --
     reconstructed from models.yaml's own url_template, same as the fetcher
@@ -239,6 +248,9 @@ def _open_param_dataarray(path: Path, param: str) -> xr.DataArray | None:
     return None
 
 
+_KELVIN_TO_C = -273.15
+
+
 def _rows_for_step(
     model_name: str,
     run_init: datetime,
@@ -246,17 +258,27 @@ def _rows_for_step(
     param_to_da: dict[str, xr.DataArray],
     fetched_at: datetime,
     site_list: list[dict],
+    temp_param: str | None = None,
 ) -> list[PointRow]:
     """One PointRow per (site, valid_time) combining whatever of CLCL/CLCM/
     CLCH/CLCT were readable for this step -- missing bands are left None
     rather than dropping the whole row (a partially-fetched step should still
-    yield what it can, matching every other extractor in this package)."""
+    yield what it can, matching every other extractor in this package).
+    temp_param (models.yaml's surface_temp.param, e.g. "T_2M") is looked up
+    in the SAME param_to_da dict the cloud bands come from - callers fetch
+    it as just another param alongside CLCL/CLCM/CLCH/CLCT, so no separate
+    read path is needed here."""
+    temp_da = param_to_da.get(temp_param) if temp_param else None
     rows: list[PointRow] = []
     for site in site_list:
         band_values: dict[str, float | None] = {}
         for param, band in _PARAM_TO_BAND.items():
             da = param_to_da.get(param)
             band_values[band] = None if da is None else _value_at(da, site["lat"], site["lon"])
+        temp_c = None
+        if temp_da is not None:
+            v = _value_at(temp_da, site["lat"], site["lon"])
+            temp_c = None if v is None else v + _KELVIN_TO_C
         for valid in valid_times:
             rows.append(
                 PointRow(
@@ -271,6 +293,7 @@ def _rows_for_step(
                     cloud_total=band_values["total"],
                     provenance="native",
                     fetched_at=fetched_at,
+                    temp_c=temp_c,
                 )
             )
     return rows
@@ -280,7 +303,10 @@ def _extract_icon_eu(model_name: str, model_config: dict, run_init: datetime) ->
     out_dir = raw_output_dir(model_name, run_init)
     by_step = _valid_times_by_step(model_config, run_init)
     url_template = model_config["source"]["url_template"]
+    temp_param = _temp_param(model_config)
     params = _cloud_params(model_config)
+    if temp_param and temp_param not in params:
+        params = [*params, temp_param]
     site_list = all_sample_points()
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
@@ -308,7 +334,9 @@ def _extract_icon_eu(model_name: str, model_config: dict, run_init: datetime) ->
             continue
         fetched_at = min(fetched_ats)
         rows.extend(
-            _rows_for_step(model_name, run_init, valid_times, param_to_da, fetched_at, site_list)
+            _rows_for_step(
+                model_name, run_init, valid_times, param_to_da, fetched_at, site_list, temp_param
+            )
         )
     return rows
 
@@ -317,7 +345,10 @@ def _extract_icon_global(model_name: str, model_config: dict, run_init: datetime
     out_dir = raw_output_dir(model_name, run_init)
     by_step = _valid_times_by_step(model_config, run_init)
     url_template = model_config["source"]["url_template"]
+    temp_param = _temp_param(model_config)
     params = _cloud_params(model_config)
+    if temp_param and temp_param not in params:
+        params = [*params, temp_param]
     site_list = all_sample_points()
     bbox = eclipse_config()["bbox"]
     hh = run_init.strftime("%H")
@@ -366,7 +397,8 @@ def _extract_icon_global(model_name: str, model_config: dict, run_init: datetime
             fetched_at = min(fetched_ats)
             rows.extend(
                 _rows_for_step(
-                    model_name, run_init, valid_times, param_to_da, fetched_at, site_list
+                    model_name, run_init, valid_times, param_to_da, fetched_at, site_list,
+                    temp_param,
                 )
             )
     return rows

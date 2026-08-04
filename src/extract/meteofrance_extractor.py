@@ -117,6 +117,60 @@ def _step_hour_index(ds: xr.Dataset) -> dict[int, int]:
     return {int(td / _ONE_HOUR): i for i, td in enumerate(ds["step"].values)}
 
 
+_KELVIN_TO_C = -273.15
+
+
+def _temp_dataset(path: Path, shortname: str, level_type: str, var: str) -> xr.Dataset | None:
+    """The one cfgrib hypercube carrying 2 m temperature from an SP1 group
+    file - same shape as _cloud_dataset, filtered to the specific shortName/
+    typeOfLevel models.yaml's surface_temp block declares. SP1 carries
+    several temperature-flavoured messages (see T45's note in models.yaml:
+    SP2's own `t` is SKIN temperature, not 2 m) - this mirrors
+    frame_renderer.py's _meteofrance_temp_field, the reference
+    implementation for this exact file shape."""
+    try:
+        datasets = cfgrib.open_datasets(
+            str(path),
+            backend_kwargs={"filter_by_keys": {"shortName": shortname, "typeOfLevel": level_type}},
+        )
+    except Exception:
+        logger.exception("meteofrance_extractor: failed to open %s for temp, skipping", path)
+        return None
+    for ds in datasets:
+        if var in ds.data_vars and "step" in ds.dims:
+            return ds
+    return None
+
+
+def _open_temp_group_files(
+    model_config: dict, files: list[Path]
+) -> tuple[list[tuple[Path, xr.Dataset, dict[int, int]]], str | None]:
+    """(opened temp datasets in the same (path, ds, step_index) shape
+    _extract_meteofrance already uses for cloud, cfgrib variable name) for
+    whichever of `files` belong to surface_temp's package (SP1) - {}/None if
+    this model has no confirmed/enabled temp (status != confirmed, or
+    enabled: false, a deliberate cost opt-out elsewhere in this project;
+    meteofrance models don't currently use that flag, but the check is free)."""
+    st = model_config.get("surface_temp") or {}
+    if st.get("status") != "confirmed" or not st.get("enabled", True):
+        return [], None
+    package = st.get("package")
+    shortname = st.get("param")
+    if not package or not shortname:
+        return [], None
+    level_type = st.get("level", "heightAboveGround")
+    var = st.get("cfgrib_var") or shortname
+
+    opened: list[tuple[Path, xr.Dataset, dict[int, int]]] = []
+    for path in files:
+        if f"_{package}_" not in path.name:
+            continue
+        ds = _temp_dataset(path, shortname, level_type, var)
+        if ds is not None:
+            opened.append((path, ds, _step_hour_index(ds)))
+    return opened, var
+
+
 def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime) -> list[PointRow]:
     steps = all_valid_times_for_run(model_config, run_init)
     covering = {vt: s for vt, s in steps.items() if s is not None}
@@ -156,6 +210,8 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
         )
         return []
 
+    temp_opened, temp_var = _open_temp_group_files(model_config, files)
+
     site_list = all_sample_points()
     rows: list[PointRow] = []
 
@@ -180,12 +236,22 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
         at_step = ds.isel(step=step_idx)
         fetched_at = file_fetched_at(path)
 
+        temp_match = next(((p, ds, idx[step]) for p, ds, idx in temp_opened if step in idx), None)
+        temp_at_step = temp_match[1].isel(step=temp_match[2]) if temp_match else None
+
         for site in site_list:
             point = nearest_gridpoint(at_step, site["lat"], site["lon"])
             values: dict[str, float | None] = {}
             for var in _LEVEL_VARS:
                 val = float(point[var].values)
                 values[var] = None if val != val else val  # NaN check, no extra import needed
+
+            temp_c = None
+            if temp_at_step is not None:
+                temp_point = nearest_gridpoint(temp_at_step, site["lat"], site["lon"])
+                temp_val = float(temp_point[temp_var].values)
+                if temp_val == temp_val:  # not NaN
+                    temp_c = temp_val + _KELVIN_TO_C
 
             rows.append(
                 PointRow(
@@ -200,6 +266,7 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
                     cloud_total=None,  # SP2 has no native total field (see module docstring)
                     provenance="native",
                     fetched_at=fetched_at,
+                    temp_c=temp_c,
                 )
             )
 

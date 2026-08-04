@@ -201,6 +201,44 @@ def _value_at(da: xr.DataArray, lat: float, lon: float) -> float | None:
     return None if np.isnan(value) else value
 
 
+_KELVIN_TO_C = -273.15
+
+
+def _temp_dataarrays_by_member(
+    model_config: dict, out_dir: Path, step: int
+) -> dict[int, xr.DataArray]:
+    """{member: temp DataArray in Kelvin} for this step's own temp_f*.grib2,
+    or {} if this model has no temp at all (surface_temp missing/not
+    confirmed), it's a deliberate cost opt-out (ecmwf_ens/aifs_ens -
+    surface_temp.enabled: false in models.yaml, see each entry's
+    disabled_note: fetching every member's 2t would cost ~7-11 GB/day for a
+    field only ever averaged), or the file hasn't landed yet. Same
+    _iter_members() member convention as the cloud fields already read from
+    this model/step (control member's own `number`, or -1 if there's no
+    ensemble dimension at all)."""
+    st = model_config.get("surface_temp") or {}
+    if st.get("status") != "confirmed" or not st.get("enabled", True):
+        return {}
+    shortname = st.get("param")
+    if not shortname:
+        return {}
+    var = st.get("cfgrib_var") or shortname
+    path = out_dir / f"temp_f{step:03d}.grib2"
+    if not path.exists():
+        return {}
+    return dict(_iter_members(path, shortname, var))
+
+
+def _temp_c_at(
+    temp_by_member: dict[int, xr.DataArray], member: int, lat: float, lon: float
+) -> float | None:
+    da = temp_by_member.get(member)
+    if da is None:
+        return None
+    v = _value_at(da, lat, lon)
+    return None if v is None else v + _KELVIN_TO_C
+
+
 def _native_total_only_rows(
     model_name: str,
     run_init: datetime,
@@ -209,6 +247,7 @@ def _native_total_only_rows(
     scale: float,
     valid_times: list[datetime],
     site_list: list[dict],
+    temp_by_member: dict[int, xr.DataArray],
 ) -> list[PointRow]:
     """provenance="native" rows carrying cloud_total only (cloud_low/mid/high
     left None) -- used by ecmwf_hres (member -1) and ecmwf_ens (per pf
@@ -226,6 +265,7 @@ def _native_total_only_rows(
         for site in site_list:
             value = _value_at(da, site["lat"], site["lon"])
             total = None if value is None else value * scale
+            temp_c = _temp_c_at(temp_by_member, member, site["lat"], site["lon"])
             for valid in valid_times:
                 rows.append(
                     PointRow(
@@ -240,6 +280,7 @@ def _native_total_only_rows(
                         cloud_total=total,
                         provenance="native",
                         fetched_at=fetched_at,
+                        temp_c=temp_c,
                     )
                 )
     return rows
@@ -259,9 +300,11 @@ def _extract_total_only(model_name: str, model_config: dict, run_init: datetime)
     rows: list[PointRow] = []
     for step, valid_times in by_step.items():
         tcc_path = out_dir / f"tcc_f{step:03d}.grib2"
+        temp_by_member = _temp_dataarrays_by_member(model_config, out_dir, step)
         rows.extend(
             _native_total_only_rows(
-                model_name, run_init, tcc_path, total_shortname, scale, valid_times, site_list
+                model_name, run_init, tcc_path, total_shortname, scale, valid_times, site_list,
+                temp_by_member,
             )
         )
     return rows
@@ -277,6 +320,7 @@ def _aifs_rows(
     level_scale: float,
     valid_times: list[datetime],
     site_list: list[dict],
+    temp_by_member: dict[int, xr.DataArray],
 ) -> list[PointRow]:
     """provenance="native" rows carrying cloud_total AND cloud_low/mid/high
     together -- all four fields are genuinely native AIFS output, so (unlike
@@ -314,6 +358,7 @@ def _aifs_rows(
                 band_values[_SHORTNAME_TO_BAND[shortname]] = None if v is None else v * level_scale
             total_v = _value_at(das[total_shortname], site["lat"], site["lon"])
             total = None if total_v is None else total_v * total_scale
+            temp_c = _temp_c_at(temp_by_member, member, site["lat"], site["lon"])
             for valid in valid_times:
                 rows.append(
                     PointRow(
@@ -328,6 +373,7 @@ def _aifs_rows(
                         cloud_total=total,
                         provenance="native",
                         fetched_at=fetched_at,
+                        temp_c=temp_c,
                     )
                 )
     return rows
@@ -352,6 +398,7 @@ def _extract_aifs(model_name: str, model_config: dict, run_init: datetime) -> li
     rows: list[PointRow] = []
     for step, valid_times in by_step.items():
         cloud_path = out_dir / f"cloud_f{step:03d}.grib2"
+        temp_by_member = _temp_dataarrays_by_member(model_config, out_dir, step)
         rows.extend(
             _aifs_rows(
                 model_name,
@@ -363,6 +410,7 @@ def _extract_aifs(model_name: str, model_config: dict, run_init: datetime) -> li
                 level_scale,
                 valid_times,
                 site_list,
+                temp_by_member,
             )
         )
     return rows

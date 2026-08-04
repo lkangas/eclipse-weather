@@ -12,21 +12,28 @@ against the real archived file at
 ``PointRow`` for every (site, target valid time) pair actually present.
 
 Open-Meteo's hourly payload already carries real clock timestamps (not
-forecast-hour offsets), so this module matches ``hourly.time`` strings
-directly against ``target_valid_times(...)`` rather than reasoning about
-steps via ``src.fetchers.base.steps_for_run`` — there is no step arithmetic
-to reproduce here.
+forecast-hour offsets), so this module parses ``hourly.time`` strings
+directly rather than reasoning about steps via
+``src.fetchers.base.steps_for_run`` — there is no step arithmetic to
+reproduce here.
+
+Widened 2026-08-04: every hourly entry actually present in forecast.json is
+now extracted, not just the 3 eclipse-day archive hours - matching
+src.fetchers.base.all_valid_times_for_run()'s treatment of the GRIB-based
+extractors. This module's own fetcher (open_meteo_fetcher.py) was ALSO
+changed the same day to request the model's full forecast horizon instead
+of a single-day window, since for these 4 models (unlike the GRIB ones) the
+FETCH itself was the narrow part, not just extraction.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from src.config import DATA_RAW, eclipse_config
+from src.config import DATA_RAW
 from src.extract.base import PointRow, file_fetched_at, sites
 from src.extract.registry import register
 
@@ -122,20 +129,6 @@ def _format_init_dir(run_init: datetime) -> str:
     return run_init.strftime("%Y%m%d%H")
 
 
-def _target_valid_times() -> list[datetime]:
-    """The eclipse-day archive valid times (e.g. 15/18/21 UTC), on
-    eclipse_t()'s own calendar date -- matches src/fetchers/base.py's
-    eclipse_t()/target_valid_times() exactly; see the module-level NOTE
-    above for why this is a local copy rather than an import."""
-    cfg = eclipse_config()
-    raw = os.environ.get("ECLIPSE_T") or cfg.get("t", "2026-08-12T18:30:00Z")
-    t = datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
-    return [
-        t.replace(hour=h, minute=0, second=0, microsecond=0)
-        for h in cfg["archive_valid_hours_utc"]
-    ]
-
-
 def _forecast_path(model_name: str, run_init: datetime) -> Path:
     return DATA_RAW / model_name / _format_init_dir(run_init) / "forecast.json"
 
@@ -176,8 +169,6 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
         )
 
     fetched_at = file_fetched_at(path)
-    wanted_valid_times = _target_valid_times()
-    wanted_by_key = {vt.strftime(HOURLY_VALID_TIME_FMT): vt for vt in wanted_valid_times}
 
     rows: list[PointRow] = []
     for site_entry, site_payload in zip(site_list, payload, strict=False):
@@ -187,11 +178,14 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
         cloud_low = hourly.get("cloud_cover_low", [])
         cloud_mid = hourly.get("cloud_cover_mid", [])
         cloud_high = hourly.get("cloud_cover_high", [])
+        temp = hourly.get("temperature_2m", [])
 
         for idx, t in enumerate(times):
-            valid = wanted_by_key.get(t)
-            if valid is None:
-                continue  # not one of the eclipse-day archive valid times
+            try:
+                valid = datetime.strptime(t, HOURLY_VALID_TIME_FMT).replace(tzinfo=UTC)
+            except ValueError:
+                logger.warning("open_meteo_extractor: unparseable hourly.time entry %r, skipping", t)
+                continue
             rows.append(
                 PointRow(
                     model=model_name,
@@ -203,6 +197,7 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
                     cloud_mid=_safe_float(cloud_mid, idx),
                     cloud_high=_safe_float(cloud_high, idx),
                     cloud_total=_safe_float(cloud_total, idx),
+                    temp_c=_safe_float(temp, idx),
                     provenance=provenance,
                     fetched_at=fetched_at,
                 )

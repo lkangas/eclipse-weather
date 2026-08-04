@@ -30,6 +30,12 @@ class PointRow:
     cloud_total: float | None
     provenance: str  # native | derived | total_only
     fetched_at: datetime
+    # 2 m air temperature, degrees C. Added 2026-08-04 - default None (not a
+    # required positional arg) so it's optional per-row: some models
+    # genuinely have no temp (aemet_harmonie: never fetched at all;
+    # ecmwf_ens/aifs_ens: surface_temp.enabled=false in models.yaml, a
+    # deliberate cost opt-out - see those entries' disabled_note).
+    temp_c: float | None = None
 
     def __post_init__(self) -> None:
         if self.provenance not in VALID_PROVENANCE:
