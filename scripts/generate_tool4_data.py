@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 
 import polars as pl
 
-from src.config import DATA_ROOT, POINTS_PARQUET, load_models
+from src.config import DATA_ROOT, POINTS_PARQUET, eclipse_config, load_models
 
 OUT_DIR = DATA_ROOT / "viz" / "frames" / "tool4"
 
@@ -159,8 +159,17 @@ def main() -> int:
         print(f"  {model:<16} {len(runs)} run(s), quantities={quantities}, "
               f"{'ensemble' if is_ens else 'deterministic'}")
 
+    # Fixed x-axis domain so the chart does not rescale when the model changes.
+    # Right edge = data_horizon (eclipse + margin, the same cap every other
+    # tool uses); left edge = the earliest valid time in the data.
+    horizon_raw = eclipse_config().get("data_horizon")
+    horizon_iso = (
+        _iso(datetime.fromisoformat(horizon_raw.replace("Z", "+00:00")))
+        if horizon_raw else _iso(df["valid"].max())
+    )
     index = {
         "generated_at": _iso(df["fetched_at"].max()),
+        "valid_range": [_iso(df["valid"].min()), horizon_iso],
         "models": index_models,
     }
     (OUT_DIR / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")

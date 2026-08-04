@@ -253,10 +253,14 @@ function drawChart(lines,isTemp,dropped){
   const svg=document.getElementById("chartsvg");
   if(!lines.length){ svg.innerHTML=`<text x="${CW/2}" y="${CH/2}" text-anchor="middle" style="font-size:12px;fill:#a8a498">no data for this selection</text>`;
     document.getElementById("linecount").textContent=""; return; }
-  // shared time domain across all lines
-  let tmin=Infinity,tmax=-Infinity;
-  lines.forEach(l=>{ const t0=Date.parse(l.valid[0]),t1=Date.parse(l.valid[l.valid.length-1]);
-    if(t0<tmin)tmin=t0; if(t1>tmax)tmax=t1; });
+  // Fixed time domain (from the index) so the x-axis stays constant when the
+  // model changes; right edge = data_horizon (eclipse + margin). Falls back to
+  // the data's own span only if the index has no range.
+  let tmin, tmax;
+  if(INDEX.valid_range){ tmin=Date.parse(INDEX.valid_range[0]); tmax=Date.parse(INDEX.valid_range[1]); }
+  else { tmin=Infinity; tmax=-Infinity;
+    lines.forEach(l=>{ const t0=Date.parse(l.valid[0]),t1=Date.parse(l.valid[l.valid.length-1]);
+      if(t0<tmin)tmin=t0; if(t1>tmax)tmax=t1; }); }
   const ymin=isTemp?5:0, ymax=isTemp?38:100;
   const X=t=>PADL+(t-tmin)/(tmax-tmin)*(CW-PADL-PADR);
   const Y=v=>PADT+(1-(v-ymin)/(ymax-ymin))*(CH-PADT-PADB);
