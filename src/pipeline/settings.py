@@ -53,7 +53,9 @@ class Settings:
     per_model_chunk_hours: dict[str, int] = field(default_factory=dict)
     max_chunks_per_pass: int | None = None
 
-    max_run_age_days: int | None = None
+    # Newest N run-inits' frames to keep per model; None = keep everything.
+    # See frame_reclaim.py for why 18 matches what Tool 2/3 actually show.
+    max_runs_per_model: int | None = None
 
     # Models production must not touch at all. Not a performance dial: it is
     # for a model whose fetch path is known to be actively harmful, where
@@ -93,10 +95,10 @@ def load_settings(path: Path | None = None) -> Settings:
     if env_max_chunks not in (None, ""):
         max_chunks = int(env_max_chunks)
 
-    max_age = frames.get("max_run_age_days")
-    env_max_age = os.environ.get("ECLIPSE_FRAMES_MAX_RUN_AGE_DAYS")
-    if env_max_age not in (None, ""):
-        max_age = int(env_max_age)
+    max_runs = frames.get("max_runs_per_model")
+    env_max_runs = os.environ.get("ECLIPSE_FRAMES_MAX_RUNS_PER_MODEL")
+    if env_max_runs not in (None, ""):
+        max_runs = int(env_max_runs)
 
     return Settings(
         reclaim_enabled=_env_bool(
@@ -123,6 +125,6 @@ def load_settings(path: Path | None = None) -> Settings:
         ),
         per_model_chunk_hours=dict(chunking.get("per_model_chunk_hours") or {}),
         max_chunks_per_pass=max_chunks,
-        max_run_age_days=max_age,
+        max_runs_per_model=max_runs,
         exclude_models=list(raw.get("exclude_models") or []),
     )

@@ -124,10 +124,16 @@ chunking:
 exclude_models: []
 
 frames:
-  # Rendered PNGs plus the manifests ARE the product; raw data is only a means
-  # to them. They are ~130 KB each and the whole archive to date is well under
-  # a GB, so the default is to keep every frame for the life of the project.
-  # max_run_age_days is the emergency valve only (null = keep everything);
-  # Tools 2 and 3 are run-over-run evolution views, so pruning old runs
-  # directly removes rows from those charts.
-  max_run_age_days: null
+  # STALE ASSUMPTION CORRECTED 2026-08-04: this used to say frames were
+  # "~130 KB each, whole archive well under a GB" - measured on the live VPS
+  # that day it was actually 12 GB and climbing ~1 GB/day, unbounded, because
+  # nothing consumed this setting (max_run_age_days was set but never read
+  # anywhere in src/ - a dead knob). Replaced with a count-based cutoff
+  # because that's what the tools actually use: Tool 2's own client caps its
+  # display at the newest 18 runs/model (compare_runs.html's MAX_ROWS) and
+  # Tool 3 is meant to match it; anything older is generated and stored but
+  # never shown. See src/pipeline/frame_reclaim.py for the pruning logic -
+  # null here means keep everything, and nothing calls that module
+  # automatically yet (manual CLI only: `python -m src.pipeline.run
+  # --sweep-frames --keep-runs 18`, add --apply to actually delete).
+  max_runs_per_model: null

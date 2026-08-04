@@ -24,8 +24,8 @@ import threading
 import time
 from datetime import UTC, datetime
 
-from src.config import get_model, load_models
-from src.pipeline import chunking, coverage, orchestrator, reclaim, verify
+from src.config import DATA_ROOT, get_model, load_models
+from src.pipeline import chunking, coverage, frame_reclaim, orchestrator, reclaim, verify
 from src.pipeline.settings import load_settings
 
 # How often the coverage matrix is rebuilt, independent of the pass loop.
@@ -121,6 +121,31 @@ def print_sweep_detail(settings, models: list[str] | None, now: datetime) -> Non
                         print(f"      ... and {len(cands) - 5} more")
 
 
+def print_frame_sweep(frames_dir, keep_runs: int, models: list[str] | None, *, apply: bool) -> None:
+    """Rendered-frame prune report: newest `keep_runs` run-inits/model kept,
+    everything older listed for deletion. Plan only unless apply=True."""
+    plans = frame_reclaim.plan_all(frames_dir, keep_runs, models=models)
+    total_freed = 0
+    total_files = 0
+    for p in plans:
+        if not p.to_prune and not p.pruned_run_inits:
+            continue
+        gb = p.bytes_to_prune / 1024**3
+        print(f"{p.model:<16} keep {len(p.kept_run_inits)} run(s), "
+              f"prune {len(p.pruned_run_inits)} run(s) / {len(p.to_prune)} file(s) / {gb:.2f} GB")
+        if p.unparsed:
+            print(f"      ({len(p.unparsed)} file(s) with an unrecognised name - left untouched)")
+        total_files += len(p.to_prune)
+        total_freed += p.bytes_to_prune
+        if apply:
+            frame_reclaim.apply_plan(p)
+    verb = "deleted" if apply else "would delete"
+    print(f"\n{verb} {total_files} file(s) / {total_freed / 1024**3:.2f} GB total "
+          f"(keep-runs={keep_runs})")
+    if not apply:
+        print("dry run - rerun with --apply to actually delete")
+
+
 def print_sizing(settings, now: datetime) -> None:
     """The peak raw footprint this design guarantees, per model, measured
     against whatever is already archived on this box."""
@@ -185,6 +210,12 @@ def main() -> None:
                         help="reclaim-only pass: no fetching, no rendering")
     parser.add_argument("--sizing", action="store_true",
                         help="print the peak-disk bound per model and exit")
+    parser.add_argument("--sweep-frames", action="store_true",
+                        help="rendered-frame prune pass: plan only unless --apply too, then exit "
+                             "(see src/pipeline/frame_reclaim.py)")
+    parser.add_argument("--keep-runs", type=int, default=None,
+                        help="with --sweep-frames: newest N run-inits/model to keep "
+                             "(default: config/production.yaml's frames.max_runs_per_model)")
     parser.add_argument("--loop", action="store_true",
                         help="run continuously (the production container's mode)")
     parser.add_argument("--interval", type=int, default=CHECK_INTERVAL_SECONDS,
@@ -202,6 +233,15 @@ def main() -> None:
 
     if args.sizing:
         print_sizing(settings, datetime.now(UTC))
+        return
+
+    if args.sweep_frames:
+        keep = args.keep_runs if args.keep_runs is not None else settings.max_runs_per_model
+        if keep is None:
+            print("no --keep-runs given and frames.max_runs_per_model is unset (null) - "
+                  "nothing to do, refusing to guess a cutoff")
+            return
+        print_frame_sweep(DATA_ROOT / "viz" / "frames", keep, args.models, apply=args.apply)
         return
 
     if args.apply and not settings.reclaim_enabled:
