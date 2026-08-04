@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Point forecast · eclipse-weather</title>
+<style>
+  :root{ --bg:#f6f4ef; --ink:#232320; --sub:#7a776c; --faint:#a8a498;
+         --line:#d8d4c8; --panel:#fffdf8; --accent:#8b3a2f; --blue:#2f5f8b;
+         --hover:#efece3; }
+  *{box-sizing:border-box;}
+  body{margin:0;font-family:ui-monospace,"SF Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+       background:var(--bg);color:var(--ink);font-size:13px;}
+  .toolbar{display:flex;border-bottom:1px solid var(--line);background:var(--hover);}
+  .toolbar a{text-decoration:none;color:var(--sub);padding:7px 13px;font-size:12.5px;
+             border:1px solid transparent;border-bottom:none;}
+  .toolbar a:hover{color:var(--ink);}
+  .toolbar a.here{color:var(--ink);font-weight:700;background:var(--bg);
+                  border-color:var(--line);border-bottom:1px solid var(--bg);margin-bottom:-1px;}
+  .wrap{max-width:1120px;margin:0 auto;padding:12px;}
+  .top{display:flex;gap:12px;align-items:stretch;}
+  @media (max-width:720px){.top{flex-wrap:wrap;}}
+  .box{background:var(--panel);border:1px solid var(--line);padding:9px;}
+  .box > .lab{font-size:11px;color:var(--sub);margin-bottom:6px;}
+  .selbox{display:flex;flex-direction:column;}
+  #modelBox{flex:0 0 150px;} #runBox{flex:0 0 150px;} #mapBox{flex:1 1 auto;min-width:280px;}
+  select{flex:1;width:100%;font-family:inherit;font-size:12px;color:var(--ink);
+         background:#fff;border:1px solid var(--ink);outline:none;}
+  select option{padding:2px 5px;} select option:checked{background:var(--accent);color:#fff;}
+  svg{width:100%;display:block;}
+  #mapsvg{height:auto;}
+  .plot{margin-top:12px;}
+  .qrow{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:8px;
+        padding-bottom:8px;border-bottom:1px solid var(--line);}
+  .qrow .lab{font-weight:700;font-size:12px;}
+  .opt{display:inline-flex;align-items:center;gap:4px;cursor:pointer;font-size:12.5px;}
+  .opt.dis{color:var(--faint);cursor:not-allowed;}
+  .opt input{accent-color:var(--accent);margin:0;}
+  #charttitle{font-size:12px;color:#55534c;margin-bottom:4px;font-variant-numeric:tabular-nums;}
+  #chartsvg{height:300px;}
+  .note{font-size:11px;color:var(--sub);margin-top:6px;}
+  .ecl{color:var(--accent);font-weight:700;}
+  .sitedot{cursor:pointer;}
+  .hint{color:var(--faint);}
+  #tip{position:fixed;pointer-events:none;background:#fffdf8;border:1px solid var(--ink);
+       padding:3px 6px;font-size:11px;display:none;z-index:9;white-space:nowrap;}
+  .warn{color:var(--accent);}
+</style>
+</head>
+<body>
+<div class="toolbar">
+  <a href="index.html">Newest runs</a>
+  <a href="compare-runs.html">Compare runs</a>
+  <a href="at-eclipse.html">At eclipse</a>
+  <a href="point-forecast.html" class="here">Point forecast</a>
+  <a href="pipeline.html">Pipeline</a>
+</div>
+
+<div class="wrap">
+  <div class="top">
+    <div class="box selbox" id="modelBox">
+      <div class="lab">Model <span class="hint">(multi: ctrl/⌘)</span></div>
+      <select id="model" multiple size="10"></select>
+    </div>
+    <div class="box selbox" id="runBox">
+      <div class="lab">Run <span class="hint">· available</span></div>
+      <select id="run" multiple size="10"></select>
+    </div>
+    <div class="box" id="mapBox">
+      <div class="lab">Iberia · click site(s) <span id="selname" class="ecl"></span></div>
+      <svg id="mapsvg" viewBox="0 0 500 300" preserveAspectRatio="xMidYMid meet"></svg>
+    </div>
+  </div>
+
+  <div class="box plot">
+    <div class="qrow" id="qrow"><span class="lab">Quantity</span></div>
+    <div id="charttitle"></div>
+    <svg id="chartsvg" viewBox="0 0 1080 300" preserveAspectRatio="none"></svg>
+    <div class="note"><span class="ecl">┊</span> eclipse valid time · <span id="eclt"></span>
+      &nbsp;·&nbsp; <span id="linecount"></span></div>
+  </div>
+</div>
+<div id="tip"></div>
+
+<script>
+const BASE = "tool4/";
+const QCOLS = ["temp","total","low","mid","high"];
+const QLABEL = {temp:"Temp",total:"Total",low:"Low",mid:"Mid",high:"High",lmh:"L/M/H"};
+const PALETTE = ["#8b3a2f","#2f5f8b","#3f7a3f","#8a6d1f","#6b3f7a","#2f7a75","#a1442f","#455a7a"];
+const MAX_LINES = 40;
+
+let INDEX=null, MAP=null, ECLT=null;
+const cache = new Map();               // "model/run" -> payload
+const state = { models:[], runs:[], sites:["Madrid"], q:"total" };
+
+async function getRun(model, run){
+  const key = model+"/"+run;
+  if(cache.has(key)) return cache.get(key);
+  const p = fetch(BASE+model+"/"+run+".json").then(r=>r.ok?r.json():null);
+  cache.set(key, p); return p;
+}
+
+// ---------- map ----------
+let proj;
+function drawMap(){
+  const bb=MAP.bbox, W=500, H=300;
+  proj = (lon,lat)=>[ (lon-bb.lon_min)/(bb.lon_max-bb.lon_min)*W,
+                      (bb.lat_max-lat)/(bb.lat_max-bb.lat_min)*H ];
+  const path = (lines,stroke,w,op)=> lines.map(ln=>{
+    const d = ln.map((p,i)=>(i?"L":"M")+proj(p[0],p[1]).map(n=>n.toFixed(1)).join(" ")).join(" ");
+    return `<path d="${d}" fill="none" stroke="${stroke}" stroke-width="${w}" opacity="${op}"/>`;
+  }).join("");
+  let s="";
+  s+=path(MAP.roads_secondary,"#c9c4b6",0.4,0.6);
+  s+=path(MAP.roads_major,"#b3ad9e",0.6,0.9);
+  s+=path(MAP.coast,"#8f897b",0.9,1);
+  const T=MAP.totality;
+  if(T.north.length&&T.south.length){
+    const poly=[...T.north.map(p=>proj(p[0],p[1])),...T.south.slice().reverse().map(p=>proj(p[0],p[1]))];
+    s+=`<polygon points="${poly.map(p=>p.map(n=>n.toFixed(1)).join(",")).join(" ")}" fill="#8b3a2f" opacity="0.10"/>`;
+  }
+  s+=path([T.central],"#8b3a2f",1.2,0.6);
+  MAP.sites.forEach(st=>{
+    const [x,y]=proj(st.lon,st.lat), on=state.sites.includes(st.name);
+    s+=`<circle class="sitedot" data-site="${st.name}" cx="${x.toFixed(1)}" cy="${y.toFixed(1)}"
+        r="${on?5.5:3.2}" fill="${on?'#8b3a2f':'#7a776c'}" stroke="#fffdf8" stroke-width="${on?1.5:1}"/>`;
+  });
+  const m=document.getElementById("mapsvg"); m.innerHTML=s;
+  m.querySelectorAll(".sitedot").forEach(d=>d.addEventListener("click",e=>{
+    const name=d.getAttribute("data-site");
+    if(e.shiftKey||e.ctrlKey||e.metaKey){
+      const i=state.sites.indexOf(name);
+      if(i>=0){ if(state.sites.length>1) state.sites.splice(i,1); } else state.sites.push(name);
+    } else state.sites=[name];
+    drawMap(); refresh();
+  }));
+  document.getElementById("selname").textContent = state.sites.join(", ");
+}
+
+// ---------- controls ----------
+function availQuantities(){
+  // union of quantities across selected models
+  const set=new Set();
+  state.models.forEach(m=> (INDEX.models[m]?.quantities||[]).forEach(q=>set.add(q)));
+  return set;
+}
+function drawQ(){
+  const avail=availQuantities(), row=document.getElementById("qrow");
+  row.querySelectorAll(".opt").forEach(e=>e.remove());
+  const opts=[["temp","temp"],["total","total"],["low","low"],["mid","mid"],["high","high"],["lmh","L/M/H"]];
+  opts.forEach(([q,label])=>{
+    const on = q==="lmh" ? (avail.has("low")||avail.has("mid")||avail.has("high")) : avail.has(q);
+    const lab=document.createElement("label"); lab.className="opt"+(on?"":" dis");
+    lab.innerHTML=`<input type="radio" name="q" ${q===state.q?"checked":""} ${on?"":"disabled"}> ${label}`;
+    if(on) lab.querySelector("input").addEventListener("change",()=>{state.q=q;refresh();});
+    row.appendChild(lab);
+  });
+}
+function populateRuns(){
+  // runs available for the (single) selected model; when several models are
+  // selected each just uses its own newest run and this listbox is informational.
+  const rsel=document.getElementById("run"); rsel.innerHTML="";
+  const single = state.models.length===1 ? state.models[0] : null;
+  const runs = single ? INDEX.models[single].runs : (state.models[0]?INDEX.models[state.models[0]].runs:[]);
+  runs.forEach((r,i)=>{ const o=document.createElement("option"); o.value=r; o.textContent=fmtRun(r);
+    if(i===0) o.selected=true; rsel.appendChild(o); });
+  rsel.disabled = !single;
+  state.runs = single ? [runs[0]] : [];
+}
+function fmtRun(s){ return s.slice(0,4)+"-"+s.slice(4,6)+"-"+s.slice(6,8)+" "+s.slice(8,10)+"Z"; }
+
+// which (model, run) files does the current selection need?
+function neededRuns(){
+  const out=[];
+  const single = state.models.length===1 ? state.models[0] : null;
+  if(single){
+    (state.runs.length?state.runs:[INDEX.models[single].runs[0]]).forEach(r=>out.push([single,r]));
+  } else {
+    state.models.forEach(m=>out.push([m, INDEX.models[m].runs[0]]));  // newest per model
+  }
+  return out;
+}
+
+// ---------- chart ----------
+async function refresh(){
+  const combos = neededRuns();
+  const payloads = await Promise.all(combos.map(([m,r])=>getRun(m,r).then(p=>({m,r,p}))));
+  const qkeys = state.q==="lmh" ? ["low","mid","high"] : [state.q];
+  const isTemp = state.q==="temp";
+
+  // ensemble spaghetti view: exactly one model (ensemble) + one site + one quantity (not lmh)
+  const single = state.models.length===1?state.models[0]:null;
+  const ensView = single && INDEX.models[single].kind==="ensemble"
+                  && state.sites.length===1 && state.q!=="lmh";
+
+  const lines=[]; let dropped=0;
+  const varyModel = state.models.length>1, varyRun = combos.length>1 && !varyModel, varySite = state.sites.length>1;
+
+  for(const {m,r,p} of payloads){
+    if(!p) continue;
+    for(const site of state.sites){
+      const so = p.sites[site]; if(!so) continue;
+      if(ensView){
+        for(const q of qkeys){
+          if(!so[q]) continue;
+          (so[q+"_members"]||[]).forEach((arr,i)=>lines.push({valid:p.valid,vals:arr,
+            color:"#b9b3a6",width:0.6,op:0.7,meta:`${m} · member ${i+1} · ${site}`,cls:"mem"}));
+          lines.push({valid:p.valid,vals:so[q],color:"#8b3a2f",width:2,op:1,
+            meta:`${m} · ENS MEAN · ${site}`,cls:"mean"});
+        }
+        // deterministic overlay (paired HRES)
+        const pair=INDEX.models[single].deterministic_pair;
+        if(pair && INDEX.models[pair]){
+          const pr=INDEX.models[pair].runs[0], pp=await getRun(pair,pr);
+          const pso=pp&&pp.sites[site];
+          for(const q of qkeys){ if(pso&&pso[q]) lines.push({valid:pp.valid,vals:pso[q],
+            color:"#2f5f8b",width:1.6,op:1,meta:`${pair} (deterministic) · ${site}`,cls:"det"}); }
+        }
+      } else {
+        for(let qi=0;qi<qkeys.length;qi++){
+          const q=qkeys[qi]; if(!so[q]) continue;
+          if(lines.length>=MAX_LINES){dropped++;continue;}
+          let color;
+          if(qkeys.length>1) color=PALETTE[qi% PALETTE.length];
+          else if(varyModel) color=PALETTE[state.models.indexOf(m)%PALETTE.length];
+          else if(varySite) color=PALETTE[state.sites.indexOf(site)%PALETTE.length];
+          else if(varyRun) color=PALETTE[combos.findIndex(c=>c[1]===r)%PALETTE.length];
+          else color="#8b3a2f";
+          const bits=[INDEX.models[m].label||m, fmtRun(r), site]; if(qkeys.length>1) bits.push(QLABEL[q]);
+          lines.push({valid:p.valid,vals:so[q],color,width:1.3,op:0.9,meta:bits.join(" · "),cls:"line"});
+        }
+      }
+    }
+  }
+  drawChart(lines,isTemp,dropped);
+  document.getElementById("charttitle").textContent =
+    `${state.sites.join(", ")} · ${state.models.map(m=>INDEX.models[m].label||m).join(", ")||"(no model)"} · ${QLABEL[state.q]}${isTemp?" (°C)":" cloud (%)"}`;
+}
+
+function drawChart(lines,isTemp,dropped){
+  const CW=1080,CH=300,PADL=44,PADR=14,PADT=12,PADB=26;
+  const svg=document.getElementById("chartsvg");
+  if(!lines.length){ svg.innerHTML=`<text x="${CW/2}" y="${CH/2}" text-anchor="middle" style="font-size:12px;fill:#a8a498">no data for this selection</text>`;
+    document.getElementById("linecount").textContent=""; return; }
+  // shared time domain across all lines
+  let tmin=Infinity,tmax=-Infinity;
+  lines.forEach(l=>{ const t0=Date.parse(l.valid[0]),t1=Date.parse(l.valid[l.valid.length-1]);
+    if(t0<tmin)tmin=t0; if(t1>tmax)tmax=t1; });
+  const ymin=isTemp?5:0, ymax=isTemp?38:100;
+  const X=t=>PADL+(t-tmin)/(tmax-tmin)*(CW-PADL-PADR);
+  const Y=v=>PADT+(1-(v-ymin)/(ymax-ymin))*(CH-PADT-PADB);
+  let s="";
+  for(let g=0;g<=4;g++){const v=ymin+(ymax-ymin)*g/4,yy=Y(v);
+    s+=`<line x1="${PADL}" y1="${yy.toFixed(1)}" x2="${CW-PADR}" y2="${yy.toFixed(1)}" stroke="#e3ded2"/>`;
+    s+=`<text x="${PADL-6}" y="${(yy+3).toFixed(1)}" text-anchor="end" style="font-size:10px;fill:#7a776c">${Math.round(v)}${isTemp?'°':'%'}</text>`;}
+  // day ticks
+  for(let t=Math.ceil(tmin/864e5)*864e5;t<=tmax;t+=864e5){const xx=X(t);
+    const d=new Date(t);
+    s+=`<line x1="${xx.toFixed(1)}" y1="${PADT}" x2="${xx.toFixed(1)}" y2="${CH-PADB}" stroke="#efece3"/>`;
+    s+=`<text x="${xx.toFixed(1)}" y="${CH-8}" text-anchor="middle" style="font-size:9px;fill:#7a776c">${d.getUTCMonth()+1}/${d.getUTCDate()}</text>`;}
+  if(ECLT>=tmin&&ECLT<=tmax){const ex=X(ECLT);
+    s+=`<line x1="${ex.toFixed(1)}" y1="${PADT}" x2="${ex.toFixed(1)}" y2="${CH-PADB}" stroke="#8b3a2f" stroke-width="1.3" stroke-dasharray="3 3"/>`;}
+  // draw non-mean/det first, then mean/det on top
+  const order=l=>l.cls==="mem"?0:l.cls==="line"?1:2;
+  lines.sort((a,b)=>order(a)-order(b));
+  lines.forEach((l,idx)=>{
+    const pts=l.vals.map((v,i)=> v==null?null:`${X(Date.parse(l.valid[i])).toFixed(1)},${Y(v).toFixed(1)}`)
+      .filter(Boolean).join(" ");
+    s+=`<polyline points="${pts}" fill="none" stroke="${l.color}" stroke-width="${l.width}" opacity="${l.op}"/>`;
+    s+=`<polyline data-i="${idx}" points="${pts}" fill="none" stroke="#000" stroke-width="7" opacity="0" style="pointer-events:stroke"/>`;
+  });
+  svg.innerHTML=s;
+  const tip=document.getElementById("tip");
+  svg.querySelectorAll("polyline[data-i]").forEach(pl=>{
+    pl.addEventListener("mousemove",e=>{ const l=lines[+pl.getAttribute("data-i")];
+      tip.textContent=l.meta; tip.style.display="block";
+      tip.style.left=(e.clientX+11)+"px"; tip.style.top=(e.clientY+11)+"px"; });
+    pl.addEventListener("mouseleave",()=>tip.style.display="none");
+  });
+  document.getElementById("linecount").textContent =
+    `${lines.length} line(s)` + (dropped?` — ${dropped} more hidden (cap ${MAX_LINES}, narrow selection)`:"");
+  document.getElementById("linecount").className = dropped?"warn":"";
+}
+
+// ---------- init ----------
+async function init(){
+  [INDEX, MAP] = await Promise.all([
+    fetch(BASE+"index.json").then(r=>r.json()),
+    fetch(BASE+"basemap.json").then(r=>r.json()),
+  ]);
+  ECLT = Date.parse("2026-08-12T18:30:00Z");
+  document.getElementById("eclt").textContent="2026-08-12 18:30 UTC";
+  const msel=document.getElementById("model");
+  Object.keys(INDEX.models).forEach(m=>{const o=document.createElement("option");
+    o.value=m; o.textContent=INDEX.models[m].label||m; msel.appendChild(o);});
+  // default: first model selected
+  if(msel.options.length){ msel.options[0].selected=true; state.models=[msel.options[0].value]; }
+  msel.addEventListener("change",()=>{
+    state.models=[...msel.selectedOptions].map(o=>o.value);
+    const av=availQuantities(); if(!av.has(state.q)&&state.q!=="lmh") state.q=[...av][0]||"total";
+    populateRuns(); drawQ(); refresh();
+  });
+  document.getElementById("run").addEventListener("change",()=>{
+    state.runs=[...document.getElementById("run").selectedOptions].map(o=>o.value); refresh();
+  });
+  drawMap(); populateRuns(); drawQ(); refresh();
+}
+init().catch(e=>{document.body.insertAdjacentHTML("beforeend",
+  `<div class="wrap warn">failed to load: ${e}</div>`);});
+</script>
+</body>
+</html>
