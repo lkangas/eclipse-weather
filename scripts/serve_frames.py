@@ -41,6 +41,10 @@ _NO_CACHE_NAMES = {
     "review.html", "review_grid.json",
     "rain_overlay_review.html", "rain_overlay_grid.json",
     "temp_panel_review.html", "temp_panel_grid.json",
+    # Tool 4: the client, its index (models/runs grow over time) and the
+    # basemap (regenerated if the bbox/layers change) revalidate; the
+    # per-(model,run) tool4/<model>/<run>.json files are immutable and DO cache.
+    "point-forecast.html", "index.json", "basemap.json",
 }
 
 
