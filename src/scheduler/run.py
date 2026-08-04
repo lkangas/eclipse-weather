@@ -30,6 +30,16 @@ log = logging.getLogger("scheduler")
 
 CHECK_INTERVAL_SECONDS = 300  # 5 minutes
 
+# aemet_harmonie is deliberately excluded from points.parquet entirely
+# (explicit user direction, 2026-08-04): its cloud_total is already the
+# weakest signal in the registry (no L/M/H, approximate colour-ramp-legend
+# inversion rather than a real numeric field - see aemet_extractor.py's own
+# docstring), and its temperature would need the same lossy legend-inversion
+# treatment on top, which isn't worth building. Raw GeoTIFF fetch and map
+# rendering are UNAFFECTED - this only skips the points.parquet extraction
+# step.
+_EXTRACTION_EXCLUDED_MODELS = {"aemet_harmonie"}
+
 
 def ping_healthcheck() -> None:
     """Deadman's-switch style ping — CLAUDE.md: 'every scheduled fetch pings a
@@ -579,6 +589,8 @@ def run_once() -> None:
                     log.error("fetch failed for %s %s: %s", model_name, run_init.isoformat(), e)
                     continue
 
+            if model_name in _EXTRACTION_EXCLUDED_MODELS:
+                continue
             # Extract whenever files exist and haven't been extracted yet - covers
             # both a fresh fetch just above AND a run fetched on an earlier tick
             # whose extraction failed or was never attempted (e.g. this module
@@ -599,7 +611,17 @@ def run_once() -> None:
                 extractor = extract_registry.get_extractor(model_config["fetch"])
                 rows = extractor(model_name, model_config, fetched_init)
                 append_points(rows)
-                mark_extracted(model_name, fetched_init)
+                # Only mark done when there was actually something to extract.
+                # Previously unconditional - a run whose extractor legitimately
+                # finds nothing yet (e.g. no step has landed) got marked
+                # extracted with 0 rows and was blocked from ever being
+                # retried, including once its data landed or the extraction
+                # logic itself improved (found 2026-08-04: this is exactly
+                # what happened to every short/medium-range model's runs once
+                # the archive-hours-only extraction couldn't reach the real
+                # eclipse target - see the comment above raw_data_files()).
+                if rows:
+                    mark_extracted(model_name, fetched_init)
                 log.info(
                     "extracted %s %s: %d points.parquet rows",
                     model_name,
