@@ -34,8 +34,8 @@
 # that was not in the extraction list at fetch time can never be added
 # retroactively for that run.
 #   RESOLVED 2026-07-27: extraction now uses the curated 29 places in
-#   config/placenames.json (145 series including the WNW strips), loaded by
-#   src/config.py's load_sites(). The blocker is cleared; this note stays as
+#   config/placenames.json, loaded by src/config.py's load_sites(). The
+#   blocker is cleared; this note stays as
 #   the reason the rule exists, because it still applies to any FUTURE change
 #   to that list - widening it later does not recover discarded runs.
 

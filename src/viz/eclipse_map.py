@@ -43,15 +43,15 @@ def _load_totality_path() -> dict:
 
 
 def _latest_model_snapshot(model_name: str, field: str) -> pl.DataFrame | None:
-    """One row per named site (WNW-strip points excluded): the given model's
-    LATEST archived run_init, at whichever valid time is nearest eclipse.t,
-    non-null `field`, preferring native provenance over derived when both
-    exist for the same site/valid (matches T21's ecmwf_hres two-row design)."""
+    """One row per named site: the given model's LATEST archived run_init,
+    at whichever valid time is nearest eclipse.t, non-null `field`,
+    preferring native provenance over derived when both exist for the same
+    site/valid (matches T21's ecmwf_hres two-row design)."""
     if not POINTS_PARQUET.exists():
         return None
     col = FIELD_COLUMN[field]
     df = pl.read_parquet(POINTS_PARQUET)
-    df = df.filter((pl.col("model") == model_name) & ~pl.col("site").str.contains("_wnw"))
+    df = df.filter(pl.col("model") == model_name)
     if df.height == 0:
         return None
 

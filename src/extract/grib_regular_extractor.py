@@ -77,7 +77,7 @@ import cfgrib
 import xarray as xr
 
 from src.config import DATA_RAW
-from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
+from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
 from src.extract.registry import register
 from src.fetchers.base import all_valid_times_for_run, format_init_dir
 
@@ -189,7 +189,9 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
     out_dir = DATA_RAW / "gfs" / format_init_dir(run_init)
     rows: list[PointRow] = []
 
-    for valid_iso, step_info in steps.items():
+    total = len(steps)
+    for i, (valid_iso, step_info) in enumerate(steps.items(), 1):
+        log.info("gfs: step %d/%d valid=%s (%d rows so far)", i, total, valid_iso, len(rows))
         if step_info is None:
             continue
         step, _misalignment_h = step_info
@@ -206,7 +208,7 @@ def _extract_gfs(model_config: dict, run_init: datetime) -> list[PointRow]:
             log.warning("gfs %s: missing layer(s) %s", path, sorted(missing))
         temp = _open_temp_dataset(out_dir / f"f{step:03d}_temp.grib2")
 
-        for site in all_sample_points():
+        for site in sites():
             lon_360 = _lon_360(site["lon"])
             values = {
                 layer: _read_value(layers.get(layer), var, site["lat"], lon_360)
@@ -236,7 +238,9 @@ def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[Point
     out_dir = DATA_RAW / "gefs_extended" / format_init_dir(run_init)
     rows: list[PointRow] = []
 
-    for valid_iso, step_info in steps.items():
+    total = len(steps)
+    for i, (valid_iso, step_info) in enumerate(steps.items(), 1):
+        log.info("gefs_extended: step %d/%d valid=%s (%d rows so far)", i, total, valid_iso, len(rows))
         if step_info is None:
             continue
         step, _misalignment_h = step_info
@@ -268,7 +272,7 @@ def _extract_gefs_extended(model_config: dict, run_init: datetime) -> list[Point
             log.warning("gefs_extended %s: missing layer(s) %s", levels_path, sorted(missing))
         temp = _open_temp_dataset(out_dir / f"f{step:03d}_c00_temp.grib2")
 
-        for site in all_sample_points():
+        for site in sites():
             lon_360 = _lon_360(site["lon"])
             total_val = _read_value(total_ds, "tcc", site["lat"], lon_360)
             level_vals = {

@@ -74,7 +74,7 @@ import numpy as np
 import xarray as xr
 
 from src.config import DATA_RAW
-from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
+from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
 from src.extract.registry import register
 from src.fetchers.base import all_valid_times_for_run, format_init_dir
 
@@ -195,8 +195,12 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
 
     # Open every group file once; keep only ones with a usable lcc/mcc/hcc
     # hypercube, alongside the set of forecast-hour steps it actually holds.
+    # This cfgrib.open_datasets pass over the ~10-17 group files is the slow
+    # part (each is a ~130-message hypercube) - log per file so it isn't a
+    # silent gap before the per-step loop below starts reporting.
     opened: list[tuple[Path, xr.Dataset, dict[int, int]]] = []
-    for path in files:
+    for gi, path in enumerate(files, 1):
+        logger.info("%s: opening group file %d/%d %s", model_name, gi, len(files), path.name)
         ds = _cloud_dataset(path)
         if ds is not None:
             opened.append((path, ds, _step_hour_index(ds)))
@@ -212,10 +216,13 @@ def _extract_meteofrance(model_name: str, model_config: dict, run_init: datetime
 
     temp_opened, temp_var = _open_temp_group_files(model_config, files)
 
-    site_list = all_sample_points()
+    site_list = sites()
     rows: list[PointRow] = []
 
-    for valid_iso, step_info in covering.items():
+    total = len(covering)
+    for i, (valid_iso, step_info) in enumerate(covering.items(), 1):
+        logger.info("%s: step %d/%d valid=%s (%d rows so far)",
+                    model_name, i, total, valid_iso, len(rows))
         step, _misalignment_h = step_info
         valid = datetime.fromisoformat(valid_iso)
 

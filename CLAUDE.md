@@ -66,7 +66,7 @@ Extraction covers **every valid time each run publishes** (changed
 since the
 2026-07-23 archiver consolidation, but point extraction stayed narrowed to
 15/18/21 UTC on eclipse day until this change (18:30 is interpolated between
-18 and next step; 15 UTC supports trend + WNW-sightline views). Those 3
+18 and next step; 15 UTC supports trend views). Those 3
 hours remain the ones the eclipse-day views (Tool 2, site_ranking) pick out
 of the full set — they just no longer bound what's *stored*. Applies to new
 runs going forward only; no backfill of already-extracted runs.
@@ -74,9 +74,6 @@ Iberia bbox: **36–44° N, 10° W–5° E**.
 
 ## Domain notes that affect design
 
-- **Low sun:** at T the sun is ~10–12° high, azimuth ~285° (WNW). Cloud along
-  the sightline matters as much as overhead → each site also gets a WNW strip
-  sample (see sites.yaml: bearing 285°, 100 km, every 25 km).
 - **Eclipse radiation:** models differ in whether their radiation scheme
   simulates the obscuration (affects low cloud/convection at 17–19 UTC).
   Findings from T09 get annotated per model in models.yaml `notes`.

@@ -9,8 +9,7 @@ full brief and hard constraints, and [TASKS.md](TASKS.md) for the work queue.
 - `config/models.yaml` — NWP model registry (cycles, lengths, steps, URLs,
   params, lags): the single source of truth read by fetchers, scheduler,
   Gantt, and UI.
-- `config/sites.yaml` — candidate viewing sites, including WNW sightline
-  strip samples.
+- `config/placenames.json` — the 29 curated candidate viewing sites.
 - `src/fetchers/` — per-source download (byte-range GRIB, DWD bz2, GeoTIFF,
   JSON), one module per `fetch:` value in `models.yaml`.
 - `src/extract/` — GRIB2/GeoTIFF → xarray → Iberia bbox slice + point rows.

@@ -89,7 +89,7 @@ import httpx
 import xarray as xr
 
 from src.config import DATA_ROOT, eclipse_config
-from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
+from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
 from src.extract.registry import register
 from src.fetchers.base import all_valid_times_for_run, raw_output_dir
 
@@ -307,12 +307,14 @@ def _extract_icon_eu(model_name: str, model_config: dict, run_init: datetime) ->
     params = _cloud_params(model_config)
     if temp_param and temp_param not in params:
         params = [*params, temp_param]
-    site_list = all_sample_points()
+    site_list = sites()
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
 
     rows: list[PointRow] = []
-    for step, valid_times in by_step.items():
+    total = len(by_step)
+    for i, (step, valid_times) in enumerate(by_step.items(), 1):
+        log.info("%s: step %d/%d (+%dh) (%d rows so far)", model_name, i, total, step, len(rows))
         fff = f"{step:03d}"
         param_to_da: dict[str, xr.DataArray] = {}
         fetched_ats: list[datetime] = []
@@ -349,7 +351,7 @@ def _extract_icon_global(model_name: str, model_config: dict, run_init: datetime
     params = _cloud_params(model_config)
     if temp_param and temp_param not in params:
         params = [*params, temp_param]
-    site_list = all_sample_points()
+    site_list = sites()
     bbox = eclipse_config()["bbox"]
     hh = run_init.strftime("%H")
     yyyymmddhh = run_init.strftime("%Y%m%d%H")
@@ -362,7 +364,10 @@ def _extract_icon_global(model_name: str, model_config: dict, run_init: datetime
 
     with tempfile.TemporaryDirectory(prefix="icon_global_remap_") as tmp_dir_str:
         tmp_dir = Path(tmp_dir_str)
-        for step, valid_times in by_step.items():
+        total = len(by_step)
+        for i, (step, valid_times) in enumerate(by_step.items(), 1):
+            log.info("%s: step %d/%d (+%dh, cdo remap) (%d rows so far)",
+                     model_name, i, total, step, len(rows))
             fff = f"{step:03d}"
             param_to_da: dict[str, xr.DataArray] = {}
             fetched_ats: list[datetime] = []

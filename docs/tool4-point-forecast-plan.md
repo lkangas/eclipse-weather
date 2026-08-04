@@ -32,14 +32,7 @@ for a given (model, run, site) is exactly "which of `temp_c` /
 `cloud_total` / `cloud_low` / `cloud_mid` / `cloud_high` is non-null across
 that row group" — which is also exactly the greying-out rule (§4).
 
-**Sites in scope for v1: the 29 named places only**, not their WNW-sightline
-strip sub-points (`{site}_wnw{25,50,75,100}km`, from `config/sites.yaml`,
-expanded at extraction time — see `src/extract/base.py:wnw_strip_points()`).
-The strips exist in `points.parquet` under their own `site` values and could
-be added later (e.g. a toggle to show them as fainter satellite dots around
-their parent site), but the basemap `config/placenames.json` was built for
-the 29 named places specifically (`place_count: 29`, no strip points in that
-file) - out of scope for v1, flag if wanted.
+**Sites: the 29 named places in `config/placenames.json`** (`place_count: 29`).
 
 **Ensemble members**: `points.parquet` carries per-member rows
 (`member != -1`) for `aifs_ens`/`ecmwf_ens`. Not addressed in this v1 plan —
@@ -165,7 +158,6 @@ Tools 1-3.
 
 - The basemap approach (§3 Option A vs B).
 - Whether/how ensemble models (`aifs_ens`, `ecmwf_ens`) get a chart at all.
-- Whether the WNW-strip points get any UI representation.
 - History cap on the exported JSON (§2).
 - Your additional ideas, not yet described.
 

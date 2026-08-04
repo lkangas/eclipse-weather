@@ -111,7 +111,7 @@ import cfgrib
 import numpy as np
 import xarray as xr
 
-from src.extract.base import PointRow, all_sample_points, file_fetched_at, nearest_gridpoint
+from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
 from src.extract.registry import register
 from src.fetchers.base import all_valid_times_for_run, raw_output_dir
 
@@ -295,10 +295,12 @@ def _extract_total_only(model_name: str, model_config: dict, run_init: datetime)
     by_step = _valid_times_by_step(model_config, run_init)
     total_shortname = model_config["cloud"]["total"]["param"]
     scale = _percent_scale(model_config["cloud"]["total"], "total")
-    site_list = all_sample_points()
+    site_list = sites()
 
     rows: list[PointRow] = []
-    for step, valid_times in by_step.items():
+    total = len(by_step)
+    for i, (step, valid_times) in enumerate(by_step.items(), 1):
+        log.info("%s: step %d/%d (+%dh) (%d rows so far)", model_name, i, total, step, len(rows))
         tcc_path = out_dir / f"tcc_f{step:03d}.grib2"
         temp_by_member = _temp_dataarrays_by_member(model_config, out_dir, step)
         rows.extend(
@@ -394,9 +396,11 @@ def _extract_aifs(model_name: str, model_config: dict, run_init: datetime) -> li
             f"expected a subset of {sorted(_SHORTNAME_TO_BAND)}"
         )
 
-    site_list = all_sample_points()
+    site_list = sites()
     rows: list[PointRow] = []
-    for step, valid_times in by_step.items():
+    total = len(by_step)
+    for i, (step, valid_times) in enumerate(by_step.items(), 1):
+        log.info("%s: step %d/%d (+%dh) (%d rows so far)", model_name, i, total, step, len(rows))
         cloud_path = out_dir / f"cloud_f{step:03d}.grib2"
         temp_by_member = _temp_dataarrays_by_member(model_config, out_dir, step)
         rows.extend(

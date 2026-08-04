@@ -63,7 +63,7 @@ flags "(derived L/M/H)" for any model where that's what's being shown.
 
 Output: one consolidated grid figure, data/viz/run_evolution.svg. Rows are
 models with at least one qualifying site (in models.yaml's own dict order),
-columns are the 7 sites.yaml sites in their configured west-to-east order.
+columns are config/placenames.json's named sites in west-to-east order.
 Cells with insufficient data are left blank with a small note rather than
 omitted, so the grid stays rectangular and easy to scan.
 """
@@ -107,9 +107,7 @@ def _eclipse_t() -> datetime:
 
 
 def load_site_points() -> pl.DataFrame:
-    """points.parquet filtered to the 7 named sites.yaml sites only -- drops
-    T24's WNW-strip points (e.g. 'Luarca_wnw50km'). Strip-based views are a
-    future enhancement (per this task's brief), not part of this chart."""
+    """points.parquet filtered to config/placenames.json's named sites."""
     if not POINTS_PARQUET.exists():
         raise FileNotFoundError(
             f"{POINTS_PARQUET} does not exist -- run the archiver (src/scheduler/run.py) "
@@ -125,7 +123,7 @@ def pick_fixed_valid_time(df: pl.DataFrame) -> datetime:
     target = _eclipse_t()
     valid_values = df.get_column("valid").unique().to_list()
     if not valid_values:
-        raise ValueError("points.parquet has no rows for the 7 named sites -- nothing to plot")
+        raise ValueError("points.parquet has no rows for the named sites -- nothing to plot")
 
     counts = df.group_by(["valid", "model", "site"]).agg(
         pl.col("run_init").n_unique().alias("n_runs")

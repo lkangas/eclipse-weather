@@ -212,9 +212,9 @@ user, not Claude Code — surface them, don't attempt.
       without it, re-extraction on every 5-minute tick would duplicate rows).
       Verified end-to-end in Docker across 9 live models: 7238 real rows in
       `points.parquet`, zero true duplicates.
-      **Not done**: WNW-strip sampling (T24, next); AROME's real cadence is
-      hourly through 102h per real data, though `models.yaml`'s `steps:` only
-      asks for 3-hourly beyond 48h (harmless, just leaves resolution unused).
+      **Not done**: AROME's real cadence is hourly through 102h per real
+      data, though `models.yaml`'s `steps:` only asks for 3-hourly beyond
+      48h (harmless, just leaves resolution unused).
 - [x] **T22** Derived-cloud module (`src/derive/humidity_to_cloud.py`), built
       + calibrated 2026-07-22: q,t → RH (Murphy & Koop, both water/ice
       formulas) → cloud fraction (Sundqvist 1989) → low/mid/high via max-
@@ -238,17 +238,6 @@ user, not Claude Code — surface them, don't attempt.
       2026-07-22 (Docker installed in WSL Ubuntu): builds cleanly, cfgrib/
       rasterio/eccodes/cdo all work inside the container, and the full
       scheduler entrypoint runs correctly end-to-end against real data.
-- [x] **T24** `sites.yaml` consumption, done 2026-07-23: `src/extract/base.py`
-      adds `wnw_strip_points()` (great-circle destination formula) and
-      `all_sample_points()` (each site + its 4 strip points at 25/25/75/100km,
-      named e.g. `Luarca_wnw50km` — fits `PointRow`'s existing `site: str`
-      field, no schema change needed). Wired into the 5 grid-based extractors
-      (grib_regular, ecmwf, icon, meteofrance, aemet) — verified against real
-      archived icon_eu data: 105 rows = 7 sites × 5 points × 3 valid times.
-      **Deliberately not done for `ukmo_global`**: Open-Meteo is a point API,
-      not a spatial grid, so strip sampling there needs `open_meteo_fetcher.py`
-      to request the extra coordinates too, not just extraction — a follow-up
-      if UKMO's WNW sightline signal is wanted.
 - [ ] **T25** Reserve hosting per the deployment decision made 2026-07-22
       (box + hostname intentionally not named in this repo — see private ops
       notes). Own isolated directory/port; DNS + ingress live in a separate
@@ -895,8 +884,7 @@ user, not Claude Code — surface them, don't attempt.
       contributing models — documented as a genuine, debatable design choice
       (an ensemble with many members could dominate a site's estimate over
       several one-vote deterministic models). Reports n_samples/n_models per
-      site so this is visible, not hidden. Also surfaces each site's WNW-strip
-      worst-case (T24) as a secondary annotation.
+      site so this is visible, not hidden.
       **Backfill note**: none of T30/T31/T32 originally had real `points.parquet`
       to test against (only a 42-row orphan fixture) — regenerated it for real
       by re-running the actual, unmodified extractor registry against already

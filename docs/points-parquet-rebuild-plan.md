@@ -63,11 +63,8 @@ rebuild.
 
 ## 2. Which points
 
-Unchanged: `all_sample_points()` — the 29 curated places in
-`config/placenames.json` plus each place's 4-point WNW sightline strip
-(bearing 285°, 25/50/75/100 km) = up to 145 sample points per model, fewer
-where a model's grid doesn't reach a point (e.g. `arome_france`'s southern
-edge).
+`sites()` — the 29 curated places in `config/placenames.json`, fewer where
+a model's grid doesn't reach a point (e.g. `arome_france`'s southern edge).
 
 **`aemet_harmonie` is excluded entirely, by explicit direction** — no rows
 in `points.parquet` at all, not even `cloud_total`. Reasoning: it's already

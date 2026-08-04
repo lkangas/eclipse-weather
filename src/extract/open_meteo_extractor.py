@@ -154,6 +154,7 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
         logger.warning("open_meteo_extractor: no forecast.json at %s -- nothing to extract", path)
         return []
 
+    logger.info("%s: extracting forecast.json (single-file, fast)", model_name)
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError(f"expected a JSON list from {path}, got {type(payload)}")
@@ -161,7 +162,7 @@ def extract(model_name: str, model_config: dict, run_init: datetime) -> list[Poi
     site_list = sites()
     if len(payload) != len(site_list):
         logger.warning(
-            "open_meteo_extractor: %s has %d site entries but config/sites.yaml has "
+            "open_meteo_extractor: %s has %d site entries but the site list has "
             "%d -- extracting by position anyway, verify site ordering matches",
             path,
             len(payload),

@@ -76,7 +76,7 @@ What follows from that:
       command line *and* `reclaim.enabled` in `config/production.yaml`, already
       true), so a box can be locked read-only from config alone.
       The site-list blocker is cleared — extraction now uses the curated 29
-      places (145 series incl. WNW strips).
+      places.
 - [ ] **Status/monitoring page.** `rendered_index.json` and
       `pipeline_status.json` already exist as the data; this is mostly a page.
       Matters once the box is unattended.
@@ -111,11 +111,6 @@ What follows from that:
             "needs attention" check must treat them as *unproducible* rather
             than missing — that is exactly what option C was for, and it now
             has evidence. AEMET is worse: latest-run-only.
-- [ ] **Line-of-sight calculation** (TASKS.md T44). Today's `wnw_strip` is a
-      ground-projected line that treats every cloud level alike; at ~11° sun
-      elevation low and high cloud cross the real sightline at very different
-      distances. T44's pressure-level survey is the groundwork. *User has
-      ideas here — hold until they raise it.*
 
 ## Housekeeping
 

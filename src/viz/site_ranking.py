@@ -42,6 +42,8 @@ different one-shot deterministic runs, even at an identical P(clear), and a
 reader should be able to tell those apart at a glance. Sites with very few
 contributing samples are flagged explicitly (see MIN_SAMPLES_WARN below).
 
+Ranks every named site in config/placenames.json - no other sample points.
+
 ## Which models can contribute at all
 
 This is determined EMPIRICALLY from the real data every run (cloud_low
@@ -74,22 +76,11 @@ whichever valid timestamp in that model's latest-run_init slice is CLOSEST to
 ECLIPSE_T (exact match if present), and reports the actual gap. No interpolation
 between bracketing archive hours (15/18/21 UTC) - that's more machinery than a
 "keep it simple" prototype needs; nearest-available is transparent and cheap.
-
-## WNW-strip context (stretch goal)
-
-The ranking itself uses only the 7 named sites (T24's WNW-strip points, named
-"<site>_wnw<NN>km", are excluded from the ranked list). As optional extra
-context, this module also computes, per site, the WORST (minimum) P(clear)
-among that site's WNW-strip points at the same latest-run/nearest-valid
-selection - printed alongside the main number, not plotted as its own bar,
-to keep the chart itself a plain single-metric-per-site bar chart per the
-"don't make it fancy" direction.
 """
 
 from __future__ import annotations
 
 import argparse
-import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -111,7 +102,6 @@ DEFAULT_ECLIPSE_T = "2026-08-12T18:30:00Z"
 
 CLEAR_THRESHOLD_PCT_DEFAULT = 20.0
 MIN_SAMPLES_WARN = 5  # flag a site's estimate if fewer pooled samples than this
-WNW_SUFFIX_RE = re.compile(r"_wnw\d+km$")
 
 OUTPUT_SVG_DEFAULT = DATA_ROOT / "viz" / "site_ranking.svg"
 
@@ -137,11 +127,6 @@ def load_points(path: Path) -> pl.DataFrame:
     if df.is_empty():
         raise ValueError(f"{path} exists but has zero rows - nothing to rank.")
     return df
-
-
-def strip_parent_site(name: str) -> str:
-    """'Luarca_wnw25km' -> 'Luarca'. Returns name unchanged if it isn't a strip point."""
-    return WNW_SUFFIX_RE.sub("", name)
 
 
 def latest_run_per_model(df: pl.DataFrame) -> pl.DataFrame:
@@ -243,39 +228,8 @@ def build_site_ranking(
     return ranking.sort("p_clear", descending=False, nulls_last=False)
 
 
-def build_wnw_worst_case(
-    strip_latest_nearest: pl.DataFrame, threshold_pct: float
-) -> dict[str, float]:
-    """Per parent site: the minimum P(clear) among its WNW-sightline strip
-    points (T24), pooled the same way as the main metric. Returns {} if the
-    data has no strip points at all (e.g. this fixture / an early backfill
-    that predates T24) - callers must handle that gracefully, not treat it
-    as an error."""
-    eligible = strip_latest_nearest.filter(pl.col("cloud_low").is_not_null())
-    if eligible.is_empty():
-        return {}
-    eligible = eligible.with_columns(
-        pl.col("site").map_elements(strip_parent_site, return_dtype=pl.String).alias("parent_site")
-    )
-    per_point = (
-        eligible.group_by(["parent_site", "site"])
-        .agg(
-            pl.len().alias("n"),
-            (pl.col("cloud_low") < threshold_pct).sum().alias("n_clear"),
-        )
-        .with_columns((pl.col("n_clear") / pl.col("n")).alias("p_clear"))
-    )
-    worst = per_point.group_by("parent_site").agg(
-        pl.col("p_clear").min().alias("wnw_worst_p_clear")
-    )
-    parents = worst["parent_site"].to_list()
-    worst_vals = worst["wnw_worst_p_clear"].to_list()
-    return dict(zip(parents, worst_vals, strict=True))
-
-
 def plot_ranking(
     ranking: pl.DataFrame,
-    wnw_worst: dict[str, float],
     threshold_pct: float,
     target: datetime,
     max_gap_hours: float,
@@ -293,15 +247,11 @@ def plot_ranking(
     bars = ax.barh(sites, heights, color=colors)
 
     labels = []
-    for i, site in enumerate(sites):
+    for i in range(len(sites)):
         if p_clear[i] is None:
             labels.append("no data")
         else:
-            label = f"{heights[i]:.0f}%  (n={n_samples[i]}, {n_models[i]} models)"
-            worst = wnw_worst.get(site)
-            if worst is not None:
-                label += f"  |  WNW worst {worst * 100:.0f}%"
-            labels.append(label)
+            labels.append(f"{heights[i]:.0f}%  (n={n_samples[i]}, {n_models[i]} models)")
     ax.bar_label(bars, labels=labels, padding=3, fontsize=8)
 
     ax.set_xlabel(f"P(cloud_low < {threshold_pct:.0f}%)  [%]")
@@ -324,7 +274,6 @@ def plot_ranking(
 
 def print_report(
     ranking: pl.DataFrame,
-    wnw_worst: dict[str, float],
     contributing_models: list[str],
     excluded_notes: list[str],
     valid_report: pl.DataFrame,
@@ -362,27 +311,21 @@ def print_report(
         flag = ""
         if row["n_samples"] and row["n_samples"] < MIN_SAMPLES_WARN:
             flag = f"  <-- only {row['n_samples']} sample(s), weak estimate"
-        wnw = wnw_worst.get(row["site"])
-        wnw_str = f" (WNW worst {wnw * 100:.0f}%)" if wnw is not None else ""
         print(
             f"{i:<5}{row['site']:<12}{pct:<10}{row['n_samples']:<11}{row['n_models']:<10}"
-            f"{models_str}{wnw_str}{flag}"
+            f"{models_str}{flag}"
         )
-    if not wnw_worst:
-        print("\n(No WNW-strip points found in this data - worst-case sightline column omitted.)")
 
 
 def run(points_path: Path, out_path: Path, threshold_pct: float) -> pl.DataFrame:
     df = load_points(points_path)
     target = eclipse_t()
 
-    df = df.with_columns(pl.col("site").str.contains("_wnw").alias("is_strip"))
     latest = latest_run_per_model(df)
     nearest = nearest_valid_per_model(latest, target)
 
     named_site_names = [s["name"] for s in load_sites()["sites"]]
-    named = nearest.filter(~pl.col("is_strip") & pl.col("site").is_in(named_site_names))
-    strip = nearest.filter(pl.col("is_strip"))
+    named = nearest.filter(pl.col("site").is_in(named_site_names))
 
     all_model_names = list(load_models()["models"].keys())
     per_model_report, contributing_models, excluded_notes = model_contribution_report(
@@ -392,12 +335,9 @@ def run(points_path: Path, out_path: Path, threshold_pct: float) -> pl.DataFrame
     max_gap_hours = v_report["gap_hours"].abs().max() if not v_report.is_empty() else 0.0
 
     ranking = build_site_ranking(named, named_site_names, threshold_pct)
-    wnw_worst = build_wnw_worst_case(strip, threshold_pct)
 
-    print_report(
-        ranking, wnw_worst, contributing_models, excluded_notes, v_report, threshold_pct, target
-    )
-    plot_ranking(ranking, wnw_worst, threshold_pct, target, max_gap_hours, out_path)
+    print_report(ranking, contributing_models, excluded_notes, v_report, threshold_pct, target)
+    plot_ranking(ranking, threshold_pct, target, max_gap_hours, out_path)
     print(f"\nChart written to {out_path}")
 
     return ranking
