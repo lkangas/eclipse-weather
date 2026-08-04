@@ -97,10 +97,10 @@ services:
       - ${ECLIPSE_DATA_DIR:-./data}:/app/data:ro
 
   # Cloudflare Tunnel connector. Remote-managed (config_src: cloudflare), the
-  # same pattern as the redacted-host/redacted-host-2/the-vps tunnels in the defocus.fi
-  # repo - ingress lives Cloudflare-side, so adding a hostname needs no change
-  # here. Dials outbound only; combined with the loopback bind above, this box
-  # serves the public internet without a single open inbound port.
+  # same pattern used for this deployment's other tunneled apps (see private
+  # ops notes) - ingress lives Cloudflare-side, so adding a hostname needs no
+  # change here. Dials outbound only; combined with the loopback bind above,
+  # this box serves the public internet without a single open inbound port.
   #
   # The token is a SECRET: put it in a .env file beside this compose file on
   # the VPS (gitignored), never in this file.

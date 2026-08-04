@@ -24,9 +24,16 @@
 
 set -euo pipefail
 
-SRC="${SEED_SRC:-/mnt/e/data/eclipse-weather/viz/tool1_frames}"
-DEST_HOST="${SEED_DEST_HOST:-root@203.0.113.10}"
-DEST_DIR="${SEED_DEST_DIR:-/opt/eclipse-weather/data/viz/tool1_frames}"
+# No real host/path defaults here on purpose - this repo is public. Set
+# SEED_SRC/SEED_DEST_HOST/SEED_DEST_DIR yourself (see private ops notes for
+# the real values), e.g.:
+#   SEED_DEST_HOST=user@your-vps scripts/seed_frames_to_vps.sh --apply
+: "${SEED_SRC:?set SEED_SRC to the local frames directory}"
+: "${SEED_DEST_HOST:?set SEED_DEST_HOST to user@host}"
+: "${SEED_DEST_DIR:?set SEED_DEST_DIR to the remote frames directory}"
+SRC="$SEED_SRC"
+DEST_HOST="$SEED_DEST_HOST"
+DEST_DIR="$SEED_DEST_DIR"
 
 FIELDS=()
 APPLY=0

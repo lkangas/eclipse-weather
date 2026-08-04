@@ -35,9 +35,10 @@ it, so what you verify with `fetch` is exactly what the archiver will do.
         so imports go to data/aemet_png_history/, NOT into data/raw/ - see
         _history_dir()'s note.
 
-Point it at a different archive with ECLIPSE_DATA_ROOT (the desktop's is
-/mnt/e/data/eclipse-weather); it must be set before the import below, which is
-why the sys.path/env handling sits at the top of the file.
+Point it at a different archive with ECLIPSE_DATA_ROOT (e.g. an external
+drive mounted outside the repo, kept off the primary disk on purpose); it
+must be set before the import below, which is why the sys.path/env handling
+sits at the top of the file.
 """
 
 from __future__ import annotations

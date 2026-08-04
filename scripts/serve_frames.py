@@ -1,6 +1,6 @@
 """Static file server for the Tool 1/2/3 rendered-frame directories, used for
-the remote preview at http://redacted-host.example:8137/ (port forwarded from
-this box - see TASKS.md/private ops notes).
+a remote preview on port 8137 (see private ops notes for how that's exposed
+in any given deployment - deliberately not named here).
 
 Replaces plain `python -m http.server`, which defaults to HTTP/1.0 with no
 keep-alive (a fresh TCP handshake per request) and sends no Cache-Control

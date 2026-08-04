@@ -482,7 +482,7 @@ user, not Claude Code — surface them, don't attempt.
         `fetch_full_range()`-keyed dict.
       **Production cutover**: stopped/removed the `eclipse-collector`
       container (running `collect_full_range.py`, started earlier the same
-      day per rollout step 1), merged `E:\data\eclipse-weather\raw_latest\`'s
+      day per rollout step 1), merged the desktop's `raw_latest\`'s
       20 run-init directories into `raw\` (zero collisions — verified per-
       model/run_init before moving), deleted `scripts/collect_full_range.py`,
       and started `eclipse-scheduler` (same `--restart unless-stopped`, same
@@ -970,7 +970,7 @@ started. Laid out 2026-07-23 per explicit user direction.
       always going to run) — merged `raw_latest/` into `raw/`, deleted
       `collect_full_range.py`, replaced `eclipse-collector` with
       `eclipse-scheduler` (same `--restart unless-stopped`, same
-      `E:\data\eclipse-weather` mount, unified scheduler). One standing
+      external-drive data mount, unified scheduler). One standing
       service now, not two. `Dockerfile` still bakes in `scripts/` (needed
       for `generate_tool1_manifest.py`).
 - [ ] **2. Polish renderings (desktop, ongoing, no deadline of its own).**
@@ -1083,7 +1083,7 @@ during this project's own build sessions, but real browsers (confirmed
 2026-07-23, user's own browser) can block even that. Don't fight this -
 use the standing local HTTP server instead:
 
-    python3 -m http.server 8734   # run from E:\data\eclipse-weather\viz\tool1_frames\
+    python3 -m http.server 8734   # run from the archive's viz\tool1_frames\ directory
 
 Then open, from any real browser (WSL2 forwards localhost to Windows
 automatically):
@@ -1251,7 +1251,7 @@ edit. `placenames.json`'s own tracked source is `config/placenames.json`
       **Frozen, same day** (explicit user direction: "you can use this
       list as a fixed list and remove any tools etc used to create it").
       The 29-place list moved from a generated artifact
-      (`E:\data\eclipse-weather\...\placenames.json`, gitignored, outside
+      (an untracked, gitignored `placenames.json` on the desktop, outside
       the repo, with no tracked copy) to a real, git-tracked source file -
       `config/placenames.json`, the same status as `config/sites.yaml`/
       `config/totality_path.json` (curated data, not regeneratable cache),
