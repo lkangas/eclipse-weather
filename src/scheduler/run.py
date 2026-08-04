@@ -594,42 +594,49 @@ def run_once() -> None:
 
             if model_name in _EXTRACTION_EXCLUDED_MODELS:
                 continue
-            # Extract whenever files exist and haven't been extracted yet - covers
-            # both a fresh fetch just above AND a run fetched on an earlier tick
-            # whose extraction failed or was never attempted (e.g. this module
-            # was added after the fetch already happened).
             if already_extracted(model_name, fetched_init):
-                continue
+                continue  # finalized (see below) - never re-extract
             # raw_data_files(), not already_fetched(): the latter counts this
             # module's own dot-markers, so a run whose directory holds nothing
-            # but a .last_fetch_attempt looked "fetched", extracted to 0 rows,
-            # and got mark_extracted()ed - which then bars it from extraction
-            # FOREVER, including once its data finally lands (upstream running
-            # late, a transient 404, aemet's endpoint still serving the previous
-            # bundle). Marking a run extracted is irreversible, so it must only
-            # ever happen to a run that actually had data to extract.
+            # but a .last_fetch_attempt looked "fetched" but has no real data.
             if not raw_data_files(model_name, fetched_init):
                 continue
+            # Incremental, freshness-first extraction - mirrors the production
+            # pipeline (src/pipeline/orchestrator._maybe_extract). Extract as
+            # soon as any step is on disk, re-extract whenever HIGHER steps have
+            # arrived since last time (tracked in .extract_maxstep), and only
+            # finalize (.extracted, which stops re-extraction) once every
+            # published step has been seen OR the run is sealed (past the top-up
+            # window). Without this, a run extracted while still publishing
+            # (e.g. AROME's staggered SP2 windows land over hours) stays frozen
+            # at its partial extent forever. mark_extracted only ever fires on a
+            # run that actually produced rows, so a 0-row run is retried later.
+            from src.pipeline import journal, verify
+            v = verify.verify_run(model_name, model_config, fetched_init)
+            on_disk_max = max(v.steps_on_disk) if v.steps_on_disk else -1
+            marker = journal.run_dir(model_name, fetched_init) / ".extract_maxstep"
+            try:
+                last_max = int(marker.read_text())
+            except (OSError, ValueError):
+                last_max = -2
+            complete = set(v.published_steps).issubset(
+                set(v.steps_on_disk) | set(v.reclaimed_steps))
+            final = v.sealed or (bool(v.published_steps) and complete)
+            if on_disk_max <= last_max and not final:
+                continue  # nothing new since last extraction, run not ready to finalize
             try:
                 extractor = extract_registry.get_extractor(model_config["fetch"])
                 rows = extractor(model_name, model_config, fetched_init)
                 append_points(rows)
-                # Only mark done when there was actually something to extract.
-                # Previously unconditional - a run whose extractor legitimately
-                # finds nothing yet (e.g. no step has landed) got marked
-                # extracted with 0 rows and was blocked from ever being
-                # retried, including once its data landed or the extraction
-                # logic itself improved (found 2026-08-04: this is exactly
-                # what happened to every short/medium-range model's runs once
-                # the archive-hours-only extraction couldn't reach the real
-                # eclipse target - see the comment above raw_data_files()).
                 if rows:
-                    mark_extracted(model_name, fetched_init)
+                    marker.parent.mkdir(parents=True, exist_ok=True)
+                    marker.write_text(str(on_disk_max))
+                    if final:
+                        mark_extracted(model_name, fetched_init)
                 log.info(
-                    "extracted %s %s: %d points.parquet rows",
-                    model_name,
-                    fetched_init.isoformat(),
-                    len(rows),
+                    "extracted %s %s: %d rows through +%dh%s",
+                    model_name, fetched_init.isoformat(), len(rows), on_disk_max,
+                    " (final)" if (final and rows) else "",
                 )
             except Exception as e:
                 log.error("extract failed for %s %s: %s", model_name, fetched_init.isoformat(), e)
