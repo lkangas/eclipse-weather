@@ -270,7 +270,22 @@ def process_run(
         if not wanted:
             continue
 
-        needed = per_step * len(wanted)
+        if chunking.is_chunkable(model_config):
+            needed = per_step * len(wanted)
+        else:
+            # Single-shot fetchers (http_grib, geotiff, open_meteo_json) write
+            # one small bundle regardless of step count - `wanted` here is
+            # the model's ENTIRE step list (chunk_caps gives non-chunkable
+            # models one cap = everything), so per-step-fallback * len(wanted)
+            # inflates "needed" by the full step count. Measured on the live
+            # VPS 2026-08-04: gem_global (81 steps) and ukmo_global (89 steps)
+            # turned a 350 MB per-step fallback into a bogus 27.7/30.4 GB
+            # "need", permanently stuck behind the disk floor even though
+            # their real archived runs are ~38 KB each. Use a real measured
+            # whole-run size where one exists, else the flat per-step
+            # fallback UNMULTIPLIED (a generous stand-in for "one run" of
+            # these small-footprint fetch kinds).
+            needed = chunking.measured_run_bytes(model_id) or per_step
         if not _headroom_ok(needed, settings):
             # Try to free space from everything already rendered, then re-test.
             log.warning(
