@@ -126,6 +126,7 @@ def main() -> int:
     now = datetime.now(UTC)
 
     index_models: dict[str, dict] = {}
+    newest_run_first_valids = []  # earliest valid of each model's newest run
     for model in sorted(df["model"].unique().to_list()):
         mdf = df.filter(pl.col("model") == model)
         quantities = [
@@ -134,6 +135,9 @@ def main() -> int:
         ]
         runs = sorted(mdf["run_init"].unique().to_list(), reverse=True)
         is_ens = mdf["member"].n_unique() > 1
+        newest_first_valid = mdf.filter(pl.col("run_init") == runs[0])["valid"].min()
+        if newest_first_valid is not None:
+            newest_run_first_valids.append(newest_first_valid)
 
         model_dir = OUT_DIR / model
         model_dir.mkdir(parents=True, exist_ok=True)
@@ -161,15 +165,17 @@ def main() -> int:
 
     # Fixed x-axis domain so the chart does not rescale when the model changes.
     # Right edge = data_horizon (eclipse + margin, the same cap every other
-    # tool uses); left edge = the earliest valid time in the data.
+    # tool uses); left edge = the earliest valid time among the models' NEWEST
+    # runs (so old accumulated runs don't stretch the axis weeks to the left).
     horizon_raw = eclipse_config().get("data_horizon")
     horizon_iso = (
         _iso(datetime.fromisoformat(horizon_raw.replace("Z", "+00:00")))
         if horizon_raw else _iso(df["valid"].max())
     )
+    x_min = min(newest_run_first_valids) if newest_run_first_valids else df["valid"].min()
     index = {
         "generated_at": _iso(df["fetched_at"].max()),
-        "valid_range": [_iso(df["valid"].min()), horizon_iso],
+        "valid_range": [_iso(x_min), horizon_iso],
         "models": index_models,
     }
     (OUT_DIR / "index.json").write_text(json.dumps(index, indent=2), encoding="utf-8")

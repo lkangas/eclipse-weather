@@ -41,6 +41,8 @@
   .note{font-size:11px;color:var(--sub);margin-top:6px;}
   .ecl{color:var(--accent);font-weight:700;}
   .sitedot{cursor:pointer;}
+  #selall{color:var(--accent);text-decoration:none;}
+  #selall:hover{text-decoration:underline;}
   .hint{color:var(--faint);}
   #tip{position:fixed;pointer-events:none;background:#fffdf8;border:1px solid var(--ink);
        padding:3px 6px;font-size:11px;display:none;z-index:9;white-space:nowrap;}
@@ -67,7 +69,8 @@
       <select id="run" multiple size="10"></select>
     </div>
     <div class="box" id="mapBox">
-      <div class="lab">Iberia · click site(s) <span id="selname" class="ecl"></span></div>
+      <div class="lab">Iberia · click site(s) · <a href="#" id="selall">select all</a>
+        <span id="selname" class="ecl"></span></div>
       <svg id="mapsvg" viewBox="0 0 500 300" preserveAspectRatio="xMidYMid meet"></svg>
     </div>
   </div>
@@ -76,7 +79,8 @@
     <div class="qrow" id="qrow"><span class="lab">Quantity</span></div>
     <div id="charttitle"></div>
     <svg id="chartsvg" viewBox="0 0 1080 300" preserveAspectRatio="none"></svg>
-    <div class="note"><span class="ecl">┊</span> eclipse valid time · <span id="eclt"></span>
+    <div class="note"><span style="color:#6b7785;font-weight:700">│</span> now
+      &nbsp;·&nbsp; <span class="ecl">┊</span> eclipse valid time · <span id="eclt"></span>
       &nbsp;·&nbsp; <span id="linecount"></span></div>
   </div>
 </div>
@@ -87,6 +91,8 @@ const BASE = "tool4/";
 const QCOLS = ["temp","total","low","mid","high"];
 const QLABEL = {temp:"Temp",total:"Total",low:"Low",mid:"Mid",high:"High",lmh:"L/M/H"};
 const PALETTE = ["#8b3a2f","#2f5f8b","#3f7a3f","#8a6d1f","#6b3f7a","#2f7a75","#a1442f","#455a7a"];
+// Match the rendered H/M/L composite images: R=high, G=mid, B=low.
+const QCOLOR = {high:"#c0392b", mid:"#2e8b3d", low:"#2f6bbf", total:"#8b3a2f", temp:"#8b3a2f"};
 const MAX_LINES = 40;
 
 let INDEX=null, MAP=null, ECLT=null;
@@ -232,11 +238,11 @@ async function refresh(){
           const q=qkeys[qi]; if(!so[q]) continue;
           if(lines.length>=MAX_LINES){dropped++;continue;}
           let color;
-          if(qkeys.length>1) color=PALETTE[qi% PALETTE.length];
+          if(qkeys.length>1) color=QCOLOR[q];   // L/M/H: match rendered images (R=high,G=mid,B=low)
           else if(varyModel) color=PALETTE[state.models.indexOf(m)%PALETTE.length];
           else if(varySite) color=PALETTE[state.sites.indexOf(site)%PALETTE.length];
           else if(varyRun) color=PALETTE[combos.findIndex(c=>c[1]===r)%PALETTE.length];
-          else color="#8b3a2f";
+          else color=QCOLOR[q]||"#8b3a2f";       // single quantity uses its own H/M/L colour
           const bits=[INDEX.models[m].label||m, fmtRun(r), site]; if(qkeys.length>1) bits.push(QLABEL[q]);
           lines.push({valid:p.valid,vals:so[q],color,width:1.3,op:0.9,meta:bits.join(" · "),cls:"line"});
         }
@@ -273,6 +279,12 @@ function drawChart(lines,isTemp,dropped){
     const d=new Date(t);
     s+=`<line x1="${xx.toFixed(1)}" y1="${PADT}" x2="${xx.toFixed(1)}" y2="${CH-PADB}" stroke="#efece3"/>`;
     s+=`<text x="${xx.toFixed(1)}" y="${CH-8}" text-anchor="middle" style="font-size:9px;fill:#7a776c">${d.getUTCMonth()+1}/${d.getUTCDate()}</text>`;}
+  // "now" marker (solid slate) - splits verifiable past from forecast future
+  const nowMs=Date.now();
+  if(nowMs>=tmin&&nowMs<=tmax){const nx=X(nowMs);
+    s+=`<line x1="${nx.toFixed(1)}" y1="${PADT}" x2="${nx.toFixed(1)}" y2="${CH-PADB}" stroke="#6b7785" stroke-width="1.1"/>`;
+    s+=`<text x="${(nx+3).toFixed(1)}" y="${PADT+9}" style="font-size:9px;fill:#6b7785">now</text>`;}
+  // eclipse valid time (dashed brick-red)
   if(ECLT>=tmin&&ECLT<=tmax){const ex=X(ECLT);
     s+=`<line x1="${ex.toFixed(1)}" y1="${PADT}" x2="${ex.toFixed(1)}" y2="${CH-PADB}" stroke="#8b3a2f" stroke-width="1.3" stroke-dasharray="3 3"/>`;}
   // draw non-mean/det first, then mean/det on top
@@ -281,16 +293,25 @@ function drawChart(lines,isTemp,dropped){
   lines.forEach((l,idx)=>{
     const pts=l.vals.map((v,i)=> v==null?null:`${X(Date.parse(l.valid[i])).toFixed(1)},${Y(v).toFixed(1)}`)
       .filter(Boolean).join(" ");
-    s+=`<polyline points="${pts}" fill="none" stroke="${l.color}" stroke-width="${l.width}" opacity="${l.op}"/>`;
-    s+=`<polyline data-i="${idx}" points="${pts}" fill="none" stroke="#000" stroke-width="7" opacity="0" style="pointer-events:stroke"/>`;
+    s+=`<polyline class="dl" data-i="${idx}" points="${pts}" fill="none" stroke="${l.color}" stroke-width="${l.width}" opacity="${l.op}"/>`;
+    s+=`<polyline class="hit" data-i="${idx}" points="${pts}" fill="none" stroke="#000" stroke-width="7" opacity="0" style="pointer-events:stroke"/>`;
   });
   svg.innerHTML=s;
   const tip=document.getElementById("tip");
-  svg.querySelectorAll("polyline[data-i]").forEach(pl=>{
-    pl.addEventListener("mousemove",e=>{ const l=lines[+pl.getAttribute("data-i")];
-      tip.textContent=l.meta; tip.style.display="block";
+  const dls=[...svg.querySelectorAll(".dl")];
+  // hover a line -> highlight it, dim the rest (linked emphasis, fmi-stations style)
+  svg.querySelectorAll(".hit").forEach(pl=>{
+    const i=+pl.getAttribute("data-i");
+    pl.addEventListener("mouseenter",()=>{
+      dls.forEach(dl=>{ const on=+dl.getAttribute("data-i")===i;
+        dl.style.opacity = on?1:0.10;
+        dl.style.strokeWidth = on?(parseFloat(dl.getAttribute("stroke-width"))+1).toFixed(1):null; });
+    });
+    pl.addEventListener("mousemove",e=>{ tip.textContent=lines[i].meta; tip.style.display="block";
       tip.style.left=(e.clientX+11)+"px"; tip.style.top=(e.clientY+11)+"px"; });
-    pl.addEventListener("mouseleave",()=>tip.style.display="none");
+    pl.addEventListener("mouseleave",()=>{
+      dls.forEach(dl=>{ dl.style.opacity=""; dl.style.strokeWidth=""; });
+      tip.style.display="none"; });
   });
   document.getElementById("linecount").textContent =
     `${lines.length} line(s)` + (dropped?` — ${dropped} more hidden (cap ${MAX_LINES}, narrow selection)`:"");
@@ -323,6 +344,14 @@ async function init(){
   });
   document.getElementById("run").addEventListener("change",()=>{
     state.runs=[...document.getElementById("run").selectedOptions].map(o=>o.value); refresh();
+  });
+  // Select-all sites: one line per site (ensemble models contribute their mean
+  // per site, never member spaghetti - that only makes sense for one site).
+  // A plain click on any dot resets back to that single site.
+  document.getElementById("selall").addEventListener("click",e=>{
+    e.preventDefault();
+    state.sites = MAP.sites.map(s=>s.name);
+    drawMap(); refresh();
   });
   drawMap(); populateRuns(); drawQ(); refresh();
 }
