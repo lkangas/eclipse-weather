@@ -55,7 +55,14 @@ def file_fetched_at(path: Path) -> datetime:
 
 
 def append_points(rows: list[PointRow]) -> None:
-    """Append rows to data/points.parquet (created on first call)."""
+    """Append rows to data/points.parquet (created on first call).
+
+    De-duplicates on write: the production pipeline extracts a run
+    incrementally and may re-read a step whose raw is still on disk from an
+    earlier extraction (src/pipeline/orchestrator._maybe_extract), producing
+    byte-identical rows - `unique()` collapses those so re-extraction is
+    harmless. fetched_at is a file mtime, so a genuine re-read of the same
+    file yields an identical row, not a spurious near-duplicate."""
     if not rows:
         return
     df = pl.DataFrame([asdict(r) for r in rows])
@@ -63,7 +70,7 @@ def append_points(rows: list[PointRow]) -> None:
     if POINTS_PARQUET.exists():
         existing = pl.read_parquet(POINTS_PARQUET)
         df = pl.concat([existing, df], how="vertical_relaxed")
-    df.write_parquet(POINTS_PARQUET)
+    df.unique().write_parquet(POINTS_PARQUET)
 
 
 def _init_dir_name(run_init: datetime) -> str:

@@ -184,36 +184,73 @@ def _frames_complete(model_id: str, run_init: datetime,
         model_id, run_init, declared, frames, fields, now or datetime.now(UTC))
 
 
+# Excluded from points.parquet extraction entirely (same rule as the desktop
+# scheduler's own list): aemet_harmonie is the weakest signal in the registry
+# (no L/M/H, a colour-ramp-legend inversion rather than a real numeric field).
+# Its raw fetch and map rendering are unaffected.
+_EXTRACTION_EXCLUDED_MODELS = {"aemet_harmonie"}
+
+
+def _extract_progress_path(model_id: str, run_init: datetime):
+    from src.pipeline import journal
+    return journal.run_dir(model_id, run_init) / ".extract_maxstep"
+
+
 def _maybe_extract(
     model_id: str, model_config: dict, run_init: datetime, outcome: RunOutcome
 ) -> None:
-    """Extract to points.parquet once - and only once - every eclipse archive
-    step this run will ever supply is on disk.
+    """Extract this run to points.parquet INCREMENTALLY and for freshness.
 
-    The desktop scheduler extracts as soon as any files exist, which is fine
-    when raw is kept forever: a later top-up simply adds files nobody
-    re-reads. Production cannot do that, because the raw would be deleted
-    before the late-arriving eclipse steps ever reached points.parquet -
-    exactly the GEFS case (extended range lands ~25-27 h after init, and for
-    an early run those late steps ARE the eclipse hours). So the gate here is
-    "extraction-ready", not "anything fetched", and reclaim.py independently
-    refuses to delete any eclipse-bearing file until .extracted exists.
+    points.parquet feeds the full-range point-forecast tool, not just the
+    eclipse-day views, so the old "wait until the 3 eclipse steps are on disk"
+    gate is gone (it never fired for a short-range run and made the newest run
+    wait hours for its late top-up steps). Instead: extract as soon as any
+    step is on disk, then again whenever HIGHER steps have arrived since the
+    last extraction (tracked in a .extract_maxstep marker), and finalise the
+    run (.extracted, which stops re-extraction and lets reclaim release the
+    held eclipse raw) once every published step has been seen OR the run is
+    sealed (past the top-up window). Each pass extracts BEFORE reclaim runs,
+    so every step's rows are captured while its raw is still on disk;
+    append_points de-duplicates, so a re-extraction that re-reads a still-
+    present earlier step is harmless.
     """
     from src.extract import registry as extract_registry
     from src.extract.base import already_extracted, append_points, mark_extracted
 
+    if model_id in _EXTRACTION_EXCLUDED_MODELS:
+        return
     if already_extracted(model_id, run_init):
         return
     v = verify.verify_run(model_id, model_config, run_init)
     if not v.extraction_ready:
         return
+
+    on_disk_max = max(v.steps_on_disk) if v.steps_on_disk else -1
+    marker = _extract_progress_path(model_id, run_init)
+    try:
+        last_max = int(marker.read_text())
+    except (OSError, ValueError):
+        last_max = -2
+    complete = set(v.published_steps).issubset(set(v.steps_on_disk) | set(v.reclaimed_steps))
+    final = v.sealed or (bool(v.published_steps) and complete)
+    # Nothing new since last extraction and the run isn't ready to finalise:
+    # skip the (expensive) re-read.
+    if on_disk_max <= last_max and not final:
+        return
+
     try:
         extractor = extract_registry.get_extractor(model_config["fetch"])
         rows = extractor(model_id, model_config, run_init)
         append_points(rows)
-        mark_extracted(model_id, run_init)
+        if rows:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(str(on_disk_max))
+            if final:
+                mark_extracted(model_id, run_init)
         outcome.extracted_rows = len(rows)
-        log.info("extracted %s %s: %d rows", model_id, run_init.isoformat(), len(rows))
+        log.info("extracted %s %s: %d rows through +%dh%s",
+                 model_id, run_init.isoformat(), len(rows), on_disk_max,
+                 " (final)" if (final and rows) else "")
     except Exception as e:
         outcome.errors.append(f"extract: {e}")
         log.exception("extract failed for %s %s", model_id, run_init.isoformat())

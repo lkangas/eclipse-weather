@@ -262,7 +262,16 @@ def verify_run(
             verdicts[step] = v
 
     eclipse_steps = eclipse_target_steps(model_config, run_init)
-    steps_available = set(by_step) | reclaimed
+    # Extraction now covers the FULL forecast range (points.parquet feeds the
+    # point-forecast tool, not just the eclipse-day views), and it runs
+    # INCREMENTALLY - as soon as a run has any step on disk, for freshness,
+    # then again whenever higher steps arrive (orchestrator._maybe_extract
+    # tracks how far it has extracted; the run is finalised once `sealed`).
+    # So the readiness gate is simply "raw exists" - the legacy "the 3 eclipse
+    # steps are present" gate (which never became true for a short-range run
+    # that can't reach eclipse day, and made the newest run wait hours for its
+    # late top-up steps) is gone. Each pass extracts before reclaim runs, so
+    # every step's rows are captured while its raw is still on disk.
     return RunVerdict(
         model=model_id,
         run_init=run_init,
@@ -273,7 +282,7 @@ def verify_run(
         reclaimed_steps=sorted(reclaimed),
         eclipse_steps=sorted(eclipse_steps),
         extracted=already_extracted(model_id, run_init),
-        extraction_ready=bool(on_disk) and eclipse_steps.issubset(steps_available),
+        extraction_ready=bool(on_disk),
         verdicts=verdicts,
         sealed=sealed,
     )
