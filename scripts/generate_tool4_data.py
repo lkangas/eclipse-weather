@@ -33,6 +33,10 @@ QMAP = {
 # ensemble model -> its paired high-res deterministic model (for the overlay line)
 DET_PAIR = {"ecmwf_ens": "ecmwf_hres", "aifs_ens": "aifs_single"}
 
+# A run older than this (hours) is past its fetch top-up window, so its
+# extracted rows no longer change - its JSON need not be rewritten each pass.
+_STABLE_AFTER_H = 50.0
+
 
 def _iso(v: datetime) -> str:
     return v.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -119,6 +123,7 @@ def main() -> int:
     df = pl.read_parquet(POINTS_PARQUET)
     models_cfg = load_models()["models"]
     OUT_DIR.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(UTC)
 
     index_models: dict[str, dict] = {}
     for model in sorted(df["model"].unique().to_list()):
@@ -130,13 +135,19 @@ def main() -> int:
         runs = sorted(mdf["run_init"].unique().to_list(), reverse=True)
         is_ens = mdf["member"].n_unique() > 1
 
+        model_dir = OUT_DIR / model
+        model_dir.mkdir(parents=True, exist_ok=True)
         for run_init in runs:
+            out_file = model_dir / f"{_run_stamp(run_init)}.json"
+            # A run's JSON only changes while the run is still gaining steps
+            # (inside its top-up window). Once past that it is immutable, so on
+            # the per-pass regeneration clock we rewrite only recent or
+            # not-yet-written runs - not the whole growing history every pass.
+            age_h = (now - run_init).total_seconds() / 3600
+            if out_file.exists() and age_h > _STABLE_AFTER_H:
+                continue
             payload = export_run(model, run_init, mdf.filter(pl.col("run_init") == run_init))
-            model_dir = OUT_DIR / model
-            model_dir.mkdir(parents=True, exist_ok=True)
-            (model_dir / f"{_run_stamp(run_init)}.json").write_text(
-                json.dumps(payload, separators=(",", ":")), encoding="utf-8"
-            )
+            out_file.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
 
         index_models[model] = {
             "label": _model_label(model, models_cfg),

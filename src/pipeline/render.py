@@ -122,11 +122,13 @@ def _steps_with_raw(model_id: str, run_init: datetime, steps: list[int]) -> set[
 
 
 def regenerate_manifests() -> list[str]:
-    """Rebuild Tool 1/2/3's manifests from the rendered tree.
+    """Rebuild Tool 1/2/3's manifests (from the rendered tree) and Tool 4's
+    data (from points.parquet) so every tool stays current on the same clock.
 
-    All three are pure disk scans now (0.5 s / ~5 s / ~7 s measured) and read
-    no raw data, which is exactly what makes delete-after-render possible.
-    Called once per pass, after rendering, never per frame.
+    Tool 1/2/3 are pure disk scans (0.5 s / ~5 s / ~7 s measured). Tool 4's
+    generator reads points.parquet and rewrites only the index plus recent
+    (still-growing) per-(model,run) JSON files, so it is cheap per pass too.
+    Called once per pass, after rendering/extraction, never per frame.
 
     MERGE SEAM: the desktop scheduler is concurrently gaining automatic
     manifest regeneration after rendering. If that lands as a shared helper,
@@ -138,6 +140,7 @@ def regenerate_manifests() -> list[str]:
         "generate_tool1_manifest",
         "generate_tool2_manifest",
         "generate_tool3_manifest",
+        "generate_tool4_data",
     ):
         try:
             module = __import__(f"scripts.{name}", fromlist=["main"])

@@ -91,7 +91,7 @@ const MAX_LINES = 40;
 
 let INDEX=null, MAP=null, ECLT=null;
 const cache = new Map();               // "model/run" -> payload
-const state = { models:[], runs:[], sites:["Burgos"], q:"total" };
+const state = { models:[], runs:[], sites:["Burgos"], q:"lmh" };
 
 async function getRun(model, run){
   const key = model+"/"+run;
@@ -143,6 +143,17 @@ function availQuantities(){
   const set=new Set();
   state.models.forEach(m=> (INDEX.models[m]?.quantities||[]).forEach(q=>set.add(q)));
   return set;
+}
+function pickQuantity(){
+  // Keep the current pick if still valid; otherwise prefer the L/M/H combo,
+  // then total, then temp. Total greys out on models that have no total field.
+  const av=availQuantities(), hasLMH=av.has("low")||av.has("mid")||av.has("high");
+  if(state.q==="lmh" && hasLMH) return "lmh";
+  if(state.q!=="lmh" && av.has(state.q)) return state.q;
+  if(hasLMH) return "lmh";
+  if(av.has("total")) return "total";
+  if(av.has("temp")) return "temp";
+  return [...av][0] || "lmh";
 }
 function drawQ(){
   const avail=availQuantities(), row=document.getElementById("qrow");
@@ -293,11 +304,17 @@ async function init(){
   const msel=document.getElementById("model");
   Object.keys(INDEX.models).forEach(m=>{const o=document.createElement("option");
     o.value=m; o.textContent=INDEX.models[m].label||m; msel.appendChild(o);});
-  // default: first model selected
-  if(msel.options.length){ msel.options[0].selected=true; state.models=[msel.options[0].value]; }
+  // default: first model that actually has L/M/H, so the default L/M/H combo
+  // view is meaningful (a total-only model like ecmwf_ens would fall back to
+  // total and defeat the point). Falls back to the first model otherwise.
+  const lmhModel = [...msel.options].find(o=>{
+    const q=INDEX.models[o.value].quantities; return q.includes("low")||q.includes("mid")||q.includes("high");
+  }) || msel.options[0];
+  if(lmhModel){ lmhModel.selected=true; state.models=[lmhModel.value]; }
+  state.q=pickQuantity();
   msel.addEventListener("change",()=>{
     state.models=[...msel.selectedOptions].map(o=>o.value);
-    const av=availQuantities(); if(!av.has(state.q)&&state.q!=="lmh") state.q=[...av][0]||"total";
+    state.q=pickQuantity();
     populateRuns(); drawQ(); refresh();
   });
   document.getElementById("run").addEventListener("change",()=>{
