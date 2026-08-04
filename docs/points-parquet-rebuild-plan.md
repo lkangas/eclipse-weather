@@ -124,31 +124,26 @@ the newest thing on local disk is the newest thing that exists.**
 
 Procedure:
 
-1. Delete `data/points.parquet`.
-2. Delete every `.extracted` marker under `data/raw/*/*/`.
-3. For each model: ask the VPS what its own newest fetched run is (source of
-   truth — see open question below), and compare against the desktop's
-   newest run on disk.
-   - If the desktop already has that same run_init fetched (and it's not
-     corrupted/partial — reuse the good-fraction file-integrity check
-     already built for this in the prototype scripts, not just "a directory
-     exists"), extract it.
-   - If the desktop is behind, **fetch that run first**, then extract it.
-     Do not extract an older run just because it's what's currently on
-     disk.
-4. From that point on, the running scheduler (`src/scheduler/run.py`)
-   extracts each new run automatically as it lands, same as it does today.
-
-**Open question — how does the desktop actually query VPS status?** I don't
-currently have a mechanism for this and don't want to guess one. Possible
-answers: the VPS already exposes something (`src/pipeline/`'s
-`rendered_index.json`/`pipeline_status.json` are mentioned in `TODO.md` as
-already-existing data, just without a viewer page yet — if reachable from
-the desktop, e.g. over the network or synced some other way, that could
-serve directly) or this needs a small new piece of plumbing. Machine/network
-specifics belong in private ops notes, not this doc — but I need at least
-the shape of the answer (is there already a URL/file the desktop can read,
-or does one need building?) before writing the "ask the VPS" step for real.
+1. **One-time freshness check, before anything else starts.** For each
+   model, confirm the desktop's newest run on disk matches the VPS's actual
+   newest fetched run — no new infrastructure, no HTTP interface, just a
+   manual/lightweight comparison done once as a pre-flight gate (however
+   the VPS's state is already visible today, the same way "the VPS has
+   fetched it just fine" was confirmed earlier). If the desktop is behind
+   for a model, fetch that model's real newest run before proceeding to
+   step 3 for it. This check happens exactly once, right before the first
+   row of the new file is written — not a standing mechanism, and not
+   repeated per-run afterward (see step 4).
+2. Delete `data/points.parquet`.
+3. Delete every `.extracted` marker under `data/raw/*/*/`, then extract each
+   model's now-confirmed-current newest run into the fresh file.
+4. From that point on, **each environment's own scheduler builds the file
+   independently from its own local fetch state** — the desktop's
+   `src/scheduler/run.py` extracts every new run it fetches, and (once §5 is
+   resolved) the VPS's `src/pipeline/` does the same for its own
+   `points.parquet`. No further cross-checking between the two after the
+   one-time seed in step 1 — matches `TODO.md`'s already-decided "VPS is
+   fully self-sufficient" shape (§5).
 
 **Known coverage gap, not a bug:** temperature fetching itself (the raw
 `temp_f*.grib2`/`T_2M`/SP1 files, as opposed to extracting it) was only
@@ -159,12 +154,12 @@ model's newest run still somehow predates that.
 
 **Also already fixed (uncommitted), still needed:** `mark_extracted()` in
 `src/scheduler/run.py` no longer fires when an extractor returns zero rows.
-Without this, several models' currently-stuck runs
-(`ecmwf_hres`/`icon_eu`/`icon_global`/`arome_france`/`arpege_europe` all
-have runs with real raw data on disk but were marked "done" with nothing
-extracted, under the old 3-hour-only logic) stay stuck even after step 3
-fetches/finds a genuinely current run - the *next* run after that would hit
-the same bug again without this fix.
+Without this, step 4's ongoing extraction would eventually re-hit the same
+bug that stuck several models today (`ecmwf_hres`/`icon_eu`/`icon_global`/
+`arome_france`/`arpege_europe` all have runs with real raw data on disk but
+were marked "done" with nothing extracted, under the old 3-hour-only logic)
+the next time one of them publishes a run whose horizon doesn't happen to
+reach whatever the old logic checked against.
 
 ## 5. VPS deployment
 
@@ -281,20 +276,23 @@ it's watched from.
 
 ## 8. Rollout sequence (once this plan is approved)
 
-1. Resolve §4's open question (how the desktop reads VPS status) - blocks
-   step 3 below specifically, not steps 1-2.
-2. Finalize + commit the already-written extraction code (schema,
+1. Finalize + commit the already-written extraction code (schema,
    full-range widening, `mark_extracted` fix, `aemet_harmonie` exclusion,
    the 4 Open-Meteo extractors' widening) — desktop-only at this point,
    nothing deployed differently yet.
-3. Build the progress-JSON writer + browser page (§6).
-4. Run the desktop rebuild (§4: wipe, then VPS-verified newest-run-per-model
-   seed - fetching first wherever the desktop is behind), watching it in the
-   browser instead of a terminal.
+2. Build the progress-JSON writer + browser page (§6).
+3. Run the desktop rebuild (§4): one-time VPS freshness check per model,
+   fetch wherever the desktop is behind, wipe, then seed from each model's
+   now-current newest run - watching it in the browser instead of a
+   terminal.
+4. From here, desktop's scheduler keeps the file current on its own (§4
+   step 4) - no more rebuild-specific steps on the desktop side.
 5. Verify results for real: spot-check a few (model, site) series, confirm
    row counts and temp_c coverage match §3's table, confirm dead models are
    actually gone if that's confirmed in scope.
-6. Only then: decide §5's open question and start on VPS pipeline changes.
+6. Only then: decide §5's open question and start on VPS pipeline changes,
+   so the VPS's own `points.parquet` builds itself the same way going
+   forward.
 
 ---
 *Machine/deployment specifics (box names, hostnames, ports beyond localhost
