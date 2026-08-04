@@ -405,11 +405,12 @@ _last_manifest_regen = 0.0
 
 
 def regenerate_manifests(force: bool = False) -> None:
-    """Rebuild all three tool manifests from whatever frames are on disk.
+    """Rebuild Tool 1/2/3's manifests (from the rendered frames) and Tool 4's
+    data (from points.parquet) so every tool stays current.
 
     Never raises: a broken manifest generator must not stop rendering, and
     must certainly not stop fetching. Each generator is attempted
-    independently so one failure does not stale the other two.
+    independently so one failure does not stale the others.
 
     The generators are imported lazily - they pull in the viz stack, which the
     archiver process itself has no business carrying (or failing to start on).
@@ -424,12 +425,14 @@ def regenerate_manifests(force: bool = False) -> None:
             generate_tool1_manifest,
             generate_tool2_manifest,
             generate_tool3_manifest,
+            generate_tool4_data,
         )
     except Exception:
         log.exception("manifest generators unavailable - frames rendered, manifests NOT updated")
         return
 
-    for module in (generate_tool1_manifest, generate_tool2_manifest, generate_tool3_manifest):
+    for module in (generate_tool1_manifest, generate_tool2_manifest,
+                   generate_tool3_manifest, generate_tool4_data):
         try:
             module.main()
         except Exception:
