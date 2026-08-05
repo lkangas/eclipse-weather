@@ -21,7 +21,7 @@ eclipse:
   # UI) computes a horizon in the past and full_range_steps() returns ZERO
   # steps for every current run - the archiver would silently fetch nothing,
   # and a missed run is unrecoverable. Keep these two independent.
-  data_horizon: "2026-08-16T00:00:00Z"
+  data_horizon: "2026-08-15T06:00:00Z"
   bbox: {lat_min: 36.0, lat_max: 44.0, lon_min: -10.0, lon_max: 5.0}
   sun_at_t: {elevation_deg: ~11, azimuth_deg: ~285}   # informational
   eclipse_aware_radiation_survey: >
