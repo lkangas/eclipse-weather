@@ -190,6 +190,25 @@ def _frames_complete(model_id: str, run_init: datetime,
 # Its raw fetch and map rendering are unaffected.
 _EXTRACTION_EXCLUDED_MODELS = {"aemet_harmonie"}
 
+# Re-reading a run's whole step range is the pass's single most expensive act:
+# icon_global cdo-remaps every step, aifs_ens re-reads 50 members. A run inside
+# its top-up window gains only a few forecast-hours per pass, so re-extracting on
+# every arrival re-does that whole read for a handful of new rows - which is what
+# turned a ~1 min pass into a multi-hour one and starved fetch scheduling. Once a
+# run has been extracted at least once (its early/eclipse hours are already in
+# points.parquet), defer the next re-read until a MEANINGFUL chunk of new forecast
+# has landed. Finalisation and the first-ever extraction are never deferred.
+_REEXTRACT_GROWTH_H = 24
+
+# The archive second loop (reclaim-visit of non-due runs) also extracts any run
+# not yet in points.parquet. After a mass marker reset that backlog is hundreds
+# of runs, and extracting them all in one pass is what stops the pass returning
+# to fetch newly-due runs for hours ("N runs overdue"). Bound the FIRST-time
+# backlog extraction to this many runs per pass: the pass stays short, fetch
+# stays current, and the backlog drains over many short passes instead of one
+# multi-hour one. Due runs (the first loop) always extract, uncapped.
+_MAX_BACKLOG_EXTRACTIONS_PER_PASS = 12
+
 
 def _extract_progress_path(model_id: str, run_init: datetime):
     from src.pipeline import journal
@@ -233,9 +252,13 @@ def _maybe_extract(
         last_max = -2
     complete = set(v.published_steps).issubset(set(v.steps_on_disk) | set(v.reclaimed_steps))
     final = v.sealed or (bool(v.published_steps) and complete)
-    # Nothing new since last extraction and the run isn't ready to finalise:
-    # skip the (expensive) re-read.
-    if on_disk_max <= last_max and not final:
+    never_extracted = last_max < 0
+    # First extraction (freshness) and finalisation always run. Otherwise defer
+    # the expensive re-read until >= _REEXTRACT_GROWTH_H forecast-hours of new
+    # steps have arrived since the last one - a run topping up a few steps per
+    # pass no longer triggers a full re-extraction each pass. (This subsumes the
+    # old "nothing new since last time" skip, since the threshold is > 0.)
+    if not never_extracted and not final and on_disk_max < last_max + _REEXTRACT_GROWTH_H:
         return
 
     try:
@@ -265,15 +288,22 @@ def process_run(
     apply: bool,
     now: datetime,
     fetch: bool = True,
+    extract: bool = True,
 ) -> RunOutcome:
-    """Fetch (windowed), render, extract and reclaim one run."""
+    """Fetch (windowed), render, extract and reclaim one run.
+
+    `extract=False` skips the (expensive) point extraction but still reclaims -
+    the archive loop uses it to stay within a per-pass backlog budget while
+    always freeing disk.
+    """
     from src.fetchers import registry as fetch_registry
     from src.fetchers.base import record_fetch_attempt
 
     outcome = RunOutcome(model=model_id, run_init=run_init)
 
     if not fetch:
-        _maybe_extract(model_id, model_config, run_init, outcome)
+        if extract:
+            _maybe_extract(model_id, model_config, run_init, outcome)
         _reclaim_run(model_id, model_config, run_init, settings, outcome,
                      apply=apply, now=now)
         return outcome
@@ -522,6 +552,10 @@ def run_once(
         rendered_anything = rendered_anything or bool(outcome.steps_rendered)
         result.outcomes.append(outcome)
 
+    # Backlog extraction (first-time extraction of non-due archived runs) is
+    # capped per pass so the pass returns to fetch promptly; reclaim is never
+    # capped. Budget is shared across all models this pass.
+    extract_budget = _MAX_BACKLOG_EXTRACTIONS_PER_PASS
     for model_id, model_config in all_models.items():
         if models and model_id not in models:
             continue
@@ -537,12 +571,16 @@ def run_once(
         for run_init in _archived_run_inits(model_id):
             if run_init in due_runs or not already_fetched(model_id, run_init):
                 continue
-            # fetch=False: no download, but still extract-if-ready and
-            # reclaim. That catches a run fetched before this pipeline
-            # existed (rollout step 3's migrated renders) or one whose
-            # extraction failed on an earlier pass.
+            # fetch=False: no download, but reclaim always, and extract only
+            # while this pass's backlog budget lasts. That catches a run fetched
+            # before this pipeline existed (rollout step 3's migrated renders)
+            # or one whose extraction failed on an earlier pass - without a huge
+            # post-reset backlog stalling the pass for hours.
             outcome = process_run(model_id, model_config, run_init, settings,
-                                  apply=apply, now=now, fetch=False)
+                                  apply=apply, now=now, fetch=False,
+                                  extract=extract_budget > 0)
+            if outcome.extracted_rows is not None:
+                extract_budget -= 1  # an extraction actually ran (not skipped)
             if outcome.files_reclaimed or outcome.needs_attention or outcome.errors:
                 result.outcomes.append(outcome)
 

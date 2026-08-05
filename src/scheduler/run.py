@@ -612,6 +612,7 @@ def run_once() -> None:
             # at its partial extent forever. mark_extracted only ever fires on a
             # run that actually produced rows, so a 0-row run is retried later.
             from src.pipeline import journal, verify
+            from src.pipeline.orchestrator import _REEXTRACT_GROWTH_H
             v = verify.verify_run(model_name, model_config, fetched_init)
             on_disk_max = max(v.steps_on_disk) if v.steps_on_disk else -1
             marker = journal.run_dir(model_name, fetched_init) / ".extract_maxstep"
@@ -622,8 +623,13 @@ def run_once() -> None:
             complete = set(v.published_steps).issubset(
                 set(v.steps_on_disk) | set(v.reclaimed_steps))
             final = v.sealed or (bool(v.published_steps) and complete)
-            if on_disk_max <= last_max and not final:
-                continue  # nothing new since last extraction, run not ready to finalize
+            never_extracted = last_max < 0
+            # First extraction and finalisation always run; otherwise defer the
+            # expensive re-read until >= _REEXTRACT_GROWTH_H forecast-hours of new
+            # steps have landed (see orchestrator._maybe_extract for the why).
+            if (not never_extracted and not final
+                    and on_disk_max < last_max + _REEXTRACT_GROWTH_H):
+                continue  # not enough new forecast since last extraction to re-read
             try:
                 extractor = extract_registry.get_extractor(model_config["fetch"])
                 rows = extractor(model_name, model_config, fetched_init)
