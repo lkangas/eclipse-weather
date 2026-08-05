@@ -121,14 +121,11 @@ chunking:
 # run_init IS the latest available - so requested and actual now coincide by
 # construction, and every other cycle is skipped with no network call and no
 # directory created.
-# aifs_ens excluded 2026-08-05, TEMPORARY: its raw is ~17.7 GB/run (6x the next
-# model), and the fetch/render split holds a run's whole raw until render, so on
-# this ~30 GB-free box it cannot be fetched alongside anything else - it pins
-# disk at the floor and starves smaller due runs. It is the desktop's model by
-# the agreed split anyway (raw kept there, frames/points backfilled). Re-enable
-# once big models get per-window fetch->render->reclaim so their peak is one
-# window, not the whole run.
-exclude_models: [aifs_ens]
+# (empty) - big-footprint models like aifs_ens (~17.7 GB/run) are handled by the
+# INLINE, one-at-a-time path in run_once (see _big_run / _INLINE_PEAK_BYTES),
+# so they fetch+render+extract disk-safely without being excluded. aifs_ens was
+# briefly excluded 2026-08-05 while that path was built; re-enabled the same day.
+exclude_models: []
 
 frames:
   # STALE ASSUMPTION CORRECTED 2026-08-04: this used to say frames were

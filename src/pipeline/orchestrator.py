@@ -209,6 +209,30 @@ _REEXTRACT_GROWTH_H = 24
 # multi-hour one. Due runs (the first loop) always extract, uncapped.
 _MAX_BACKLOG_EXTRACTIONS_PER_PASS = 12
 
+# A run whose whole-run raw exceeds this is processed INLINE (fetch -> render ->
+# extract -> reclaim, one at a time) instead of in the fetch-first phase. The
+# fetch-first phase holds every due run's raw until PHASE B reclaims, so a run
+# whose raw is a large fraction of the free-space budget (aifs_ens is ~17.7 GB,
+# vs ~19 GB spendable on this box) cannot share the pass with anything - and two
+# such runs cannot coexist at all. Inline processing reclaims each before the
+# next is fetched, so peak stays at one big run, and it still fetches+extracts
+# (Tool 4 needs its points) rather than being excluded. Small runs keep the
+# fetch-first path, so overdue still clears at the top of every pass.
+_INLINE_PEAK_BYTES = 12 * 1024**3
+
+
+def _big_run(model_id: str, model_config: dict, run_init: datetime,
+             settings: Settings) -> bool:
+    """Whole-run raw too large to hold alongside the rest of the due set."""
+    try:
+        peak = chunking.peak_raw_bytes(
+            model_id, model_config, run_init,
+            settings.chunk_hours(model_id), settings.fallback_bytes_per_step,
+        )
+    except Exception:
+        return False  # unknown size -> treat as small (fetch-first); guard still protects
+    return peak > _INLINE_PEAK_BYTES
+
 
 def _extract_progress_path(model_id: str, run_init: datetime):
     from src.pipeline import journal
@@ -549,9 +573,11 @@ def run_once(
     candidates.sort(key=lambda c: c[0], reverse=True)
 
     due_by_model: dict[str, set] = {}
-    # Candidates still needing fetch+render this pass, carried from the fetch
-    # phase (A) to the render phase (B) below.
+    # Small runs go through the fetch-first phases (A/B) below; big runs (raw too
+    # large to hold alongside the rest, e.g. aifs_ens ~17.7 GB) are processed
+    # inline afterwards, one at a time.
     pending: list[tuple[datetime, str, dict]] = []
+    pending_big: list[tuple[datetime, str, dict]] = []
     for idx, (run_init, model_id, model_config) in enumerate(candidates, 1):
         due_by_model.setdefault(model_id, set()).add(run_init)
         publish_activity("model", model=model_id,
@@ -563,18 +589,17 @@ def run_once(
                              len(o.errors) for o in result.outcomes))
 
         # Frames already complete -> nothing to fetch or render, just a reclaim
-        # visit. This is the whole seeded-archive case: 53 runs whose frames
-        # were migrated from the desktop had no raw here, so already_fetched()
-        # said "never fetched" and the pass re-downloaded entire runs -
-        # including ~16 GB aifs_ens runs - to produce frames that already
-        # existed. Production renders maps; point extraction of migrated runs is
-        # the desktop's job (see the agreed split).
+        # visit (e.g. runs whose frames were migrated from the desktop). Point
+        # extraction still runs so Tool 4 fills; production renders maps.
         if _frames_complete(model_id, run_init, now):
             outcome = process_run(model_id, model_config, run_init, settings,
                                   apply=apply, now=now, fetch=False)
             result.outcomes.append(outcome)
             continue
-        pending.append((run_init, model_id, model_config))
+        if _big_run(model_id, model_config, run_init, settings):
+            pending_big.append((run_init, model_id, model_config))
+        else:
+            pending.append((run_init, model_id, model_config))
 
     # PHASE A - FETCH every due run first. Fetching is cheap (seconds each) and
     # time-critical (upstream retention), so it must never wait behind
@@ -607,6 +632,23 @@ def run_once(
         except Exception as e:
             result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
             log.exception("render/finalize failed for %s %s", model_id, run_init.isoformat())
+        rendered_anything = rendered_anything or bool(outcome.steps_rendered)
+        result.outcomes.append(outcome)
+
+    # BIG runs, INLINE and one at a time - AFTER the small phases so their raw
+    # has the whole freed budget. Each is fetched -> rendered -> extracted ->
+    # reclaimed before the next, so its ~17.7 GB never stacks with another big
+    # run or with the small set (which PHASE B has already reclaimed). Done last
+    # so a big run's slow render never blocks a small run's fetch (that was the
+    # original starvation); a big run is delayed within the pass, never dropped.
+    for run_init, model_id, model_config in pending_big:
+        try:
+            outcome = process_run(model_id, model_config, run_init, settings,
+                                  apply=apply, now=now)  # render_in_loop=True (inline)
+        except Exception as e:
+            result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
+            log.exception("inline process failed for %s %s", model_id, run_init.isoformat())
+            outcome = RunOutcome(model=model_id, run_init=run_init)
         rendered_anything = rendered_anything or bool(outcome.steps_rendered)
         result.outcomes.append(outcome)
 
