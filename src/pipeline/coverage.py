@@ -157,13 +157,21 @@ def build(now: datetime | None = None, lookback_h: int = LOOKBACK_H) -> dict:
         full_range_steps,
     )
     from src.pipeline import completeness
+    from src.pipeline.settings import load_settings
     from src.viz.frame_renderer import _MODEL_READERS, supported_fields
 
     now = now or datetime.now(UTC)
+    # Models this box does not fetch (production.yaml exclude_models) are not its
+    # responsibility, so they must not show as "overdue" on its dashboard - that
+    # is a phantom the operator can do nothing about. Drop them from coverage
+    # entirely; whatever produces them (e.g. the desktop) reports their state.
+    excluded = set(load_settings().exclude_models)
     out: dict[str, list[dict]] = {}
     next_up: dict[str, dict] = {}
     for model_id, cfg in load_models()["models"].items():
         if "cycles" not in cfg or "fetch" not in cfg:
+            continue
+        if model_id in excluded:
             continue
         renderable = model_id in _MODEL_READERS
         fields = supported_fields(model_id) if renderable else []
