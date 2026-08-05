@@ -279,6 +279,43 @@ def _maybe_extract(
         log.exception("extract failed for %s %s", model_id, run_init.isoformat())
 
 
+def _render_and_finalize(
+    model_id: str, model_config: dict, run_init: datetime, settings: Settings,
+    outcome: RunOutcome, *, apply: bool, now: datetime,
+) -> None:
+    """Render every on-disk step of one run, extract once, then reclaim.
+
+    Called AFTER the run's raw is fully fetched. render_steps() draws only steps
+    whose raw is actually present and is idempotent per frame, so passing the
+    full published step list is correct whether the run was wholly or partly
+    fetched. The extractor re-reads the whole run once (not per window) and must
+    precede reclaim of the same steps, so extraction and reclaim both live here,
+    in that order.
+    """
+    from src.fetchers.base import full_range_steps
+
+    steps = full_range_steps(model_config, run_init)
+    if steps:
+        publish_activity("rendering", model=model_id, run_init=run_init)
+        try:
+            rendered = render.render_steps(model_id, run_init, steps)
+            outcome.steps_rendered += sum(1 for f in rendered.values() if any(f.values()))
+        except Exception as e:
+            outcome.errors.append(f"render: {e}")
+            log.exception("render failed for %s %s", model_id, run_init.isoformat())
+
+    # Extract BEFORE reclaim, unconditionally: _maybe_extract has its own guards
+    # (already-extracted, no raw on disk, or <threshold new steps -> no-op), so
+    # gating on outcome.chunks would wrongly skip a run whose raw landed on an
+    # earlier pass but was never extracted - and the reclaim below would then
+    # drop those rows. Extraction must precede reclaim of the same steps.
+    publish_activity("extracting", model=model_id, run_init=run_init)
+    _maybe_extract(model_id, model_config, run_init, outcome)
+    publish_activity("reclaiming", model=model_id, run_init=run_init)
+    _reclaim_run(model_id, model_config, run_init, settings, outcome,
+                 apply=apply, now=now)
+
+
 def process_run(
     model_id: str,
     model_config: dict,
@@ -289,12 +326,18 @@ def process_run(
     now: datetime,
     fetch: bool = True,
     extract: bool = True,
+    render_in_loop: bool = True,
 ) -> RunOutcome:
     """Fetch (windowed), render, extract and reclaim one run.
 
     `extract=False` skips the (expensive) point extraction but still reclaims -
     the archive loop uses it to stay within a per-pass backlog budget while
     always freeing disk.
+
+    `render_in_loop=False` fetches only and returns before render/extract/
+    reclaim, leaving those to a later _render_and_finalize() call. run_once()
+    uses this to fetch EVERY due run before rendering any of them, so a slow
+    render backlog can never starve another run's fetch (runs going 'overdue').
     """
     from src.fetchers import registry as fetch_registry
     from src.fetchers.base import record_fetch_attempt
@@ -391,47 +434,24 @@ def process_run(
             break
         outcome.chunks += 1
 
-        publish_activity("rendering", model=model_id, run_init=run_init,
-                         window_cap_h=cap, chunk=caps.index(cap) + 1, chunks=len(caps))
-        try:
-            rendered = render.render_steps(model_id, run_init, wanted)
-            outcome.steps_rendered += sum(1 for f in rendered.values() if any(f.values()))
-        except Exception as e:
-            outcome.errors.append(f"render <=+{cap}h: {e}")
-            log.exception("render failed for %s %s window <=+%dh",
-                          model_id, run_init.isoformat(), cap)
-            # Do NOT reclaim after a failed render - fall through to the next
-            # window, leaving this one's raw on disk for the retry.
-            continue
+    # Stamp the fetch attempt so should_attempt_fetch() applies its
+    # FETCH_RETRY_INTERVAL_H backoff - EXCEPT when the run was skipped for low
+    # disk (outcome.skipped set, nothing fetched). That is a LOCAL resource
+    # condition, not an upstream one: PHASE B reclaims and frees space this same
+    # pass, so the run must stay eligible for the very next pass rather than
+    # being backed off for an hour. A fetch ERROR (errors set, no skipped) is
+    # still stamped - backing off a struggling source is correct. A crash before
+    # this line leaves no marker and is retried next pass, as before.
+    if not outcome.skipped:
+        record_fetch_attempt(model_id, run_init, now)
 
-    # Extract ONCE, after the whole run has been fetched+rendered - not per
-    # fetch window. The extractor re-reads every on-disk step on each call, so
-    # extracting inside the window loop makes a long run's cost quadratic: a
-    # 264 h run fetched in eleven ~24 h windows was extracted eleven times, each
-    # re-reading the whole accumulated run - minutes per run and the dominant
-    # cost of a pass. Reclaim still runs (it frees disk and must see the whole
-    # run's render state); extraction must precede reclaim of the same steps, so
-    # it stays just before it. max_chunks_per_pass is null here so the run is
-    # fully on disk by now; peak raw is one run (small on this box) and the
-    # in-loop headroom guard sweeps if space runs low.
-    if outcome.chunks:
-        publish_activity("extracting", model=model_id, run_init=run_init)
-        _maybe_extract(model_id, model_config, run_init, outcome)
-    publish_activity("reclaiming", model=model_id, run_init=run_init)
-    _reclaim_run(model_id, model_config, run_init, settings, outcome,
-                 apply=apply, now=now)
-
-    # Stamped only after the whole run has been walked, not before it starts.
-    # should_attempt_fetch() then blocks this run for FETCH_RETRY_INTERVAL_H,
-    # which is right for "we asked for everything and upstream had no more" but
-    # wrong for "we were interrupted part way". Stamping up front meant any
-    # interruption - a container restart, a crash, a break out of the chunk
-    # loop on low disk - cost the run a full hour before it could be resumed,
-    # while it sat visibly incomplete and the pipeline reported nothing to do.
-    # Observed: gfs 2026-07-27T12Z stopped at 48 of 209 steps with every step
-    # published upstream, then was skipped for an hour in favour of an older
-    # run. A run that breaks out early is now simply retried on the next pass.
-    record_fetch_attempt(model_id, run_init, now)
+    # Render + extract + reclaim. run_once() passes render_in_loop=False and
+    # calls _render_and_finalize() itself for the whole due set AFTER fetching
+    # it, so a slow render never blocks another run's fetch; a direct single-run
+    # caller gets the full fetch->render->extract->reclaim sequence here.
+    if render_in_loop:
+        _render_and_finalize(model_id, model_config, run_init, settings, outcome,
+                             apply=apply, now=now)
     return outcome
 
 
@@ -529,6 +549,9 @@ def run_once(
     candidates.sort(key=lambda c: c[0], reverse=True)
 
     due_by_model: dict[str, set] = {}
+    # Candidates still needing fetch+render this pass, carried from the fetch
+    # phase (A) to the render phase (B) below.
+    pending: list[tuple[datetime, str, dict]] = []
     for idx, (run_init, model_id, model_config) in enumerate(candidates, 1):
         due_by_model.setdefault(model_id, set()).add(run_init)
         publish_activity("model", model=model_id,
@@ -539,27 +562,51 @@ def run_once(
                          errors_so_far=len(result.errors) + sum(
                              len(o.errors) for o in result.outcomes))
 
-        # Frames already complete -> nothing to fetch. This is the whole
-        # seeded-archive case: 53 runs whose frames were migrated from the
-        # desktop had no raw here, so already_fetched() said "never fetched"
-        # and the pass re-downloaded entire runs - including ~16 GB aifs_ens
-        # runs - to produce frames that already existed. The only thing that
-        # re-fetch could add is point extraction, and per the agreed split that
-        # is the DESKTOP's job: anything needing raw (point series,
-        # line-of-sight) is developed there, where raw is kept, and backfilled
-        # to the VPS. Production renders maps.
+        # Frames already complete -> nothing to fetch or render, just a reclaim
+        # visit. This is the whole seeded-archive case: 53 runs whose frames
+        # were migrated from the desktop had no raw here, so already_fetched()
+        # said "never fetched" and the pass re-downloaded entire runs -
+        # including ~16 GB aifs_ens runs - to produce frames that already
+        # existed. Production renders maps; point extraction of migrated runs is
+        # the desktop's job (see the agreed split).
         if _frames_complete(model_id, run_init, now):
             outcome = process_run(model_id, model_config, run_init, settings,
                                   apply=apply, now=now, fetch=False)
             result.outcomes.append(outcome)
             continue
+        pending.append((run_init, model_id, model_config))
+
+    # PHASE A - FETCH every due run first. Fetching is cheap (seconds each) and
+    # time-critical (upstream retention), so it must never wait behind
+    # rendering. A slow render backlog used to starve the fetch of older due
+    # runs entirely, leaving them 'overdue' for hours; now every fetch happens
+    # here, at the top of the pass. Reclaim is deferred to PHASE B, so peak raw
+    # this pass is the sum of the due runs fetched here (was ~one run) - safe
+    # because the per-window headroom guard reads live free space and SKIPS a
+    # run before the floor is breached (the sweep it tries first is usually a
+    # no-op in PHASE A: nothing fetched here is rendered yet, so only prior
+    # passes' raw is reclaimable). A skipped run is NOT stamped, so it is retried
+    # next pass once PHASE B has freed space - it is delayed, never dropped.
+    fetched: list[tuple[datetime, str, dict, RunOutcome]] = []
+    for run_init, model_id, model_config in pending:
         try:
             outcome = process_run(model_id, model_config, run_init, settings,
-                                  apply=apply, now=now)
+                                  apply=apply, now=now, render_in_loop=False)
         except Exception as e:
             result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
-            log.exception("process_run failed for %s %s", model_id, run_init.isoformat())
-            continue
+            log.exception("fetch failed for %s %s", model_id, run_init.isoformat())
+            outcome = RunOutcome(model=model_id, run_init=run_init)
+        fetched.append((run_init, model_id, model_config, outcome))
+
+    # PHASE B - RENDER + EXTRACT + RECLAIM the runs just fetched (the slow part,
+    # now off the fetch critical path).
+    for run_init, model_id, model_config, outcome in fetched:
+        try:
+            _render_and_finalize(model_id, model_config, run_init, settings,
+                                 outcome, apply=apply, now=now)
+        except Exception as e:
+            result.errors.append(f"{model_id} {run_init.isoformat()}: {e}")
+            log.exception("render/finalize failed for %s %s", model_id, run_init.isoformat())
         rendered_anything = rendered_anything or bool(outcome.steps_rendered)
         result.outcomes.append(outcome)
 

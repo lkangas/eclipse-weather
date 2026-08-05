@@ -199,6 +199,11 @@ def print_sizing(settings, now: datetime) -> None:
     print("The floor is the real guarantee: the headroom check reclaims before "
           "fetching a\nwindow that would breach it. This figure says how much "
           "free space a single run\ncan consume before that happens.")
+    print("NOTE: a production PASS now fetches every DUE run (run_once PHASE A) "
+          "before it\nrenders/reclaims any of them (PHASE B), so the pass-level "
+          "peak is the SUM of the\ndue set's raw, not one run. The floor still "
+          "holds - the per-window guard skips a\nrun before breaching it (and a "
+          "skipped run is retried next pass, not stamped).")
 
 
 def main() -> None:

@@ -64,10 +64,32 @@ def render_steps(
     for step in steps:
         if step not in renderable:
             continue
-        results[step] = {}
-        for fld in fields:
-            _, has_data = frame_renderer.render_frame(model_id, run_init, step, fld)
-            results[step][fld] = has_data
+        try:
+            frame = {}
+            for fld in fields:
+                _, has_data = frame_renderer.render_frame(model_id, run_init, step, fld)
+                frame[fld] = has_data
+            results[step] = frame
+        except Exception:
+            # One unreadable step (corrupt/short GRIB, reader bug) must not abort
+            # the rest of the run. The production caller now renders the whole
+            # published range in one call (src/pipeline/orchestrator.py
+            # _render_and_finalize), so without this a single bad frame at step N
+            # would strand every step after N - and every pass, if the fault
+            # persists. Skip it and leave its raw un-rendered; reclaim holds it
+            # and a later pass (or re-fetch) retries. Not journaled: an
+            # exception says nothing about whether the field is genuinely absent.
+            log.exception("render_frame raised for %s %s step %d - skipping step",
+                          model_id, run_init.isoformat(), step)
+    # Per-step skipping above must not hide a SYSTEMIC outage: if every step that
+    # had raw failed, this run rendered nothing yet reports no run-level error.
+    # Log it distinctly (ERROR) so a total render failure - e.g. a broken
+    # matplotlib backend during Aug 5-12 - is visible rather than looking like a
+    # healthy 0-frame pass.
+    if renderable and not results:
+        log.error("%s %s: rendered 0 of %d step(s) that have raw on disk - "
+                  "suspect a systemic render failure, not genuine no-data",
+                  model_id, run_init.isoformat(), len(renderable))
     journal.record_render_pass(model_id, run_init, results)
     return results
 
