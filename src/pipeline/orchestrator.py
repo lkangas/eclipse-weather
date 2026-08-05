@@ -404,11 +404,22 @@ def process_run(
             # window, leaving this one's raw on disk for the retry.
             continue
 
+    # Extract ONCE, after the whole run has been fetched+rendered - not per
+    # fetch window. The extractor re-reads every on-disk step on each call, so
+    # extracting inside the window loop makes a long run's cost quadratic: a
+    # 264 h run fetched in eleven ~24 h windows was extracted eleven times, each
+    # re-reading the whole accumulated run - minutes per run and the dominant
+    # cost of a pass. Reclaim still runs (it frees disk and must see the whole
+    # run's render state); extraction must precede reclaim of the same steps, so
+    # it stays just before it. max_chunks_per_pass is null here so the run is
+    # fully on disk by now; peak raw is one run (small on this box) and the
+    # in-loop headroom guard sweeps if space runs low.
+    if outcome.chunks:
         publish_activity("extracting", model=model_id, run_init=run_init)
         _maybe_extract(model_id, model_config, run_init, outcome)
-        publish_activity("reclaiming", model=model_id, run_init=run_init)
-        _reclaim_run(model_id, model_config, run_init, settings, outcome,
-                     apply=apply, now=now)
+    publish_activity("reclaiming", model=model_id, run_init=run_init)
+    _reclaim_run(model_id, model_config, run_init, settings, outcome,
+                 apply=apply, now=now)
 
     # Stamped only after the whole run has been walked, not before it starts.
     # should_attempt_fetch() then blocks this run for FETCH_RETRY_INTERVAL_H,
