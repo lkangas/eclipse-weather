@@ -109,6 +109,7 @@ from pathlib import Path
 
 import cfgrib
 import numpy as np
+import pandas as pd
 import xarray as xr
 
 from src.extract.base import PointRow, file_fetched_at, nearest_gridpoint, sites
@@ -201,6 +202,65 @@ def _value_at(da: xr.DataArray, lat: float, lon: float) -> float | None:
     return None if np.isnan(value) else value
 
 
+def _site_indices(
+    da: xr.DataArray, site_list: list[dict]
+) -> tuple[np.ndarray, np.ndarray]:
+    """Nearest-grid (lat_idx, lon_idx) for every site, computed ONCE and reused
+    for every member/field/step because the grid is identical across all of
+    them. Uses pandas Index.get_indexer(method="nearest") - the exact machinery
+    xarray's .sel(method="nearest") uses per dimension - so the selected cell is
+    bit-for-bit the same one _value_at() would have picked, just found once
+    instead of per (member x site x field). This is what turns the old ~5,900
+    individual .sel() calls per step into a single vectorised numpy index."""
+    lat_index = pd.Index(np.asarray(da["latitude"].values))
+    lon_index = pd.Index(np.asarray(da["longitude"].values))
+    lat_i = lat_index.get_indexer([s["lat"] for s in site_list], method="nearest")
+    lon_i = lon_index.get_indexer([s["lon"] for s in site_list], method="nearest")
+    return lat_i, lon_i
+
+
+def _site_values(
+    da: xr.DataArray, lat_i: np.ndarray, lon_i: np.ndarray
+) -> list[float | None]:
+    """Value at every site (nearest cell) as float|None (None for NaN), via one
+    array load + a vectorised fancy index. Equivalent to _value_at() per site.
+    Transpose guarantees (latitude, longitude) order before the paired index."""
+    arr = np.asarray(da.transpose("latitude", "longitude").values)
+    vals = arr[lat_i, lon_i]
+    return [None if np.isnan(v) else float(v) for v in vals]
+
+
+def _split_members_da(da: xr.DataArray) -> list[tuple[int, xr.DataArray]]:
+    """(member, 2-D DataArray) pairs - identical member convention to
+    _iter_members()'s inner loop (number dim -> per value; scalar number coord
+    -> that value; neither -> deterministic member=-1)."""
+    if "number" in da.dims:
+        return [(int(n), da.sel(number=int(n))) for n in da["number"].values]
+    if "number" in da.coords:
+        return [(int(da["number"].values), da)]
+    return [(-1, da)]
+
+
+def _members_by_shortname(
+    path: Path, shortnames: list[str]
+) -> dict[int, dict[str, xr.DataArray]]:
+    """{member: {shortName: 2-D DataArray}} decoding `path` ONCE for all the
+    given shortNames, instead of once per shortName as _iter_members() does.
+    cfgrib splits by level type, so AIFS's tcc/lcc/mcc/hcc land in separate
+    datasets; each wanted var is collected wherever it appears. Values are the
+    same GRIB messages either way - only the number of file scans changes (1
+    vs len(shortnames))."""
+    wanted = set(shortnames)
+    per_member: dict[int, dict[str, xr.DataArray]] = {}
+    for ds in cfgrib.open_datasets(str(path)):
+        for name in list(ds.data_vars):
+            if name not in wanted:
+                continue
+            for member, da2d in _split_members_da(ds[name]):
+                per_member.setdefault(member, {})[name] = da2d
+    return per_member
+
+
 _KELVIN_TO_C = -273.15
 
 
@@ -260,10 +320,17 @@ def _native_total_only_rows(
         )
         return []
     fetched_at = file_fetched_at(tcc_path)
+    members = _iter_members(tcc_path, total_shortname)
+    if not members:
+        return []
+    # Grid identical across members -> compute site indices once, then pull all
+    # sites out of each member's grid with one vectorised index.
+    lat_i, lon_i = _site_indices(members[0][1], site_list)
     rows: list[PointRow] = []
-    for member, da in _iter_members(tcc_path, total_shortname):
-        for site in site_list:
-            value = _value_at(da, site["lat"], site["lon"])
+    for member, da in members:
+        totals = _site_values(da, lat_i, lon_i)
+        for si, site in enumerate(site_list):
+            value = totals[si]
             total = None if value is None else value * scale
             temp_c = _temp_c_at(temp_by_member, member, site["lat"], site["lon"])
             for valid in valid_times:
@@ -334,12 +401,17 @@ def _aifs_rows(
         return []
     fetched_at = file_fetched_at(cloud_path)
 
-    per_member: dict[int, dict[str, xr.DataArray]] = {}
-    for shortname in [total_shortname, *level_shortnames]:
-        for member, da in _iter_members(cloud_path, shortname):
-            per_member.setdefault(member, {})[shortname] = da
+    # Decode the file ONCE for all four cloud shortNames (was once per field).
+    per_member = _members_by_shortname(cloud_path, [total_shortname, *level_shortnames])
 
     expected_vars = {total_shortname, *level_shortnames}
+    # Grid identical across members and fields -> compute site indices once.
+    ref = next((das[total_shortname] for das in per_member.values()
+                if total_shortname in das), None)
+    if ref is None:
+        return []
+    lat_i, lon_i = _site_indices(ref, site_list)
+
     rows: list[PointRow] = []
     for member, das in sorted(per_member.items()):
         missing = expected_vars - das.keys()
@@ -353,12 +425,14 @@ def _aifs_rows(
                 cloud_path,
             )
             continue
-        for site in site_list:
+        # Vectorised: pull all sites out of each field's grid in one index.
+        field_vals = {sn: _site_values(das[sn], lat_i, lon_i) for sn in expected_vars}
+        for si, site in enumerate(site_list):
             band_values: dict[str, float | None] = {}
             for shortname in level_shortnames:
-                v = _value_at(das[shortname], site["lat"], site["lon"])
+                v = field_vals[shortname][si]
                 band_values[_SHORTNAME_TO_BAND[shortname]] = None if v is None else v * level_scale
-            total_v = _value_at(das[total_shortname], site["lat"], site["lon"])
+            total_v = field_vals[total_shortname][si]
             total = None if total_v is None else total_v * total_scale
             temp_c = _temp_c_at(temp_by_member, member, site["lat"], site["lon"])
             for valid in valid_times:
