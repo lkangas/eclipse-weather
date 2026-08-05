@@ -225,13 +225,21 @@ async function refresh(){
           lines.push({valid:p.valid,vals:so[q],color:"#8b3a2f",width:2,op:1,
             meta:`${m} · ENS MEAN · ${site}`,cls:"mean"});
         }
-        // deterministic overlay (paired HRES)
+        // deterministic overlay: the paired HRES run of the SAME cycle as THIS
+        // ENS run (r). Was runs[0] = the pair's newest run always, so every ENS
+        // run drew the identical control line. Fall back to the most recent pair
+        // run at or before r when the exact cycle isn't in Tool 4 (stamps are
+        // YYYYMMDDHH, so lexical <= is chronological); the label shows which.
         const pair=INDEX.models[single].deterministic_pair;
         if(pair && INDEX.models[pair]){
-          const pr=INDEX.models[pair].runs[0], pp=await getRun(pair,pr);
-          const pso=pp&&pp.sites[site];
-          for(const q of qkeys){ if(pso&&pso[q]) lines.push({valid:pp.valid,vals:pso[q],
-            color:"#2f5f8b",width:1.6,op:1,meta:`${pair} (deterministic) · ${site}`,cls:"det"}); }
+          const pruns=INDEX.models[pair].runs;
+          const pr=pruns.includes(r)?r:pruns.find(x=>x<=r);
+          if(pr){
+            const pp=await getRun(pair,pr), pso=pp&&pp.sites[site];
+            const tag=pr===r?"":` · ${pr}`;
+            for(const q of qkeys){ if(pso&&pso[q]) lines.push({valid:pp.valid,vals:pso[q],
+              color:"#2f5f8b",width:1.6,op:1,meta:`${pair} (deterministic${tag}) · ${site}`,cls:"det"}); }
+          }
         }
       } else {
         for(let qi=0;qi<qkeys.length;qi++){
