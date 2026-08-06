@@ -94,6 +94,33 @@ def _iso_z(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
+def _rendered_at(images: dict[str, str]) -> str | None:
+    """When this run's covering-step CLOUD frame was written to disk, as an
+    ISO-Z string - the closest a pure disk scan can get to "when this run
+    became visible in Tool 3". The manifest is stateless (regenerated every
+    ~60s with no memory of when a run first appeared), so a frame file's own
+    mtime is the only render timestamp available.
+
+    Keyed to the cloud-cover frame the tool shows by DEFAULT - hml_composite,
+    or plain `total` on the models with no native levels - not to max() across
+    every field: temp frames were backfilled in a much later render pass, so a
+    max would report that backfill time for old runs instead of when the cloud
+    forecast itself first landed. `images` is already supported-field-filtered
+    by the caller, so a stale `total/` dir on a model that renders a composite
+    never enters here. Whole seconds - sub-second mtime noise means nothing to
+    a human reading a log."""
+    for field in ("hml_composite", "total"):
+        rel = images.get(field)
+        if not rel:
+            continue
+        try:
+            mtime = (OUTPUT_DIR / rel).stat().st_mtime
+        except OSError:
+            continue  # frame vanished between scan and stat (reclaim race)
+        return _iso_z(datetime.fromtimestamp(mtime, tz=UTC).replace(microsecond=0))
+    return None
+
+
 def _parse_run_init(stem: str) -> datetime | None:
     try:
         return datetime.strptime(stem, "%Y%m%d%H").replace(tzinfo=UTC)
@@ -132,7 +159,7 @@ def _rendered_frames(model_id: str) -> dict[datetime, dict[int, dict[str, str]]]
     return index
 
 
-_NOT_COVERING = {"covers": False, "step": None, "misalignment_h": None, "images": None, "has_data": None}
+_NOT_COVERING = {"covers": False, "step": None, "misalignment_h": None, "images": None, "has_data": None, "rendered_at": None}
 
 
 def _run_entry(
@@ -210,16 +237,20 @@ def _run_entry(
         return {"run_init": _iso_z(run_init), **_NOT_COVERING}
 
     fields = supported_fields(model_id)
+    # images only carries fields that really have a file; has_data carries
+    # every supported field so a consumer can tell "field supported but
+    # not rendered" from "field not supported at all".
+    present = {f: by_field[f] for f in fields if f in by_field}
     return {
         "run_init": _iso_z(run_init),
         "covers": True,
         "step": step,
         "misalignment_h": round(misalignment_h, 2),
-        # images only carries fields that really have a file; has_data carries
-        # every supported field so a consumer can tell "field supported but
-        # not rendered" from "field not supported at all".
-        "images": {f: by_field[f] for f in fields if f in by_field},
+        "images": present,
         "has_data": {f: f in by_field for f in fields},
+        # When this run's cloud frame for the target valid time was written -
+        # Tool 3's render log lists runs newest-rendered first. See _rendered_at.
+        "rendered_at": _rendered_at(present),
     }
 
 

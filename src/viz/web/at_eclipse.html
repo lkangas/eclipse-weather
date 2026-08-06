@@ -347,6 +347,57 @@
   .galleryCell.unsupported { opacity: 0.5; cursor: default; }
   .galleryCell.unsupported:hover { border-color: #232320; }
 
+  /* Render log - a plain "when did each model's forecast for this valid time
+     appear" list, newest render first (rendered_at in the manifest = the cloud
+     frame's own mtime). Sits after the maps as its own fixed-height, internally
+     scrolled panel: flex:none so it never fights #gallery/#mapArea (both flex:1)
+     for room - they simply absorb one panel's worth less. Capped at 30vh so the
+     maps above always keep the majority of the viewport. */
+  #renderLog {
+    flex: none;
+    margin-top: 4px;
+    border: 1px solid #232320;
+    background: #fff;
+    max-height: 30vh;
+    overflow-y: auto;
+    font-size: 10px;
+  }
+  /* Sticky title + column heads: the body scrolls under them, so which column
+     is which stays on screen no matter how far down the log you are. */
+  #renderLog .logHead {
+    position: sticky; top: 0; z-index: 1;
+    background: #f0ece2; border-bottom: 1px solid #d8d4c8;
+  }
+  #renderLog .logHeadTop {
+    display: flex; gap: 10px; align-items: baseline;
+    padding: 4px 10px 2px;
+  }
+  .logTitle {
+    font-weight: 700; color: #232320; text-transform: uppercase;
+    letter-spacing: 0.05em; font-size: 9.5px;
+  }
+  .logSub { color: #7a776c; font-size: 9px; font-variant-numeric: tabular-nums; }
+  /* One grid shared by the column-head row and every data row, so the three
+     columns line up by construction. */
+  .logRow {
+    display: grid;
+    grid-template-columns: 160px 130px 1fr;
+    gap: 10px;
+    padding: 2px 10px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  #renderLog .logColHead {
+    color: #7a776c; text-transform: uppercase; letter-spacing: 0.04em;
+    font-size: 8.5px; padding-bottom: 3px;
+  }
+  #logBody .logRow { border-top: 1px solid #f0ece2; }
+  #logBody .logRow:hover { background: #f6f4ef; }
+  .lgTime { color: #2f6f3f; }   /* render time - the "new arrival" signal, green like a covering tick */
+  .lgModel { color: #232320; }
+  .lgInit { color: #55534c; }
+  .logEmpty { padding: 8px 10px; color: #a8a498; font-style: italic; }
+
   /* Touch-target bump for coarse pointers only (fingers, not mice) - keeps
      desktop mouse users pixel-identical to before. .row is 15px tall (fine
      for a mouse click) but under the ~20px minimum comfortable tap target;
@@ -381,6 +432,11 @@
        them enough height for the map to be legible - a 4:3 frame in a
        two-column phone layout is ~160px tall before the title. */
     .galleryCell { min-height: 210px; }
+
+    /* With the whole page scrolling there is no fixed pool to cap against, so
+       let the log flow to its natural height like everything else; the sticky
+       head still keeps the column labels in view as the page scrolls. */
+    #renderLog { max-height: none; overflow-y: visible; }
 
   }
 </style>
@@ -457,6 +513,23 @@
 
 <div id="gallery"></div>
 
+<!-- Render log: newest-rendered-first list of every run that reaches the
+     selected target, so "has a new forecast for the eclipse landed?" is one
+     glance away. Built from the manifest's rendered_at by buildRenderLog();
+     independent of the cursor, rebuilt only on load and target change. -->
+<div id="renderLog">
+  <div class="logHead">
+    <div class="logHeadTop">
+      <span class="logTitle">Render log</span>
+      <span class="logSub" id="logSub">newest first</span>
+    </div>
+    <div class="logRow logColHead">
+      <span>Rendered (UTC)</span><span>Model</span><span>Init (UTC)</span>
+    </div>
+  </div>
+  <div id="logBody"></div>
+</div>
+
 <script>
 // ---------------------------------------------------------------------------
 // Real data via tool3_manifest.json (scripts/generate_tool3_manifest.py).
@@ -523,7 +596,7 @@ async function loadManifest() {
 // misalignment_h, images, has_data - lives under run.by_target[<key>]. Every
 // read goes through here so switching target is a pure data swap; reading
 // those fields off the run itself would silently see undefined.
-const NO_TARGET_DATA = { covers: false, step: null, misalignmentH: null, images: null, hasData: null };
+const NO_TARGET_DATA = { covers: false, step: null, misalignmentH: null, images: null, hasData: null, renderedAt: null };
 
 function targetData(run) {
   const t = run.byTarget[currentTarget];
@@ -534,6 +607,10 @@ function targetData(run) {
     misalignmentH: t.misalignment_h,
     images: t.images,
     hasData: t.has_data,
+    // When this run's cloud frame for the target was written (manifest
+    // rendered_at) - the render log's sort key. Manifests predating the field
+    // simply carry undefined, which the log treats as "no timestamp".
+    renderedAt: t.rendered_at || null,
   };
 }
 
@@ -785,6 +862,57 @@ function syncTargetLabels() {
   if (targetReadout) targetReadout.textContent = info ? "valid " + fmtTime(info.validTime) : "—";
 }
 
+// The render log: every run that reaches the SELECTED target and has a cloud
+// frame on disk, newest-rendered first. rendered_at is that frame's own write
+// time (generate_tool3_manifest.py), so this answers "when did each model's
+// forecast for this valid time actually appear" - the thing worth watching in
+// the run-up to the eclipse. Rebuilt on load and on target change only; it does
+// NOT depend on the cursor, so scrubbing the run stack never touches it.
+function buildRenderLog() {
+  const logBody = document.getElementById("logBody");
+  const logSub = document.getElementById("logSub");
+  if (!logBody || !logSub) return;
+  const info = currentTargetInfo();
+
+  const rows = [];
+  MODELS.forEach(model => {
+    model.runs.forEach(run => {
+      const td = targetData(run);
+      if (td.covers && td.renderedAt) {
+        rows.push({ rendered: new Date(td.renderedAt), model: model.label, init: run.runInit });
+      }
+    });
+  });
+  // Newest render first. Ties (a whole run's fields written in one pass share a
+  // second) keep insertion order, which is MODELS order - a stable, sensible
+  // secondary sort.
+  rows.sort((a, b) => b.rendered - a.rendered);
+
+  logSub.textContent = rows.length
+    ? rows.length + " run(s) · " + (info ? info.label + " valid " + fmtTime(info.validTime) : "target")
+    : "no run reaches " + (info ? info.label : "the target") + " yet";
+
+  logBody.innerHTML = "";
+  if (!rows.length) {
+    const empty = document.createElement("div");
+    empty.className = "logEmpty";
+    empty.textContent = "No model has rendered a frame for this valid time yet.";
+    logBody.appendChild(empty);
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  rows.forEach(r => {
+    const row = document.createElement("div");
+    row.className = "logRow";
+    const t = document.createElement("span"); t.className = "lgTime"; t.textContent = fmtTime(r.rendered);
+    const m = document.createElement("span"); m.className = "lgModel"; m.textContent = r.model;
+    const i = document.createElement("span"); i.className = "lgInit"; i.textContent = fmtTime(r.init);
+    row.appendChild(t); row.appendChild(m); row.appendChild(i);
+    frag.appendChild(row);
+  });
+  logBody.appendChild(frag);
+}
+
 function setTarget(key) {
   currentTarget = key;
   const info = currentTargetInfo();
@@ -796,6 +924,7 @@ function setTarget(key) {
   // stack stays visually anchored while switching.
   refreshTickCoverage();
   placeMarkers();
+  buildRenderLog();  // the log is per-target (eclipse vs sim resolve to different steps/frames)
   updateUI();
 }
 
@@ -891,6 +1020,7 @@ function init() {
 
   buildTargetToggle();
   syncTargetLabels();
+  buildRenderLog();
   layoutTicks();
   if (MODELS.length) selectRowForSingleView(0);
   // Browsers (Firefox in particular) restore radio/checkbox state across a
