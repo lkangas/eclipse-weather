@@ -32,14 +32,15 @@
        is one scroll-down away rather than stealing viewport from them. */
   }
   #app {
-    height: 100vh;
+    /* Sizes to its content, NOT the full viewport: a fixed 100vh stretched the
+       map/gallery (and their trailing empty space) to fill the screen, which
+       shoved the render log a whole viewport down. Content-height instead means
+       the log abuts the actual bottom of the maps. The maps keep a generous
+       size via their own min-heights below (#mapArea/#gallery), so "abut" never
+       means "shrink". */
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    overflow: hidden; /* #mapArea / #gallery below are the flexible elements
-      that absorb whatever room is left after controls+slider+legend - see
-      their own comments. Same layout approach as newest_runs.html /
-      compare_runs.html. */
   }
   .controls {
     display: flex;
@@ -245,11 +246,10 @@
 
   #mapArea {
     margin-top: 2px; border: 1px solid #232320; background: #fff;
-    flex: 1;    /* absorbs whatever vertical room is left below the
-      fixed-size controls/slider/legend above - same layout approach as
-      newest_runs.html / compare_runs.html. */
-    min-height: 80px; /* just enough for the placeholder/error text to stay
-      legible on a very cramped viewport - not a target size. */
+    flex: none;         /* content-height #app: take a fixed generous height
+      rather than absorbing leftover viewport (there is none to absorb now). */
+    min-height: 70vh;   /* keep the single map about the size it was when it
+      filled the viewport, so moving the log up never shrinks it. */
     display: flex; align-items: center; justify-content: center;
     flex-direction: column; gap: 4px; color: #7a776c; font-size: 12px;
     padding: 6px; box-sizing: border-box;
@@ -274,9 +274,10 @@
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
     gap: 10px;
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
+    flex: none;         /* natural (content) height, not viewport-filling: the
+      cells were never stretched (align-content:start), so the fill only added
+      empty space below them - which is exactly the gap that pushed the log off
+      screen. Dropping it lets the log sit right under the last row of cells. */
     align-content: start;
     padding: 2px;
     box-sizing: border-box;
