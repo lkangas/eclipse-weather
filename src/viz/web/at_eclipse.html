@@ -381,7 +381,7 @@
      columns line up by construction. */
   .logRow {
     display: grid;
-    grid-template-columns: 160px 130px 1fr;
+    grid-template-columns: 250px 130px 1fr;   /* col 1 holds the absolute time PLUS the "(3h 20min ago)" relative label */
     gap: 10px;
     padding: 2px 10px;
     font-variant-numeric: tabular-nums;
@@ -394,6 +394,7 @@
   #logBody .logRow { border-top: 1px solid #f0ece2; }
   #logBody .logRow:hover { background: #f6f4ef; }
   .lgTime { color: #2f6f3f; }   /* render time - the "new arrival" signal, green like a covering tick */
+  .lgAgo { color: #a8a498; margin-left: 6px; }  /* relative age, secondary to the absolute time */
   .lgModel { color: #232320; }
   .lgInit { color: #55534c; }
   .logEmpty { padding: 8px 10px; color: #a8a498; font-style: italic; }
@@ -524,7 +525,7 @@
       <span class="logSub" id="logSub">newest first</span>
     </div>
     <div class="logRow logColHead">
-      <span>Rendered (UTC)</span><span>Model</span><span>Init (UTC)</span>
+      <span>Rendered (UTC)</span><span>Model</span><span>Cycle</span>
     </div>
   </div>
   <div id="logBody"></div>
@@ -862,6 +863,33 @@ function syncTargetLabels() {
   if (targetReadout) targetReadout.textContent = info ? "valid " + fmtTime(info.validTime) : "—";
 }
 
+// "3h 20min ago" from a render time. Minute resolution (the log's timestamps
+// are whole minutes), and it spans the whole archive: seconds -> minutes ->
+// h+min -> d+h, dropping the smaller unit once it's zero ("3h ago", "2d ago").
+function fmtAgo(fromDate) {
+  let s = Math.floor((Date.now() - fromDate.getTime()) / 1000);
+  if (s < 0) s = 0;                       // clock skew / a frame stamped just after now
+  if (s < 60) return "just now";
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + "min ago";
+  const h = Math.floor(m / 60), rm = m % 60;
+  if (h < 24) return rm ? h + "h " + rm + "min ago" : h + "h ago";
+  const d = Math.floor(h / 24), rh = h % 24;
+  return rh ? d + "d " + rh + "h ago" : d + "d ago";
+}
+
+// Init cycle as just its UTC hour: 2026-08-05T18:00Z -> "18Z". The render
+// column already carries the date, so the day is never lost by dropping it.
+function fmtCycle(d) { return String(d.getUTCHours()).padStart(2, "0") + "Z"; }
+
+// The relative labels drift as the tab sits open, so they tick independently of
+// the (rebuild-on-target-change) log body: buildRenderLog registers each row's
+// "ago" span here and refreshRenderLogAges() re-stamps them on a timer.
+let renderLogAges = []; // [{el, at}]
+function refreshRenderLogAges() {
+  renderLogAges.forEach(({ el, at }) => { el.textContent = "(" + fmtAgo(at) + ")"; });
+}
+
 // The render log: every run that reaches the SELECTED target and has a cloud
 // frame on disk, newest-rendered first. rendered_at is that frame's own write
 // time (generate_tool3_manifest.py), so this answers "when did each model's
@@ -893,6 +921,7 @@ function buildRenderLog() {
     : "no run reaches " + (info ? info.label : "the target") + " yet";
 
   logBody.innerHTML = "";
+  renderLogAges = [];
   if (!rows.length) {
     const empty = document.createElement("div");
     empty.className = "logEmpty";
@@ -904,11 +933,19 @@ function buildRenderLog() {
   rows.forEach(r => {
     const row = document.createElement("div");
     row.className = "logRow";
-    const t = document.createElement("span"); t.className = "lgTime"; t.textContent = fmtTime(r.rendered);
+    // Time cell = absolute render time + a live "(3h 20min ago)" that ticks
+    // between rebuilds (see refreshRenderLogAges).
+    const t = document.createElement("span"); t.className = "lgTime";
+    const abs = document.createElement("span"); abs.textContent = fmtTime(r.rendered);
+    const ago = document.createElement("span"); ago.className = "lgAgo"; ago.textContent = "(" + fmtAgo(r.rendered) + ")";
+    t.appendChild(abs); t.appendChild(ago);
     const m = document.createElement("span"); m.className = "lgModel"; m.textContent = r.model;
-    const i = document.createElement("span"); i.className = "lgInit"; i.textContent = fmtTime(r.init);
+    // Init = just the cycle hour (00Z/06Z/18Z); the render column already
+    // carries the date, so the full init timestamp would be redundant.
+    const i = document.createElement("span"); i.className = "lgInit"; i.textContent = fmtCycle(r.init);
     row.appendChild(t); row.appendChild(m); row.appendChild(i);
     frag.appendChild(row);
+    renderLogAges.push({ el: ago, at: r.rendered });
   });
   logBody.appendChild(frag);
 }
@@ -1543,6 +1580,12 @@ setInterval(() => {
   if (Date.now() - lastInteractionMs < IDLE_BEFORE_RELOAD_MS) return;  // busy - try again next tick
   location.reload();
 }, AUTO_RELOAD_MS);
+
+// The render log's "(… ago)" labels drift as the tab sits open, so re-stamp
+// them on their own short clock - independent of the 10-min manifest reload,
+// and cheap (a textContent write per visible row). Minute resolution, so 30 s
+// keeps them within half a minute of true without churn.
+setInterval(refreshRenderLogAges, 30000);
 </script>
 </body>
 </html>
