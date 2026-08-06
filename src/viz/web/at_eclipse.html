@@ -27,6 +27,13 @@
     margin: 0;
     padding: 0;
     box-sizing: border-box;
+    /* The PAGE scrolls now. #app fills the first viewport; the render log sits
+       below it in normal flow, so the maps keep their full height and the log
+       is one scroll-down away rather than stealing viewport from them. */
+  }
+  #app {
+    height: 100vh;
+    box-sizing: border-box;
     display: flex;
     flex-direction: column;
     overflow: hidden; /* #mapArea / #gallery below are the flexible elements
@@ -354,15 +361,14 @@
      for room - they simply absorb one panel's worth less. Capped at 30vh so the
      maps above always keep the majority of the viewport. */
   #renderLog {
-    flex: none;
-    margin-top: 4px;
+    /* Below #app in normal page flow: no height cap and no inner scrollbar, so
+       the whole page scrolls through it as one column rather than nesting a
+       second scroll region. The maps above keep their full viewport height. */
     border: 1px solid #232320;
     background: #fff;
-    max-height: 30vh;
-    overflow-y: auto;
     font-size: 10px;
   }
-  /* Sticky title + column heads: the body scrolls under them, so which column
+  /* Sticky title + column heads: the PAGE scrolls under them, so which column
      is which stays on screen no matter how far down the log you are. */
   #renderLog .logHead {
     position: sticky; top: 0; z-index: 1;
@@ -423,6 +429,9 @@
        only way to read it. */
     html, body { height: auto; }
     body { overflow: visible; }
+    /* #app stops being a fixed-viewport pane on a phone - it flows like the
+       rest of the page so maps, gallery and log scroll as one document. */
+    #app { height: auto; overflow: visible; }
 
     /* flex:1 shares a FIXED pool of leftover height; with the page scrolling
        there is no pool to share, so both take their natural height instead. */
@@ -444,6 +453,7 @@
 </head>
 <body>
 
+<div id="app">
 <div class="toolbar">
   <a href="index.html">Newest runs</a>
   <a href="compare-runs.html">Compare runs</a>
@@ -513,6 +523,7 @@
 </div>
 
 <div id="gallery"></div>
+</div><!-- #app: fills the first viewport; the render log below scrolls into view -->
 
 <!-- Render log: newest-rendered-first list of every run that reaches the
      selected target, so "has a new forecast for the eclipse landed?" is one
