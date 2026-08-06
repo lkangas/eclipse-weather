@@ -136,8 +136,9 @@ frames:
   # because that's what the tools actually use: Tool 2's own client caps its
   # display at the newest 18 runs/model (compare_runs.html's MAX_ROWS) and
   # Tool 3 is meant to match it; anything older is generated and stored but
-  # never shown. See src/pipeline/frame_reclaim.py for the pruning logic -
-  # null here means keep everything, and nothing calls that module
-  # automatically yet (manual CLI only: `python -m src.pipeline.run
-  # --sweep-frames --keep-runs 18`, add --apply to actually delete).
-  max_runs_per_model: null
+  # never shown. See src/pipeline/frame_reclaim.py for the pruning logic.
+  # Consumed automatically: run.py's _frames_prune_forever thread sweeps to this
+  # cutoff every FRAMES_PRUNE_INTERVAL_S (in apply mode only). null disables the
+  # auto-sweep (keep everything); the manual CLI (`python -m src.pipeline.run
+  # --sweep-frames --keep-runs N [--apply]`) still works regardless.
+  max_runs_per_model: 18

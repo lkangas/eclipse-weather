@@ -44,6 +44,12 @@ BUSY_INTERVAL_S = float(os.environ.get("BUSY_INTERVAL_S", "15"))
 # job is not a trade worth making.
 MANIFEST_INTERVAL_S = float(os.environ.get("MANIFEST_INTERVAL_S", "60"))
 
+# Frames grow by ~one run/model per cycle (every 3-24 h), so pruning to the
+# newest frames.max_runs_per_model runs every 30 min is far more often than
+# needed and stays cheap (a disk scan + a few unlinks). Its own clock, like
+# coverage/manifests, so a long render pass can't let the frames tree balloon.
+FRAMES_PRUNE_INTERVAL_S = float(os.environ.get("FRAMES_PRUNE_INTERVAL_S", "1800"))
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("pipeline.run")
 
@@ -314,6 +320,39 @@ def main() -> None:
                 log.exception("manifest refresh failed; will retry")
 
     threading.Thread(target=_manifests_forever, name="manifests", daemon=True).start()
+
+    # Frame pruning on its own clock. The frames tree grows ~one run/model per
+    # cycle and, left alone, hit 5+ GB before the first manual prune. Keep only
+    # the newest frames.max_runs_per_model runs/model. OFF unless a cutoff is
+    # configured AND we are in apply mode (dry-run must delete nothing); it logs
+    # per-model counts so a cull is never silent. Same planner the --sweep-frames
+    # CLI uses. Frames-only: raw is the reclaim path's concern, untouched here.
+    def _frames_prune_forever() -> None:
+        keep = settings.max_runs_per_model
+        frames_dir = DATA_ROOT / "viz" / "frames"
+        while True:
+            time.sleep(FRAMES_PRUNE_INTERVAL_S)
+            if keep is None or not args.apply:
+                continue
+            try:
+                swept_files = 0
+                swept_gb = 0.0
+                for plan in frame_reclaim.plan_all(frames_dir, keep):
+                    if not plan.to_prune:
+                        continue
+                    frame_reclaim.apply_plan(plan)
+                    swept_files += len(plan.to_prune)
+                    swept_gb += plan.bytes_to_prune / 1024**3
+                    log.info("frame-prune %s: dropped %d run(s) / %d file(s) / %.2f GB "
+                             "(kept newest %d)", plan.model, len(plan.pruned_run_inits),
+                             len(plan.to_prune), plan.bytes_to_prune / 1024**3, keep)
+                if swept_files:
+                    log.info("frame-prune: %d file(s) / %.2f GB freed this sweep",
+                             swept_files, swept_gb)
+            except Exception:
+                log.exception("frame prune failed; will retry")
+
+    threading.Thread(target=_frames_prune_forever, name="frames-prune", daemon=True).start()
 
     log.info("production pipeline starting (mode=%s, interval=%ds)",
              "apply" if args.apply else "dry-run", args.interval)
