@@ -263,8 +263,21 @@ async function refresh(){
 }
 
 function drawChart(lines,isTemp,dropped){
-  const CW=1080,CH=300,PADL=44,PADR=14,PADT=12,PADB=26;
   const svg=document.getElementById("chartsvg");
+  // Draw at the SVG's ACTUAL pixel size (1 user unit = 1 CSS px) so nothing is
+  // stretched. The old fixed 1080x300 viewBox with preserveAspectRatio="none"
+  // squeezed the whole chart to the container width - on a ~340px phone that is
+  // a ~0.32x horizontal / 1.0x vertical scale, which is why text looked
+  // condensed and vertical rules came out thinner than the horizontal ones.
+  // Matching the viewBox to the rendered box makes the scale 1:1 in both axes.
+  // Use the TRUE rendered width - never clamp it up to a floor, or a viewport
+  // narrower than the floor gets a viewBox wider than its box and the old
+  // horizontal squeeze comes straight back. The || fallback is only for the
+  // degenerate "not laid out yet, width reads 0" case.
+  const CW=Math.round(svg.clientWidth||svg.getBoundingClientRect().width)||1080;
+  const CH=Math.round(svg.clientHeight||svg.getBoundingClientRect().height)||300;
+  svg.setAttribute("viewBox",`0 0 ${CW} ${CH}`);
+  const PADL=44,PADR=14,PADT=12,PADB=26;
   if(!lines.length){ svg.innerHTML=`<text x="${CW/2}" y="${CH/2}" text-anchor="middle" style="font-size:12px;fill:#a8a498">no data for this selection</text>`;
     document.getElementById("linecount").textContent=""; return; }
   // Fixed time domain (from the index) so the x-axis stays constant when the
@@ -284,11 +297,18 @@ function drawChart(lines,isTemp,dropped){
   yticks.forEach(v=>{const yy=Y(v);
     s+=`<line x1="${PADL}" y1="${yy.toFixed(1)}" x2="${CW-PADR}" y2="${yy.toFixed(1)}" stroke="#e3ded2"/>`;
     s+=`<text x="${PADL-6}" y="${(yy+3).toFixed(1)}" text-anchor="end" style="font-size:10px;fill:#7a776c">${v}${isTemp?'°':'%'}</text>`;});
-  // day ticks
-  for(let t=Math.ceil(tmin/864e5)*864e5;t<=tmax;t+=864e5){const xx=X(t);
+  // day ticks - a gridline every day, but a LABEL only every Nth day so labels
+  // never collide when the chart is narrow (a phone gives ~340px for a ~16-day
+  // span). N is chosen from the real pixel width, ~52px per label.
+  const plotW=CW-PADL-PADR;
+  const totalDays=Math.max(1,(tmax-tmin)/864e5);
+  const labelEvery=Math.max(1,Math.ceil(totalDays/Math.max(1,Math.floor(plotW/52))));
+  let di=0;
+  for(let t=Math.ceil(tmin/864e5)*864e5;t<=tmax;t+=864e5,di++){const xx=X(t);
     const d=new Date(t);
     s+=`<line x1="${xx.toFixed(1)}" y1="${PADT}" x2="${xx.toFixed(1)}" y2="${CH-PADB}" stroke="#efece3"/>`;
-    s+=`<text x="${xx.toFixed(1)}" y="${CH-8}" text-anchor="middle" style="font-size:9px;fill:#7a776c">${d.getUTCMonth()+1}/${d.getUTCDate()}</text>`;}
+    if(di%labelEvery===0)
+      s+=`<text x="${xx.toFixed(1)}" y="${CH-8}" text-anchor="middle" style="font-size:9px;fill:#7a776c">${d.getUTCMonth()+1}/${d.getUTCDate()}</text>`;}
   // "now" marker (solid slate) - splits verifiable past from forecast future
   const nowMs=Date.now();
   if(nowMs>=tmin&&nowMs<=tmax){const nx=X(nowMs);
@@ -388,6 +408,10 @@ async function init(){
     state.sites = MAP.sites.map(s=>s.name);
     drawMap(); refresh();
   });
+  // Redraw the chart on resize/orientation change: CW is read from the live
+  // pixel width, so a rotated phone or a resized window re-lays-out cleanly
+  // (payloads are cached, so this is just a re-render). Debounced.
+  let rzTimer; window.addEventListener("resize",()=>{clearTimeout(rzTimer);rzTimer=setTimeout(refresh,150);});
   drawMap(); populateRuns(); drawQ(); refresh();
 }
 init().catch(e=>{document.body.insertAdjacentHTML("beforeend",
